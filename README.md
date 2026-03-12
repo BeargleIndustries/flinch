@@ -2,6 +2,8 @@
 
 AI content restriction consistency research tool.
 
+![Flinch Preview](flinch-preview.png)
+
 ## What is Flinch?
 
 Flinch is a human-in-the-loop research instrument for testing whether AI models enforce content restrictions consistently. It grew out of [empirical research](https://beargleindustries.com/notes/rules-are-rules-until-they-arent) examining how language models handle creative writing requests that touch sensitive topics.

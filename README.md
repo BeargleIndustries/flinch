@@ -42,14 +42,14 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 
 | Provider | Models | Env Variable |
 |----------|--------|-------------|
-| Anthropic | Claude Opus 4, Sonnet 4, Haiku 4.5, 3.5 Sonnet, 3.5 Haiku, 3 Opus | `ANTHROPIC_API_KEY` (required) |
+| Anthropic | Claude Opus 4, Sonnet 4, Haiku 4.5, 3.5 Sonnet, 3.5 Haiku, 3 Opus | `ANTHROPIC_API_KEY` |
 | OpenAI | GPT-4.1, 4.1 Mini, 4.1 Nano, GPT-4o, 4o Mini, o3-mini, o4-mini, GPT-4 Turbo | `OPENAI_API_KEY` |
 | Google | Gemini 2.5 Pro, 2.5 Flash, 2.0 Flash | `GOOGLE_API_KEY` |
 | xAI | Grok 3, Grok 3 Mini | `XAI_API_KEY` |
 | Meta (via Together) | Llama 4 Maverick, Llama 3.3 70B, Llama 3.1 8B | `TOGETHER_API_KEY` |
 | Local (via Ollama) | Any model you have pulled (Qwen, Mistral, Llama, etc.) | None — just run Ollama locally |
 
-Anthropic is required (powers the coach and classifier). All others are optional — only needed if you want to test those models as targets. Ollama models are auto-detected from your local instance at `http://localhost:11434`.
+No single provider is required. Flinch auto-detects available providers for the coach and classifier (prefers Anthropic > OpenAI > Google > Ollama). You only need API keys for the models you want to test as targets. Ollama models are auto-detected from your local instance at `http://localhost:11434`.
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ pip install -e .
 
 # Configure API keys
 cp .env.example .env
-# Edit .env with your API keys (at minimum, ANTHROPIC_API_KEY)
+# Edit .env with your API keys (any provider works — Anthropic, OpenAI, Google, or Ollama)
 
 # Run
 python -m flinch.app

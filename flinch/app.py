@@ -64,17 +64,26 @@ async def lifespan(app: FastAPI):
         db.import_all_strategies(_conn, str(strategies_dir))
     # Probes are loaded on-demand via /api/probes/load-defaults
     # Create runner
+    from flinch.llm import get_best_available_backend
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    print(f"[flinch] API key loaded ({len(api_key)} chars)")
-    if not api_key:
+    client = None
+    if api_key:
+        client = anthropic.AsyncAnthropic()
+        print(f"[flinch] Anthropic API key loaded ({len(api_key)} chars)")
+
+    # Get the best available backend for classification/coach
+    backend = get_best_available_backend()
+    if backend:
+        print(f"[flinch] Classification backend: {type(backend).__name__}")
+    else:
         import logging
         logging.getLogger("flinch").warning(
-            "ANTHROPIC_API_KEY is not set. This key is required even for local-only "
-            "workflows because the response classifier uses Claude Haiku. "
-            "Set it via: export ANTHROPIC_API_KEY=sk-..."
+            "No LLM provider configured. Classification will use keyword-only mode. "
+            "Set any API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama."
         )
-    client = anthropic.AsyncAnthropic()
-    _runner = Runner(_conn, client)
+
+    _runner = Runner(_conn, client=client, backend=backend)
     yield
     # Cleanup
     if _conn:
@@ -1347,7 +1356,7 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
             target = _runner._make_target(model_name, req.system_prompt)
             try:
                 response = await target.send(p["prompt_text"])
-                classification = await classify(response, p["prompt_text"], _runner._client)
+                classification = await classify(response, p["prompt_text"], _runner._backend)
 
                 # Persist as a real run
                 run_id = db.create_run(_conn, p["id"], sid, model_name)
@@ -1812,7 +1821,7 @@ async def get_strategy_effectiveness(session_id: int):
 
 _ENV_FILE = Path(__file__).parent.parent / ".env"
 _SUPPORTED_KEYS = {
-    "ANTHROPIC_API_KEY": {"provider": "anthropic", "label": "Anthropic (Claude)", "required": True},
+    "ANTHROPIC_API_KEY": {"provider": "anthropic", "label": "Anthropic (Claude)", "required": False},
     "OPENAI_API_KEY": {"provider": "openai", "label": "OpenAI (GPT)", "required": False},
     "GOOGLE_API_KEY": {"provider": "google", "label": "Google (Gemini)", "required": False},
     "XAI_API_KEY": {"provider": "xai", "label": "xAI (Grok)", "required": False},
@@ -1994,7 +2003,7 @@ async def ollama_status():
         "base_url": url,
         "models": models,
         "anthropic_key_set": api_key_set,
-        "anthropic_key_warning": "" if api_key_set else "ANTHROPIC_API_KEY is required for response classification, even with local models.",
+        "anthropic_key_warning": "" if api_key_set else "No Anthropic key set. Classification will use keyword-only mode or another available provider.",
     }
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
-import anthropic
 from flinch import db
+from flinch.llm import LLMBackend
 from flinch.models import Classification, PushbackSource, CoachSuggestion, PushbackMove
 from flinch.target import TargetModel, ClaudeTarget, OpenAITarget, GeminiTarget
 from flinch.classifier import classify
@@ -9,15 +9,21 @@ from flinch.coach import Coach, NarrativeCoach, NARRATIVE_ENGINE_SYSTEM_PROMPT
 
 
 class Runner:
-    def __init__(self, conn, client: anthropic.AsyncAnthropic):
+    def __init__(self, conn, client=None, backend: LLMBackend | None = None):
         self._conn = conn
-        self._client = client
+        self._client = client  # Keep for ClaudeTarget backward compat
+        self._backend = backend  # For classifier + coach
         self._targets: dict[int, TargetModel] = {}  # session_id -> target
 
     def _make_target(self, model_name: str, system_prompt: str = "") -> TargetModel:
         """Factory: dispatch to correct target based on model name prefix."""
         import os
         if model_name.startswith("claude-"):
+            if not self._client:
+                raise ValueError(
+                    "Anthropic API key required to test Claude models. "
+                    "Set ANTHROPIC_API_KEY or choose a different target model."
+                )
             return ClaudeTarget(model=model_name, client=self._client, system_prompt=system_prompt)
         elif model_name.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
             return OpenAITarget(model_name, system_prompt=system_prompt)
@@ -84,9 +90,13 @@ class Runner:
             coach_model = session.get("coach_model", "llama3.2")
             backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=coach_model)
             return Coach(backend=backend, profile_moves=profile_moves, is_local=True)
-        else:
+        elif self._client:
             backend = AnthropicBackend(self._client)
             return Coach(backend=backend, profile_moves=profile_moves)
+        elif self._backend:
+            return Coach(backend=self._backend, profile_moves=profile_moves)
+        else:
+            raise ValueError("No LLM backend available for coach. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama.")
 
     async def send_probe(self, session_id: int, probe_id: int) -> dict:
         """Send a probe to the target model, classify, and get coach suggestion if refused."""
@@ -105,7 +115,7 @@ class Runner:
         response_text = await target.send(probe["prompt_text"])
 
         # Classify
-        classification = await classify(response_text, probe["prompt_text"], self._client)
+        classification = await classify(response_text, probe["prompt_text"], self._backend)
 
         # Create run record
         run_id = db.create_run(self._conn, probe_id, session_id, session["target_model"])
@@ -147,7 +157,7 @@ class Runner:
 
         # Classify the response after pushback
         probe = db.get_probe(self._conn, run["probe_id"])
-        classification = await classify(response_text, probe["prompt_text"], self._client)
+        classification = await classify(response_text, probe["prompt_text"], self._backend)
 
         update_fields = {
             "pushback_text": pushback_text,
@@ -176,7 +186,7 @@ class Runner:
         response_text = await target.reply(text)
 
         probe = db.get_probe(self._conn, run["probe_id"])
-        classification = await classify(response_text, probe["prompt_text"], self._client)
+        classification = await classify(response_text, probe["prompt_text"], self._backend)
 
         # Overwrite final_response/final_classification with the latest
         db.update_run(self._conn, run_id,
@@ -281,13 +291,20 @@ class Runner:
         import os
         from flinch.llm import AnthropicBackend, OpenAICompatibleBackend
 
-        backend = AnthropicBackend(self._client)  # default
+        # Determine backend: session-specific local > Anthropic client > general backend
+        backend = None
         if session_id:
             session = db.get_session(self._conn, session_id)
             if session and session.get("coach_backend") == "local":
                 ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
                 coach_model = session.get("coach_model", "llama3.2")
                 backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=coach_model)
+        if backend is None and self._client:
+            backend = AnthropicBackend(self._client)
+        if backend is None:
+            backend = self._backend
+        if backend is None:
+            raise ValueError("No LLM backend available for narrative coach. Set an API key or run Ollama.")
 
         return NarrativeCoach(
             backend=backend,
@@ -350,7 +367,7 @@ class Runner:
             response_text = await target.reply(warmup_text)
 
         # Classify the response (use warmup text as probe_text context for classification)
-        classification = await classify(response_text, warmup_text, self._client)
+        classification = await classify(response_text, warmup_text, self._backend)
 
         # Store both turns (coach message + target response)
         db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "coach", warmup_text, None, "warmup")
@@ -404,7 +421,7 @@ class Runner:
             setup_text = await coach.generate_setup_turn(conversation_history)
 
             setup_response = await target.reply(setup_text)
-            setup_classification = await classify(setup_response, setup_text, self._client)
+            setup_classification = await classify(setup_response, setup_text, self._backend)
 
             db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "coach", setup_text, None, "setup")
             db.add_sequence_turn(self._conn, sequence_run_id, turn_number + 1, "target", setup_response, setup_classification.value, "setup")
@@ -420,7 +437,7 @@ class Runner:
         else:
             adapted_probe = probe["prompt_text"]
         probe_response = await target.reply(adapted_probe)
-        probe_classification = await classify(probe_response, probe["prompt_text"], self._client)
+        probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
         db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "probe", adapted_probe, None, "probe")
         db.add_sequence_turn(self._conn, sequence_run_id, turn_number + 1, "target", probe_response, probe_classification.value, "probe")
@@ -485,7 +502,7 @@ class Runner:
                 else:
                     response_text = await target.reply(warmup_text)
 
-                classification = await classify(response_text, warmup_text, self._client)
+                classification = await classify(response_text, warmup_text, self._backend)
 
                 # Store turns
                 db.add_sequence_turn(self._conn, run_id, turn_number, "coach", warmup_text, None, "warmup")
@@ -502,7 +519,7 @@ class Runner:
             if warmup_count > 0:
                 setup_text = await coach.generate_setup_turn(conversation_history)
                 setup_response = await target.reply(setup_text)
-                setup_classification = await classify(setup_response, setup_text, self._client)
+                setup_classification = await classify(setup_response, setup_text, self._backend)
 
                 db.add_sequence_turn(self._conn, run_id, turn_number, "coach", setup_text, None, "setup")
                 db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", setup_response, setup_classification.value, "setup")
@@ -517,7 +534,7 @@ class Runner:
             # Probe turn (N) — adapt probe to story context then send
             adapted_probe = await coach.adapt_probe_to_story(conversation_history)
             probe_response = await target.reply(adapted_probe)
-            probe_classification = await classify(probe_response, probe["prompt_text"], self._client)
+            probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
             db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", probe_response, probe_classification.value, "probe")
@@ -580,7 +597,7 @@ class Runner:
                 else:
                     response_text = await target.reply(warmup_text)
 
-                classification = await classify(response_text, warmup_text, self._client)
+                classification = await classify(response_text, warmup_text, self._backend)
 
                 db.add_sequence_turn(self._conn, run_id, turn_number, "coach", warmup_text, None, "warmup")
                 db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", response_text, classification.value, "warmup")
@@ -604,7 +621,7 @@ class Runner:
             if warmup_count > 0:
                 setup_text = await coach.generate_setup_turn(conversation_history)
                 setup_response = await target.reply(setup_text)
-                setup_classification = await classify(setup_response, setup_text, self._client)
+                setup_classification = await classify(setup_response, setup_text, self._backend)
 
                 db.add_sequence_turn(self._conn, run_id, turn_number, "coach", setup_text, None, "setup")
                 db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", setup_response, setup_classification.value, "setup")
@@ -627,7 +644,7 @@ class Runner:
             # Probe turn — adapt to story context
             adapted_probe = await coach.adapt_probe_to_story(conversation_history)
             probe_response = await target.reply(adapted_probe)
-            probe_classification = await classify(probe_response, probe["prompt_text"], self._client)
+            probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
             db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", probe_response, probe_classification.value, "probe")
@@ -760,7 +777,7 @@ class Runner:
             else:
                 response_text = await target.reply(warmup_text)
 
-            classification = await classify(response_text, warmup_text, self._client)
+            classification = await classify(response_text, warmup_text, self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "coach", warmup_text, None, "warmup")
             db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", response_text, classification.value, "warmup")
@@ -778,7 +795,7 @@ class Runner:
             else:
                 setup_response = await target.reply(setup_text)
 
-            setup_classification = await classify(setup_response, setup_text, self._client)
+            setup_classification = await classify(setup_response, setup_text, self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "coach", setup_text, None, "setup")
             db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", setup_response, setup_classification.value, "setup")
@@ -795,7 +812,7 @@ class Runner:
             adapted_probe = probe["prompt_text"]
             probe_response = await target.send(adapted_probe)
 
-        probe_classification = await classify(probe_response, probe["prompt_text"], self._client)
+        probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
         db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
         db.add_sequence_turn(self._conn, run_id, turn_number + 1, "target", probe_response, probe_classification.value, "probe")

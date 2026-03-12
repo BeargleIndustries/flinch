@@ -47,8 +47,9 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 | Google | Gemini 2.5 Pro, 2.5 Flash, 2.0 Flash | `GOOGLE_API_KEY` |
 | xAI | Grok 3, Grok 3 Mini | `XAI_API_KEY` |
 | Meta (via Together) | Llama 4 Maverick, Llama 3.3 70B, Llama 3.1 8B | `TOGETHER_API_KEY` |
+| Local (via Ollama) | Any model you have pulled (Qwen, Mistral, Llama, etc.) | None — just run Ollama locally |
 
-Anthropic is required (powers the coach and classifier). All others are optional — only needed if you want to test those models as targets.
+Anthropic is required (powers the coach and classifier). All others are optional — only needed if you want to test those models as targets. Ollama models are auto-detected from your local instance at `http://localhost:11434`.
 
 ## Quick Start
 

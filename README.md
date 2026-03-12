@@ -102,9 +102,9 @@ Flinch builds on ["Rules Are Rules, Until They Aren't"](https://beargleindustrie
 
 This tool exists to make that kind of measurement systematic and reproducible.
 
-## Security Note
+## How It Runs
 
-Flinch is designed to run locally on your machine. It makes outbound API calls to model providers (Anthropic, OpenAI, etc.), but the web interface itself has no authentication — anyone who can reach port 8000 can access your research data and API keys. **Do not expose Flinch's port to the public internet or untrusted networks.** It binds to `127.0.0.1` by default, which is correct — leave it that way.
+Flinch runs locally on your machine at `127.0.0.1:8000`. The only external connections it makes are API calls to the model providers you configure (Anthropic, OpenAI, Google, etc.).
 
 ## Disclaimer
 

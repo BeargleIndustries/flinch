@@ -158,6 +158,7 @@ function renderProbeList() {
 
 export function renderStats() {
   const el = document.getElementById('stats-content');
+  if (!el) return;
   if (!state.stats) {
     el.innerHTML = `<span style="color:#374151;">No session selected</span>`;
     return;
@@ -831,6 +832,7 @@ function wireupPushbackTextarea() {
 
 export async function renderRunHistory() {
   const container = document.getElementById('run-history-list');
+  if (!container) return;
   if (!state.currentSession) {
     container.innerHTML = `<div style="padding:8px; color:#2d3348; font-size:11px; font-family:'JetBrains Mono',monospace; text-align:center;">no session selected</div>`;
     return;
@@ -3376,9 +3378,6 @@ async function renderSettingsView() {
           <div id="key-status-${k.env_var}" style="margin-top:6px; font-size:11px; min-height:16px;"></div>
         </div>
       `).join('')}
-      <div style="margin-top:24px; padding:12px; background:#12141e; border-radius:6px; font-size:11px; color:#4b5563;">
-        Keys are stored in <code style="color:#6b7280;">.env</code> in the project root. This file is gitignored — your keys won't be committed.
-      </div>
 
       <!-- Ollama (Local Models) -->
       <div class="setting-group" id="ollama-settings" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.08); padding-top:1rem;">

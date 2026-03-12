@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Database
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Probe content — publish tool + example format, not research probes
+flinch/probes/*.yaml
+flinch/probes/*.md
+!flinch/probes/.gitkeep
+!flinch/probes/example-probes.md
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# OMC state
+.omc/
+
+# Internal docs
+AUDIT.md
+
+# User data
+sessions/

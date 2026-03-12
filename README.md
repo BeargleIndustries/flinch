@@ -104,7 +104,7 @@ This tool exists to make that kind of measurement systematic and reproducible.
 
 ## Security Note
 
-Flinch is designed to run locally on your machine. It has no authentication — anyone who can reach port 8000 can access your research data and API keys. **Do not expose Flinch to the internet or shared networks.** It binds to `127.0.0.1` by default, which is correct.
+Flinch is designed to run locally on your machine. It makes outbound API calls to model providers (Anthropic, OpenAI, etc.), but the web interface itself has no authentication — anyone who can reach port 8000 can access your research data and API keys. **Do not expose Flinch's port to the public internet or untrusted networks.** It binds to `127.0.0.1` by default, which is correct — leave it that way.
 
 ## Disclaimer
 

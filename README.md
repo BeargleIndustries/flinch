@@ -14,20 +14,28 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 
 ## Status
 
-**v0.2.0 — Early Preview.** This works and is actively used for research, but expect rough edges. The UI is functional, not polished. Some features are partially built. Bug reports welcome.
+**v0.3.0 — Research Preview.** Actively used for research. The core workflow is solid — probe, classify, coach, pushback, compare. Dashboard for browsing all your data. Narrative momentum for multi-turn testing. Multi-provider support for cross-model comparison. Rough edges remain; bug reports welcome.
 
 ## Features
 
+### Core Testing
 - **Multi-model testing** — test probes against Claude, GPT, Gemini, Grok, and Llama models from a single interface
 - **AI-powered coach** — analyzes refusals using 7 pushback strategies distilled from empirical research
 - **Human-in-the-loop** — coach suggests, you decide. Override and edit suggestions to teach the coach
 - **Hybrid classification** — keyword scan + LLM judge categorizes responses as refused/collapsed/negotiated/complied
 - **Batch testing** — run multiple probes sequentially against a model
-- **Multi-model comparison** — run the same probes across models, see agreement/disagreement side-by-side
-- **Variant groups** — test semantically equivalent probes with different framing to detect inconsistency
-- **Narrative momentum** — multi-turn conversation sequences that build context before the test probe
-- **Data export** — CSV, JSON, and Markdown export with full provenance
 - **Custom probes** — write ad-hoc probes at any point in the workflow
+
+### Comparison & Analysis
+- **Multi-model comparison** — run the same probes across models, see agreement/disagreement side-by-side with persistent results
+- **Variant groups** — test semantically equivalent probes with different framing to detect inconsistency
+- **Narrative momentum** — multi-turn conversation sequences with configurable warmup strategies that build context before the test probe, tracking at which turn compliance occurs
+
+### Dashboard & Data
+- **Dashboard** — unified data browser with aggregate stats, classification distribution, and inline detail views for all sessions, comparisons, and sequences
+- **Inline data viewing** — click any session to see runs with full probe text, responses, and pushback conversations; click comparisons for side-by-side model results; click sequences for turn-by-turn flow
+- **Data export** — per-item export (JSON, CSV) plus bulk "Export All" for complete data download
+- **Clear all data** — two-step confirmation to reset the database while preserving probes and strategies
 - **Dark theme web UI** — runs locally in your browser
 
 ## Supported Models

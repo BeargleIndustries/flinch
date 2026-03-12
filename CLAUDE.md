@@ -1,26 +1,27 @@
 # Flinch
 
 ## Project Context
-AI content restriction consistency research tool. Human-in-the-loop instrument for testing whether AI models enforce content restrictions consistently, built on Brad's 109-conversation empirical study ("Rules Are Rules, Until They Aren't").
+AI content restriction consistency research tool. Human-in-the-loop instrument for testing whether AI models enforce content restrictions consistently, built on empirical research ("Rules Are Rules, Until They Aren't").
 Vault overview: `D:\BeargleVault\projects\flinch\flinch.md`
 
 ## Tech Stack
 - Python 3.11+
 - FastAPI + uvicorn (web UI)
 - Anthropic SDK (coach agent, classifier LLM judge, target model)
+- OpenAI SDK + Google GenAI SDK (optional multi-model targets)
 - SQLite (data storage via stdlib sqlite3)
 - PyYAML (probe sets)
 - Pydantic v2 (data models)
-- Tailwind CSS via CDN + vanilla JS (frontend)
+- Vanilla JS ES modules (frontend, no build step)
 
 ## Conventions
 - Type hints everywhere, `from __future__ import annotations`
 - Pydantic models for API request/response in `models.py`
 - SQLite is source of truth — all data in `data/flinch.db`
-- YAML for probe definitions in `flinch/probes/`
+- Markdown for probe definitions in `flinch/probes/`
 - Coach logic in `coach.py`, methodology in `playbook.md`
 - Classification: hybrid keyword scan + LLM judge (Haiku)
-- Single `ANTHROPIC_API_KEY` env var for all API calls
+- `ANTHROPIC_API_KEY` required; optional keys for OpenAI, Google, xAI, Together
 - Async throughout (FastAPI, Anthropic client, runner)
 
 ## Key Paths
@@ -28,13 +29,13 @@ Vault overview: `D:\BeargleVault\projects\flinch\flinch.md`
 - `flinch/runner.py` — Core test loop (probe → classify → coach → pushback)
 - `flinch/coach.py` — Pushback suggestion agent (7 moves)
 - `flinch/classifier.py` — Response classification (keyword + LLM)
-- `flinch/target.py` — TargetModel ABC + ClaudeTarget
+- `flinch/target.py` — TargetModel ABC + ClaudeTarget, OpenAITarget, GeminiTarget
 - `flinch/models.py` — Pydantic models + enums
-- `flinch/db.py` — SQLite schema + CRUD + YAML import
+- `flinch/db.py` — SQLite schema + CRUD + YAML/Markdown probe import
 - `flinch/seed.py` — Default coach profile + seed examples
 - `flinch/playbook.md` — Methodology primer
-- `flinch/static/` — Web UI (index.html + app.js)
-- `flinch/probes/` — YAML probe sets
+- `flinch/static/` — Web UI (index.html + 6 JS modules: app.js, api.js, render.js, state.js, components.js, shortcuts.js)
+- `flinch/probes/` — Markdown probe sets
 - `data/flinch.db` — SQLite database (auto-created)
 
 ## Running

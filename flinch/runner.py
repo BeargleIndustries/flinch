@@ -1,5 +1,8 @@
 from __future__ import annotations
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 from flinch import db
 from flinch.llm import LLMBackend
 from flinch.models import Classification, PushbackSource, CoachSuggestion, PushbackMove
@@ -130,18 +133,21 @@ class Runner:
             "initial_classification": classification.value,
         }
 
-        # If refused, get coach suggestion
+        # If refused, get coach suggestion (non-fatal — save run even if coach fails)
         if classification in (Classification.REFUSED, Classification.NEGOTIATED):
-            coach = self._get_coach(session_id)
+            try:
+                coach = self._get_coach(session_id)
 
-            # Get examples from DB
-            profile_name = session.get("coach_profile", "standard")
-            examples = db.list_coach_examples(self._conn, profile_name, limit=5)
+                # Get examples from DB
+                profile_name = session.get("coach_profile", "standard")
+                examples = db.list_coach_examples(self._conn, profile_name, limit=5)
 
-            suggestion = await coach.suggest(response_text, probe["prompt_text"], examples)
-            update_fields["coach_suggestion"] = suggestion.model_dump()
-            update_fields["coach_pattern_detected"] = suggestion.pattern_detected
-            update_fields["coach_move_suggested"] = suggestion.move_suggested.value
+                suggestion = await coach.suggest(response_text, probe["prompt_text"], examples)
+                update_fields["coach_suggestion"] = suggestion.model_dump()
+                update_fields["coach_pattern_detected"] = suggestion.pattern_detected
+                update_fields["coach_move_suggested"] = suggestion.move_suggested.value
+            except Exception as e:
+                logger.warning("Coach suggestion failed (run %d): %s", run_id, e)
 
         db.update_run(self._conn, run_id, **update_fields)
         # Log initial turns

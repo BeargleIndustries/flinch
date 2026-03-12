@@ -1943,6 +1943,12 @@ def export_all_data(conn):
         sd["runs"] = []
         for r in runs:
             rd = dict(r)
+            # Parse JSON fields
+            if rd.get("coach_suggestion"):
+                try:
+                    rd["coach_suggestion"] = json.loads(rd["coach_suggestion"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
             turns = conn.execute("SELECT * FROM run_turns WHERE run_id = ? ORDER BY id", (r["id"],)).fetchall()
             rd["turns"] = [dict(t) for t in turns]
             # Annotation

@@ -1943,7 +1943,7 @@ def export_all_data(conn):
         sd["runs"] = []
         for r in runs:
             rd = dict(r)
-            turns = conn.execute("SELECT * FROM run_turns WHERE run_id = ? ORDER BY turn_index", (r["id"],)).fetchall()
+            turns = conn.execute("SELECT * FROM run_turns WHERE run_id = ? ORDER BY id", (r["id"],)).fetchall()
             rd["turns"] = [dict(t) for t in turns]
             # Annotation
             ann = conn.execute("SELECT * FROM annotations WHERE run_id = ?", (r["id"],)).fetchone()

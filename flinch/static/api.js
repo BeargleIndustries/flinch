@@ -510,13 +510,29 @@ export async function viewRun(runId) {
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
-function triggerDownload(url) {
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = '';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+async function triggerDownload(url) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const err = await resp.text();
+      showError(`Export failed: ${err}`);
+      return;
+    }
+    const blob = await resp.blob();
+    // Extract filename from Content-Disposition header or URL
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^";\n]+)"?/);
+    const filename = match ? match[1] : url.split('/').pop().split('?')[0] || 'export.json';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    showError(`Export failed: ${e.message}`);
+  }
 }
 
 export function exportSession(format, includeTurns) {

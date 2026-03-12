@@ -41,6 +41,8 @@ class SessionCreate(BaseModel):
     coach_profile: str = "standard"
     notes: str = ""
     system_prompt: str = ""
+    coach_backend: str = "anthropic"
+    coach_model: str | None = None
 
 class Session(SessionCreate):
     id: int

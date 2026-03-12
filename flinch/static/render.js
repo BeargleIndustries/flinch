@@ -1,7 +1,7 @@
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 import { state, setPhase } from './state.js';
-import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView } from './api.js';
+import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById } from './api.js';
 import {
   escHtml,
   normalizeClassification,
@@ -223,6 +223,11 @@ function renderMain() {
     return;
   }
 
+  if (state.dashboardView) {
+    renderDashboard();
+    return;
+  }
+
   if (state.policyView) {
     renderPolicyBrowser();
     return;
@@ -307,6 +312,10 @@ function renderIdleState() {
       <div class="card" style="cursor:pointer; border-color:#64748b20;" onclick="clearAllViews(); state.settingsView=true; render();">
         <div style="font-size:13px; font-weight:600; color:#94a3b8; margin-bottom:6px;">Settings</div>
         <div style="font-size:11px; color:#64748b; line-height:1.5;">Configure API keys for Anthropic, OpenAI, and Google. Test connections and manage credentials.</div>
+      </div>
+      <div class="card" style="cursor:pointer; border-color:#10b98120;" onclick="clearAllViews(); state.dashboardView=true; loadDashboardData();">
+        <div style="font-size:13px; font-weight:600; color:#10b981; margin-bottom:6px;">Dashboard</div>
+        <div style="font-size:11px; color:#64748b; line-height:1.5;">View all sessions, comparisons, and sequences. Export data and manage history.</div>
       </div>
     </div>`;
 
@@ -1136,9 +1145,48 @@ export function renderCompareSessionPicker() {
         </button>
         ${!canRun ? '<span style="font-size:11px; color:#374151; font-family:\'JetBrains Mono\',monospace;">Pick at least 2 models and 1 probe</span>' : ''}
       </div>
+
+      <div style="margin-top:32px; border-top:1px solid #1a1a1a; padding-top:24px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+          <div style="font-size:11px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#64748b; font-family:'JetBrains Mono',monospace;">Comparison History</div>
+        </div>
+        <div id="comparison-history-list" style="display:flex; flex-direction:column; gap:8px;">
+          <div style="color:#374151; font-size:12px; font-family:'JetBrains Mono',monospace; padding:12px;">Loading...</div>
+        </div>
+      </div>
     </div>
   `;
   main.innerHTML = html;
+
+  // Load comparison history
+  loadComparisons().then(() => {
+    const listEl = document.getElementById('comparison-history-list');
+    if (!listEl) return;
+    const comps = state.comparisons || [];
+    if (!comps.length) {
+      listEl.innerHTML = '<div style="color:#374151; font-size:12px; font-family:\'JetBrains Mono\',monospace; padding:12px;">No comparisons yet. Run one above.</div>';
+      return;
+    }
+    listEl.innerHTML = comps.map(c => {
+      const models = (c.models || []).map(m => m.split('-')[0]).join(' vs ');
+      const rate = Math.round(c.agreement_rate || 0);
+      const rateColor = rate >= 80 ? '#22c55e' : rate >= 50 ? '#f59e0b' : '#ef4444';
+      const dateStr = c.created_at ? new Date(c.created_at + 'Z').toLocaleDateString() : '';
+      return `
+        <div style="display:flex; align-items:center; gap:12px; padding:10px 14px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; cursor:pointer; transition:all 0.2s;" onmouseenter="this.style.borderColor='#333';this.style.background='#141414'" onmouseleave="this.style.borderColor='#1a1a1a';this.style.background='#0f0f0f'">
+          <div style="flex:1; min-width:0;" onclick="reviewComparison(${c.id})">
+            <div style="font-size:13px; color:#e0e0e0; font-weight:500; margin-bottom:2px;">${escHtml(c.name || 'Untitled')}</div>
+            <div style="font-size:11px; color:#555; font-family:'JetBrains Mono',monospace;">${models} · ${c.total_probes || 0} probes · <span style="color:${rateColor};">${rate}% agree</span> · ${dateStr}</div>
+          </div>
+          <div style="display:flex; gap:4px; flex-shrink:0;">
+            <button onclick="event.stopPropagation(); exportComparisonById(${c.id}, 'json')" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;" title="Export JSON">JSON</button>
+            <button onclick="event.stopPropagation(); exportComparisonById(${c.id}, 'csv')" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;" title="Export CSV">CSV</button>
+            <button onclick="event.stopPropagation(); deleteComparison(${c.id})" style="background:none; border:1px solid rgba(239,68,68,0.2); color:#ef4444; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;" title="Delete">✕</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  });
 }
 
 export async function renderCompareView(sessionIds) {
@@ -1174,13 +1222,19 @@ function renderMultiModelResults(data) {
       <!-- Header -->
       <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:24px;">
         <div>
-          <h2 style="font-size:20px; font-weight:700; color:#e0e0e0; letter-spacing:0.02em; margin-bottom:6px;">Comparison Results</h2>
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+            <button onclick="goHome()" style="background:none; border:1px solid #1a1a1a; color:#777; padding:5px 12px; border-radius:6px; cursor:pointer; font-size:11px; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.borderColor='#333';this.style.color='#e0e0e0'" onmouseleave="this.style.borderColor='#1a1a1a';this.style.color='#777'">← Back</button>
+            <h2 style="font-size:20px; font-weight:700; color:#e0e0e0; letter-spacing:0.02em; margin:0;">Comparison Results</h2>
+          </div>
           <div style="font-size:12px; color:#777; letter-spacing:0.02em;">${models.map(m => `<span style="color:#999;">${escHtml(m)}</span>`).join(' <span style="color:#333; padding:0 4px;">vs</span> ')}</div>
         </div>
-        <button onclick="clearAllViews(); showCompareModal();"
-                style="padding:8px 16px; font-size:12px; color:#999; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; cursor:pointer; font-family:inherit; letter-spacing:0.03em; transition:all 0.2s;"
-                onmouseenter="this.style.borderColor='#333';this.style.color='#e0e0e0';this.style.background='#141414'"
-                onmouseleave="this.style.borderColor='#1a1a1a';this.style.color='#999';this.style.background='#0f0f0f'">New Comparison</button>
+        <div style="display:flex; gap:8px;">
+          ${data.comparison_id ? `
+          <button onclick="exportComparisonById(${data.comparison_id}, 'json')" style="padding:8px 16px; font-size:12px; color:#fbbf24; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2); border-radius:8px; cursor:pointer; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.background='rgba(245,158,11,0.15)'" onmouseleave="this.style.background='rgba(245,158,11,0.08)'">Export JSON</button>
+          <button onclick="exportComparisonById(${data.comparison_id}, 'csv')" style="padding:8px 16px; font-size:12px; color:#fbbf24; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2); border-radius:8px; cursor:pointer; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.background='rgba(245,158,11,0.15)'" onmouseleave="this.style.background='rgba(245,158,11,0.08)'">Export CSV</button>
+          ` : ''}
+          <button onclick="clearAllViews(); showCompareModal();" style="padding:8px 16px; font-size:12px; color:#999; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; cursor:pointer; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.borderColor='#333';this.style.color='#e0e0e0';this.style.background='#141414'" onmouseleave="this.style.borderColor='#1a1a1a';this.style.color='#999';this.style.background='#0f0f0f'">New Comparison</button>
+        </div>
       </div>
 
       <!-- Stats bar -->
@@ -1471,14 +1525,595 @@ function clearAllViews() {
   state.consistencyView = false;
   state.sequenceView = false;
   state.snapshotView = false;
+  state.dashboardView = false;
+  state.dashboardDetail = null;
+  state.dashboardDetailData = null;
 }
 window.clearAllViews = clearAllViews;
+
+function renderDashboard() {
+  const main = document.getElementById('main');
+  const stats = state.dashboardStats || {};
+  const tab = state.dashboardTab || 'all';
+
+  if (!state.dashboardStats) {
+    main.innerHTML = `<div class="fade-in" style="display:flex; align-items:center; justify-content:center; min-height:40vh;">
+      <span class="spinner"></span>
+    </div>`;
+    return;
+  }
+
+  const clsBreakdown = stats.classification_breakdown || {};
+  const totalRuns = stats.total_runs || 0;
+
+  let html = `<div class="fade-in" style="max-width:960px;">`;
+  html += viewHeader('Dashboard', 'All sessions, comparisons, and sequences');
+
+  // ── Stats Bar ──
+  html += `<div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:20px;">`;
+  const statCards = [
+    { label: 'Sessions', value: stats.total_sessions || 0, color: '#4a9eff' },
+    { label: 'Runs', value: stats.total_runs || 0, color: '#a855f7' },
+    { label: 'Comparisons', value: stats.total_comparisons || 0, color: '#f59e0b' },
+    { label: 'Sequences', value: stats.total_sequences || 0, color: '#14b8a6' },
+  ];
+  for (const s of statCards) {
+    html += `<div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; padding:16px; text-align:center;">
+      <div style="font-size:28px; font-weight:700; color:${s.color}; letter-spacing:-0.02em; margin-bottom:4px;">${s.value}</div>
+      <div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#555;">${s.label}</div>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // Classification breakdown bar (if any runs exist)
+  if (totalRuns > 0) {
+    const refused = clsBreakdown.refused || 0;
+    const complied = clsBreakdown.complied || 0;
+    const collapsed = clsBreakdown.collapsed || 0;
+    const negotiated = clsBreakdown.negotiated || 0;
+    html += `<div style="margin-bottom:20px; padding:12px 16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">
+      <div style="display:flex; align-items:center; gap:16px; margin-bottom:8px;">
+        <span style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#555;">Classification Distribution</span>
+        <span style="font-size:11px; color:#777; font-family:'JetBrains Mono',monospace;">${totalRuns} total runs</span>
+      </div>
+      <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; background:#1a1a1a;">
+        ${refused ? `<div style="background:#ef4444; flex:${refused};" title="Refused: ${refused}"></div>` : ''}
+        ${collapsed ? `<div style="background:#f59e0b; flex:${collapsed};" title="Collapsed: ${collapsed}"></div>` : ''}
+        ${negotiated ? `<div style="background:#4a9eff; flex:${negotiated};" title="Negotiated: ${negotiated}"></div>` : ''}
+        ${complied ? `<div style="background:#22c55e; flex:${complied};" title="Complied: ${complied}"></div>` : ''}
+      </div>
+      <div style="display:flex; gap:16px; margin-top:6px; font-size:11px; font-family:'JetBrains Mono',monospace;">
+        <span style="color:#ef4444;">R ${refused}</span>
+        <span style="color:#f59e0b;">X ${collapsed}</span>
+        <span style="color:#4a9eff;">N ${negotiated}</span>
+        <span style="color:#22c55e;">C ${complied}</span>
+      </div>
+    </div>`;
+  }
+
+  // ── Action Bar ──
+  html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+    <button onclick="exportAllData()" style="padding:8px 16px; font-size:12px; color:#22c55e; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:8px; cursor:pointer; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.background='rgba(34,197,94,0.15)'" onmouseleave="this.style.background='rgba(34,197,94,0.08)'">Export All Data</button>
+    <button id="clear-all-btn" onclick="showClearAllConfirm()" style="padding:8px 16px; font-size:12px; color:#ef4444; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:8px; cursor:pointer; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.background='rgba(239,68,68,0.15)'" onmouseleave="this.style.background='rgba(239,68,68,0.08)'">Clear All Data</button>
+  </div>`;
+
+  // ── Clear All Confirmation Panel (hidden by default) ──
+  html += `<div id="clear-all-confirm" style="display:none; margin-bottom:20px; padding:16px 20px; background:rgba(239,68,68,0.04); border:1px solid rgba(239,68,68,0.25); border-radius:10px;">
+    <div style="font-size:13px; font-weight:600; color:#ef4444; margin-bottom:8px;">&#9888; Delete All Data?</div>
+    <div style="font-size:12px; color:#999; line-height:1.6; margin-bottom:12px;">
+      This will permanently delete ALL sessions, runs, comparisons, sequences, snapshots, and annotations.<br>
+      <strong style="color:#fbbf24;">Probes, strategies, and policies will be preserved.</strong><br>
+      This cannot be undone.
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button onclick="exportAllData()" style="padding:8px 16px; font-size:12px; color:#22c55e; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.25); border-radius:6px; cursor:pointer; font-family:inherit;">Export All First</button>
+      <button onclick="executeClearAll()" style="padding:8px 16px; font-size:12px; color:#fff; background:#991b1b; border:1px solid #ef4444; border-radius:6px; cursor:pointer; font-family:inherit; font-weight:600;">Yes, Delete Everything</button>
+      <button onclick="hideClearAllConfirm()" style="padding:8px 16px; font-size:12px; color:#777; background:none; border:1px solid #1a1a1a; border-radius:6px; cursor:pointer; font-family:inherit;">Cancel</button>
+    </div>
+  </div>`;
+
+  // ── Detail View or List View ──
+  if (state.dashboardDetail) {
+    html += renderDashboardDetail();
+  } else {
+
+  // ── Tab Pills ──
+  const tabs = [
+    { id: 'all', label: 'All' },
+    { id: 'sessions', label: `Sessions (${(state.dashboardSessions || []).length})` },
+    { id: 'comparisons', label: `Comparisons (${(state.dashboardComparisons || []).length})` },
+    { id: 'sequences', label: `Sequences (${(state.dashboardSequences || []).length})` },
+  ];
+  html += `<div style="display:flex; gap:6px; margin-bottom:20px;">`;
+  for (const t of tabs) {
+    const active = tab === t.id;
+    html += `<button onclick="state.dashboardTab='${t.id}'; renderDashboard();" class="nav-pill${active ? '' : ' nav-pill-gray'}" style="${active ? 'background:rgba(74,158,255,0.1); color:#4a9eff; border-color:rgba(74,158,255,0.3); font-weight:600;' : ''}">${t.label}</button>`;
+  }
+  html += `</div>`;
+
+  // ── Data Sections ──
+  function dateGroup(dateStr) {
+    if (!dateStr) return 'Unknown';
+    const d = new Date(dateStr.includes('Z') ? dateStr : dateStr + 'Z');
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate() - 7);
+    const monthAgo = new Date(today); monthAgo.setDate(monthAgo.getDate() - 30);
+    if (d >= today) return 'Today';
+    if (d >= weekAgo) return 'This Week';
+    if (d >= monthAgo) return 'This Month';
+    return 'Older';
+  }
+
+  function sectionHeader(title) {
+    return `<div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#333; margin:16px 0 8px; padding-bottom:4px; border-bottom:1px solid #1a1a1a;">${title}</div>`;
+  }
+
+  // Sessions section
+  if (tab === 'all' || tab === 'sessions') {
+    const sessions = state.dashboardSessions || [];
+    html += `<div style="margin-bottom:24px;">
+      <div style="font-size:13px; font-weight:600; color:#4a9eff; margin-bottom:8px;">Sessions</div>`;
+    if (!sessions.length) {
+      html += `<div style="color:#374151; font-size:12px; font-family:'JetBrains Mono',monospace; padding:16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">No sessions yet</div>`;
+    } else {
+      const grouped = {};
+      for (const s of sessions) {
+        const g = dateGroup(s.created_at);
+        if (!grouped[g]) grouped[g] = [];
+        grouped[g].push(s);
+      }
+      for (const [group, items] of Object.entries(grouped)) {
+        html += sectionHeader(group);
+        for (const s of items) {
+          const model = s.target_model || 'unknown';
+          const shortModel = model.split('-').slice(0, 2).join('-');
+          const runCount = s.run_count || 0;
+          const dateStr = s.created_at ? new Date(s.created_at + 'Z').toLocaleDateString() : '';
+          html += `<div style="display:flex; align-items:center; gap:12px; padding:10px 14px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:6px; transition:all 0.2s;" onmouseenter="this.style.borderColor='#333';this.style.background='#141414'" onmouseleave="this.style.borderColor='#1a1a1a';this.style.background='#0f0f0f'">
+            <div style="flex:1; min-width:0; cursor:pointer;" onclick="loadSessionDetail(${s.id})">
+              <div style="font-size:13px; color:#e0e0e0; font-weight:500; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escHtml(s.name)}</div>
+              <div style="font-size:11px; color:#555; font-family:'JetBrains Mono',monospace;">${escHtml(shortModel)} &middot; ${runCount} runs &middot; ${dateStr}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+              ${s.refused_count ? `<span style="font-size:10px; color:#ef4444; font-family:'JetBrains Mono',monospace;">${s.refused_count}R</span>` : ''}
+              ${s.complied_count ? `<span style="font-size:10px; color:#22c55e; font-family:'JetBrains Mono',monospace;">${s.complied_count}C</span>` : ''}
+            </div>
+            <div style="display:flex; gap:4px; flex-shrink:0;">
+              <button onclick="event.stopPropagation(); exportSession('json', true)" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;" title="Export JSON">JSON</button>
+              <button onclick="event.stopPropagation(); exportSession('csv', true)" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;" title="Export CSV">CSV</button>
+            </div>
+          </div>`;
+        }
+      }
+    }
+    html += `</div>`;
+  }
+
+  // Comparisons section
+  if (tab === 'all' || tab === 'comparisons') {
+    const comps = state.dashboardComparisons || [];
+    html += `<div style="margin-bottom:24px;">
+      <div style="font-size:13px; font-weight:600; color:#f59e0b; margin-bottom:8px;">Comparisons</div>`;
+    if (!comps.length) {
+      html += `<div style="color:#374151; font-size:12px; font-family:'JetBrains Mono',monospace; padding:16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">No comparisons saved yet. Run a new comparison from the Compare tool — results will appear here automatically.</div>`;
+    } else {
+      const grouped = {};
+      for (const c of comps) {
+        const g = dateGroup(c.created_at);
+        if (!grouped[g]) grouped[g] = [];
+        grouped[g].push(c);
+      }
+      for (const [group, items] of Object.entries(grouped)) {
+        html += sectionHeader(group);
+        for (const c of items) {
+          const models = (c.models || []).map(m => m.split('-')[0]).join(' vs ');
+          const rate = Math.round(c.agreement_rate || 0);
+          const rateColor = rate >= 80 ? '#22c55e' : rate >= 50 ? '#f59e0b' : '#ef4444';
+          const dateStr = c.created_at ? new Date(c.created_at + 'Z').toLocaleDateString() : '';
+          html += `<div style="display:flex; align-items:center; gap:12px; padding:10px 14px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:6px; transition:all 0.2s;" onmouseenter="this.style.borderColor='#333';this.style.background='#141414'" onmouseleave="this.style.borderColor='#1a1a1a';this.style.background='#0f0f0f'">
+            <div style="flex:1; min-width:0; cursor:pointer;" onclick="loadComparisonDetail(${c.id})">
+              <div style="font-size:13px; color:#e0e0e0; font-weight:500; margin-bottom:2px;">${escHtml(c.name || 'Untitled')}</div>
+              <div style="font-size:11px; color:#555; font-family:'JetBrains Mono',monospace;">${models} &middot; ${c.total_probes || 0} probes &middot; <span style="color:${rateColor};">${rate}% agree</span> &middot; ${dateStr}</div>
+            </div>
+            <div style="display:flex; gap:4px; flex-shrink:0;">
+              <button onclick="event.stopPropagation(); exportComparisonById(${c.id}, 'json')" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;">JSON</button>
+              <button onclick="event.stopPropagation(); exportComparisonById(${c.id}, 'csv')" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;">CSV</button>
+              <button onclick="event.stopPropagation(); deleteComparison(${c.id})" style="background:none; border:1px solid rgba(239,68,68,0.2); color:#ef4444; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;">&#x2715;</button>
+            </div>
+          </div>`;
+        }
+      }
+    }
+    html += `</div>`;
+  }
+
+  // Sequences section
+  if (tab === 'all' || tab === 'sequences') {
+    const seqs = state.dashboardSequences || [];
+    html += `<div style="margin-bottom:24px;">
+      <div style="font-size:13px; font-weight:600; color:#14b8a6; margin-bottom:8px;">Sequences</div>`;
+    if (!seqs.length) {
+      html += `<div style="color:#374141; font-size:12px; font-family:'JetBrains Mono',monospace; padding:16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">No sequences yet</div>`;
+    } else {
+      const grouped = {};
+      for (const s of seqs) {
+        const g = dateGroup(s.created_at);
+        if (!grouped[g]) grouped[g] = [];
+        grouped[g].push(s);
+      }
+      for (const [group, items] of Object.entries(grouped)) {
+        html += sectionHeader(group);
+        for (const s of items) {
+          const model = s.target_model || 'unknown';
+          const shortModel = model.split('-').slice(0, 2).join('-');
+          const dateStr = s.created_at ? new Date(s.created_at + 'Z').toLocaleDateString() : '';
+          const status = s.status || 'unknown';
+          const statusColor = status === 'completed' || status === 'complete' ? '#22c55e' : status === 'running' ? '#4a9eff' : status === 'abandoned' ? '#777' : status === 'pending' ? '#f59e0b' : '#555';
+          html += `<div style="display:flex; align-items:center; gap:12px; padding:10px 14px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:6px; transition:all 0.2s;" onmouseenter="this.style.borderColor='#333';this.style.background='#141414'" onmouseleave="this.style.borderColor='#1a1a1a';this.style.background='#0f0f0f'">
+            <div style="flex:1; min-width:0; cursor:pointer;" onclick="loadSequenceDetail(${s.id})">
+              <div style="font-size:13px; color:#e0e0e0; font-weight:500; margin-bottom:2px;">${escHtml(s.session_name || 'Session')} &mdash; ${escHtml(s.strategy_id || 'sequence')}</div>
+              <div style="font-size:11px; color:#555; font-family:'JetBrains Mono',monospace;">${escHtml(shortModel)} &middot; ${s.total_turns || s.warmup_turns || '?'} turns &middot; <span style="color:${statusColor};">${status}</span> &middot; ${dateStr}</div>
+            </div>
+            <div style="display:flex; gap:4px; flex-shrink:0;">
+              <button onclick="event.stopPropagation(); exportSequenceById(${s.id}, 'json')" style="background:none; border:1px solid #1a1a1a; color:#777; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;">JSON</button>
+              <button onclick="event.stopPropagation(); deleteSequence(${s.id}).then(() => loadDashboardData())" style="background:none; border:1px solid rgba(239,68,68,0.2); color:#ef4444; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-family:inherit;">&#x2715;</button>
+            </div>
+          </div>`;
+        }
+      }
+    }
+    html += `</div>`;
+  }
+
+  } // end else (list view)
+
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+// ── Dashboard Detail Rendering ────────────────────────────────────────────────
+
+function renderDashboardDetail() {
+  const detail = state.dashboardDetail;
+  const data = state.dashboardDetailData;
+
+  // Back button header
+  let html = `<div style="margin-bottom:16px;">
+    <button onclick="closeDashboardDetail()" style="background:none; border:1px solid #1a1a1a; color:#4a9eff; padding:6px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-family:inherit; transition:all 0.2s;" onmouseenter="this.style.borderColor='#4a9eff'" onmouseleave="this.style.borderColor='#1a1a1a'">&larr; Back to list</button>
+  </div>`;
+
+  // Loading state
+  if (!data) {
+    html += `<div style="display:flex; align-items:center; justify-content:center; min-height:20vh;">
+      <span class="spinner"></span>
+    </div>`;
+    return html;
+  }
+
+  // Error state
+  if (data.error) {
+    html += `<div style="padding:20px; background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.2); border-radius:8px; color:#ef4444; font-size:13px;">Failed to load: ${escHtml(data.error)}</div>`;
+    return html;
+  }
+
+  if (detail.type === 'session') {
+    html += renderSessionDetail(data);
+  } else if (detail.type === 'comparison') {
+    html += renderComparisonDetail(data);
+  } else if (detail.type === 'sequence') {
+    html += renderSequenceDetail(data);
+  }
+
+  return html;
+}
+
+function truncateText(text, maxLen) {
+  if (!text || text.length <= maxLen) return escHtml(text || '');
+  return escHtml(text.slice(0, maxLen)) + '...';
+}
+
+function renderSessionDetail(session) {
+  const runs = session.runs || [];
+  const model = session.target_model || 'unknown';
+  const dateStr = session.created_at ? new Date(session.created_at.includes('Z') ? session.created_at : session.created_at + 'Z').toLocaleDateString() : '';
+
+  // Count classifications
+  const counts = { refused: 0, complied: 0, negotiated: 0, collapsed: 0 };
+  for (const r of runs) {
+    const cls = (r.final_classification || r.initial_classification || '').toLowerCase();
+    if (counts[cls] !== undefined) counts[cls]++;
+  }
+
+  let html = `<div style="padding:16px 20px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:16px;">
+    <div style="font-size:16px; font-weight:600; color:#f1f5f9; margin-bottom:4px;">${escHtml(session.name || 'Untitled Session')}</div>
+    <div style="font-size:12px; color:#555; font-family:'JetBrains Mono',monospace; display:flex; gap:16px; flex-wrap:wrap;">
+      <span>Model: ${escHtml(model)}</span>
+      <span>Created: ${dateStr}</span>
+    </div>
+    <div style="font-size:12px; color:#777; font-family:'JetBrains Mono',monospace; margin-top:6px; display:flex; gap:12px;">
+      <span>${runs.length} runs</span>
+      ${counts.refused ? `<span style="color:#ef4444;">${counts.refused} refused</span>` : ''}
+      ${counts.complied ? `<span style="color:#22c55e;">${counts.complied} complied</span>` : ''}
+      ${counts.negotiated ? `<span style="color:#4a9eff;">${counts.negotiated} negotiated</span>` : ''}
+      ${counts.collapsed ? `<span style="color:#f59e0b;">${counts.collapsed} collapsed</span>` : ''}
+    </div>
+  </div>`;
+
+  if (!runs.length) {
+    html += `<div style="color:#374151; font-size:12px; font-family:'JetBrains Mono',monospace; padding:16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">No runs in this session</div>`;
+    return html;
+  }
+
+  // Initialize expanded runs tracker
+  if (!window._expandedRuns) window._expandedRuns = new Set();
+
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
+    const cls = run.final_classification || run.initial_classification || 'unknown';
+    const isExpanded = window._expandedRuns.has(run.id);
+    const probePreview = truncateText(run.probe_text, 80);
+
+    html += `<div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:8px; overflow:hidden;">`;
+
+    // Collapsed header - always visible
+    html += `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; cursor:pointer; transition:background 0.2s;" onclick="toggleDashboardRun(${run.id})" onmouseenter="this.style.background='#141414'" onmouseleave="this.style.background='transparent'">
+      <span style="color:#555; font-size:11px; font-family:'JetBrains Mono',monospace; flex-shrink:0;">${isExpanded ? '&#9660;' : '&#9654;'} Run ${i + 1}</span>
+      <span style="font-size:12px; color:#e0e0e0; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${probePreview}</span>
+      ${classificationBadge(cls)}
+    </div>`;
+
+    // Expanded content
+    if (isExpanded) {
+      html += `<div style="padding:0 16px 16px; border-top:1px solid #1a1a1a;">`;
+
+      // Probe
+      html += `<div style="margin-top:12px;">
+        <div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#4a9eff; margin-bottom:6px;">Probe</div>
+        <div style="padding:10px 14px; background:#0a0a0a; border:1px solid #252a35; border-radius:6px; font-size:12px; color:#e0e0e0; line-height:1.6; white-space:pre-wrap;">${escHtml(run.probe_text || '')}</div>
+      </div>`;
+
+      // Initial Response
+      if (run.initial_response) {
+        html += `<div style="margin-top:12px;">
+          <div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#777; margin-bottom:6px;">Response ${run.initial_classification ? `(${run.initial_classification})` : ''}</div>
+          <div style="padding:10px 14px; background:#0a0a0a; border:1px solid #252a35; border-radius:6px; font-size:12px; color:#c0c0c0; line-height:1.6;" id="resp-init-${run.id}">${renderTruncatedResponse(run.initial_response, 'init-' + run.id)}</div>
+        </div>`;
+      }
+
+      // Pushback
+      if (run.pushback_text) {
+        html += `<div style="margin-top:12px;">
+          <div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#f59e0b; margin-bottom:6px;">Pushback ${run.pushback_source ? `(${run.pushback_source})` : ''}</div>
+          <div style="padding:10px 14px; background:rgba(245,158,11,0.04); border:1px solid rgba(245,158,11,0.15); border-radius:6px; font-size:12px; color:#e0e0e0; line-height:1.6; white-space:pre-wrap;">${escHtml(run.pushback_text)}</div>
+        </div>`;
+      }
+
+      // Final Response (if different from initial)
+      if (run.final_response && run.final_response !== run.initial_response) {
+        html += `<div style="margin-top:12px;">
+          <div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#22c55e; margin-bottom:6px;">Final Response ${run.final_classification ? `(${run.final_classification})` : ''}</div>
+          <div style="padding:10px 14px; background:#0a0a0a; border:1px solid #252a35; border-radius:6px; font-size:12px; color:#c0c0c0; line-height:1.6;" id="resp-final-${run.id}">${renderTruncatedResponse(run.final_response, 'final-' + run.id)}</div>
+        </div>`;
+      }
+
+      // Full conversation turns (if loaded)
+      if (run.turns && run.turns.length > 0) {
+        const extraTurns = run.turns.filter(t => {
+          // Skip turns we already showed above
+          if (t.turn_number <= 2 && !run.pushback_text) return false;
+          return true;
+        });
+        if (extraTurns.length > 2) {
+          html += `<div style="margin-top:12px;">
+            <div style="font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#555; margin-bottom:6px;">Full Conversation (${run.turns.length} turns)</div>`;
+          for (const turn of run.turns) {
+            const roleColor = turn.role === 'user' ? '#4a9eff' : '#a855f7';
+            const roleLabel = turn.role === 'user' ? 'User' : 'Model';
+            html += `<div style="margin-bottom:6px;">
+              <span style="font-size:10px; font-weight:600; color:${roleColor}; text-transform:uppercase;">${roleLabel}</span>
+              ${turn.classification ? classificationBadge(turn.classification) : ''}
+              <div style="padding:8px 12px; background:#0a0a0a; border:1px solid #1a1a1a; border-radius:6px; font-size:12px; color:#c0c0c0; line-height:1.5; margin-top:4px;">${renderTruncatedResponse(turn.content, 'turn-' + turn.id)}</div>
+            </div>`;
+          }
+          html += `</div>`;
+        }
+      }
+
+      html += `</div>`; // end expanded content
+    }
+
+    html += `</div>`; // end run card
+  }
+
+  return html;
+}
+
+function renderComparisonDetail(comparison) {
+  const results = comparison.results || [];
+  const models = comparison.models || [];
+  const rate = Math.round(comparison.agreement_rate || 0);
+  const rateColor = rate >= 80 ? '#22c55e' : rate >= 50 ? '#f59e0b' : '#ef4444';
+  const dateStr = comparison.created_at ? new Date(comparison.created_at.includes('Z') ? comparison.created_at : comparison.created_at + 'Z').toLocaleDateString() : '';
+
+  let html = `<div style="padding:16px 20px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:16px;">
+    <div style="font-size:16px; font-weight:600; color:#f1f5f9; margin-bottom:4px;">${escHtml(comparison.name || 'Untitled Comparison')}</div>
+    <div style="font-size:12px; color:#555; font-family:'JetBrains Mono',monospace; display:flex; gap:16px; flex-wrap:wrap;">
+      <span>Models: ${models.map(m => escHtml(m)).join(' vs ')}</span>
+      <span>${comparison.total_probes || 0} probes</span>
+      <span style="color:${rateColor};">${rate}% agreement</span>
+      <span>${dateStr}</span>
+    </div>
+  </div>`;
+
+  if (!results.length) {
+    html += `<div style="color:#374151; font-size:12px; font-family:'JetBrains Mono',monospace; padding:16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">No results</div>`;
+    return html;
+  }
+
+  for (const result of results) {
+    // Handle both saved format (models dict, disagreement) and live format (responses array, all_agree)
+    const modelsDict = result.models || {};
+    const responses = result.responses || Object.entries(modelsDict).map(([model, data]) => ({
+      model,
+      response: data.response,
+      classification: data.classification,
+    }));
+    const allAgree = result.all_agree !== undefined ? result.all_agree : !result.disagreement;
+    const borderColor = allAgree ? '#1a1a1a' : 'rgba(239,68,68,0.3)';
+    const probeText = result.probe_text || result.prompt_text || '';
+
+    html += `<div style="background:#0f0f0f; border:1px solid ${borderColor}; border-radius:8px; margin-bottom:12px; padding:16px;">`;
+
+    // Probe name + text
+    if (result.probe_name) {
+      html += `<div style="font-size:11px; font-weight:600; color:#4a9eff; margin-bottom:4px; font-family:'JetBrains Mono',monospace;">${escHtml(result.probe_name)}</div>`;
+    }
+    html += `<div style="font-size:12px; color:#e0e0e0; margin-bottom:12px; line-height:1.5; white-space:pre-wrap;">${escHtml(probeText)}</div>`;
+
+    // Side-by-side responses
+    const colCount = responses.length || models.length;
+    html += `<div style="display:grid; grid-template-columns:repeat(${colCount}, 1fr); gap:12px;">`;
+    for (const resp of responses) {
+      const cls = resp.classification || 'unknown';
+      html += `<div style="background:#0a0a0a; border:1px solid #252a35; border-radius:6px; padding:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <span style="font-size:11px; font-weight:600; color:#777; font-family:'JetBrains Mono',monospace;">${escHtml(resp.model || '')}</span>
+          ${classificationBadge(cls)}
+        </div>
+        <div style="font-size:12px; color:#c0c0c0; line-height:1.5;">${renderTruncatedResponse(resp.response || '(no response)', 'cmp-' + (result.probe_id || '') + '-' + (resp.model || ''))}</div>
+      </div>`;
+    }
+    html += `</div>`;
+
+    // Disagreement indicator
+    if (!allAgree) {
+      html += `<div style="margin-top:8px; font-size:10px; font-weight:600; color:#ef4444; letter-spacing:0.05em; text-transform:uppercase;">Disagreement</div>`;
+    }
+
+    html += `</div>`; // end probe card
+  }
+
+  return html;
+}
+
+function renderSequenceDetail(sequence) {
+  const turns = sequence.turns || [];
+  const model = sequence.target_model || 'unknown';
+  const status = sequence.status || 'unknown';
+  const statusColor = status === 'complete' ? '#22c55e' : status === 'running' ? '#4a9eff' : '#555';
+  const dateStr = sequence.created_at ? new Date(sequence.created_at.includes('Z') ? sequence.created_at : sequence.created_at + 'Z').toLocaleDateString() : '';
+
+  let html = `<div style="padding:16px 20px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; margin-bottom:16px;">
+    <div style="font-size:16px; font-weight:600; color:#f1f5f9; margin-bottom:4px;">${escHtml(sequence.strategy_id || 'Sequence')}</div>
+    <div style="font-size:12px; color:#555; font-family:'JetBrains Mono',monospace; display:flex; gap:16px; flex-wrap:wrap;">
+      <span>Model: ${escHtml(model)}</span>
+      <span style="color:${statusColor};">Status: ${status}</span>
+      <span>${turns.length} turns</span>
+      <span>${dateStr}</span>
+    </div>
+  </div>`;
+
+  if (!turns.length) {
+    html += `<div style="color:#374151; font-size:12px; font-family:'JetBrains Mono',monospace; padding:16px; background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px;">No turns recorded</div>`;
+    return html;
+  }
+
+  for (const turn of turns) {
+    const isProbe = turn.is_probe;
+    const roleColor = turn.role === 'user' ? '#4a9eff' : '#a855f7';
+    const roleLabel = turn.role === 'user' ? 'User' : 'Model';
+    const turnType = isProbe ? 'probe' : 'warmup';
+    const turnTypeColor = isProbe ? '#ef4444' : '#555';
+    const borderColor = isProbe ? 'rgba(239,68,68,0.2)' : '#1a1a1a';
+
+    html += `<div style="background:#0f0f0f; border:1px solid ${borderColor}; border-radius:8px; margin-bottom:8px; padding:12px 16px;">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+        <span style="font-size:10px; font-weight:600; color:#555; font-family:'JetBrains Mono',monospace;">Turn ${turn.turn_number}</span>
+        <span style="font-size:10px; font-weight:600; color:${turnTypeColor}; text-transform:uppercase; letter-spacing:0.05em;">${turnType}</span>
+        <span style="font-size:10px; font-weight:600; color:${roleColor}; text-transform:uppercase;">${roleLabel}</span>
+        ${turn.classification ? classificationBadge(turn.classification) : ''}
+      </div>
+      <div style="font-size:12px; color:#c0c0c0; line-height:1.6;">${renderTruncatedResponse(turn.content, 'seq-' + turn.id)}</div>
+    </div>`;
+  }
+
+  return html;
+}
+
+function renderTruncatedResponse(text, uniqueId) {
+  if (!text) return '<span style="color:#555;">(no response)</span>';
+  const maxLen = 300;
+  const safeId = escHtml(uniqueId);
+  if (text.length <= maxLen) {
+    return `<span style="white-space:pre-wrap;">${escHtml(text)}</span>`;
+  }
+  return `<span id="trunc-${safeId}"><span style="white-space:pre-wrap;">${escHtml(text.slice(0, maxLen))}</span><span style="color:#4a9eff; cursor:pointer; margin-left:4px;" onclick="event.stopPropagation(); expandResponse('${safeId}')">Show more</span></span>
+    <span id="full-${safeId}" style="display:none;"><span style="white-space:pre-wrap;">${escHtml(text)}</span><span style="color:#4a9eff; cursor:pointer; margin-left:4px;" onclick="event.stopPropagation(); collapseResponse('${safeId}')">Show less</span></span>`;
+}
+
+window.closeDashboardDetail = function() {
+  state.dashboardDetail = null;
+  state.dashboardDetailData = null;
+  window._expandedRuns = new Set();
+  renderDashboard();
+};
+
+window.toggleDashboardRun = function(runId) {
+  if (!window._expandedRuns) window._expandedRuns = new Set();
+  if (window._expandedRuns.has(runId)) {
+    window._expandedRuns.delete(runId);
+  } else {
+    window._expandedRuns.add(runId);
+  }
+  renderDashboard();
+};
+
+window.expandResponse = function(id) {
+  const trunc = document.getElementById('trunc-' + id);
+  const full = document.getElementById('full-' + id);
+  if (trunc) trunc.style.display = 'none';
+  if (full) full.style.display = 'inline';
+};
+
+window.collapseResponse = function(id) {
+  const trunc = document.getElementById('trunc-' + id);
+  const full = document.getElementById('full-' + id);
+  if (trunc) trunc.style.display = 'inline';
+  if (full) full.style.display = 'none';
+};
 
 function goHome() {
   clearAllViews();
   render();
 }
 window.goHome = goHome;
+window.renderDashboard = renderDashboard;
+
+window.showClearAllConfirm = function() {
+  const panel = document.getElementById('clear-all-confirm');
+  if (panel) panel.style.display = 'block';
+};
+
+window.hideClearAllConfirm = function() {
+  const panel = document.getElementById('clear-all-confirm');
+  if (panel) panel.style.display = 'none';
+};
+
+window.executeClearAll = async function() {
+  const result = await clearAllData();
+  if (result) {
+    hideClearAllConfirm();
+    const panel = document.getElementById('clear-all-confirm');
+    if (panel) {
+      panel.innerHTML = `<div style="font-size:13px; color:#22c55e; font-weight:500;">Data cleared successfully.</div>`;
+      panel.style.display = 'block';
+      panel.style.borderColor = 'rgba(34,197,94,0.25)';
+      panel.style.background = 'rgba(34,197,94,0.04)';
+      setTimeout(() => { panel.style.display = 'none'; renderDashboard(); }, 2000);
+    }
+  }
+};
 
 function viewHeader(title, subtitle) {
   return `<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
@@ -1515,6 +2150,24 @@ window.exitCompareMode = exitCompareMode;
 window.showCompareModal = showCompareModal;
 window.renderCompareView = renderCompareView;
 window.renderConsistencyView = renderConsistencyView;
+
+window.reviewComparison = async function(comparisonId) {
+  try {
+    const comp = await getComparison(comparisonId);
+    state.compareMode = true;
+    state.compareData = {
+      comparison_id: comp.id,
+      models: comp.models,
+      session_ids: comp.session_ids,
+      results: comp.results,
+      agreement_rate: comp.agreement_rate,
+      total_probes: comp.total_probes,
+    };
+    renderMultiModelResults(state.compareData);
+  } catch (e) {
+    showError('Failed to load comparison: ' + e.message);
+  }
+};
 
 window.showVariantGroupBuilder = function() {
   const el = document.getElementById('variant-group-builder');
@@ -2726,7 +3379,51 @@ async function renderSettingsView() {
       <div style="margin-top:24px; padding:12px; background:#12141e; border-radius:6px; font-size:11px; color:#4b5563;">
         Keys are stored in <code style="color:#6b7280;">.env</code> in the project root. This file is gitignored — your keys won't be committed.
       </div>
+
+      <!-- Ollama (Local Models) -->
+      <div class="setting-group" id="ollama-settings" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.08); padding-top:1rem;">
+        <h4 style="color:#f0f0f0; margin:0 0 0.75rem 0; font-size:0.85rem;">
+          Ollama (Local Models)
+          <span id="ollama-status-badge" style="font-size:0.7rem; padding:2px 6px; border-radius:3px; margin-left:6px; background:rgba(255,255,255,0.08); color:#888;">checking...</span>
+        </h4>
+        <div style="margin-bottom:0.75rem;">
+          <label style="display:block; color:#aaa; font-size:0.75rem; margin-bottom:4px;">Base URL</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input type="text" id="ollama-base-url" value="http://localhost:11434"
+                   style="flex:1; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:6px 8px; color:#f0f0f0; font-size:0.8rem;">
+            <button onclick="testOllamaConnection()" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:6px 12px; color:#aaa; font-size:0.75rem; cursor:pointer;">Test</button>
+          </div>
+        </div>
+        <div id="ollama-models-list" style="font-size:0.75rem; color:#888;"></div>
+
+        <div style="margin-top:1rem; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.75rem;">
+          <label style="display:block; color:#aaa; font-size:0.75rem; margin-bottom:4px;">Default Coach Backend</label>
+          <select id="settings-coach-backend" onchange="saveCoachDefault()" style="width:100%; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:6px 8px; color:#f0f0f0; font-size:0.8rem;">
+            <option value="anthropic">Claude (recommended)</option>
+            <option value="local">Local Model (experimental)</option>
+          </select>
+          <div id="settings-coach-model-section" style="display:none; margin-top:0.5rem;">
+            <label style="display:block; color:#aaa; font-size:0.75rem; margin-bottom:4px;">Default Coach Model</label>
+            <select id="settings-coach-model" onchange="saveCoachDefault()" style="width:100%; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:6px 8px; color:#f0f0f0; font-size:0.8rem;">
+              <option value="">— select model —</option>
+            </select>
+            <div style="margin-top:6px; padding:6px 8px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2); border-radius:4px; font-size:0.7rem; color:#fbbf24; line-height:1.4;">
+              &#9888; Local coach is experimental. Expect slower response times and lower-quality suggestions. 7B+ recommended.
+            </div>
+          </div>
+        </div>
+      </div>
     `;
+    // Check Ollama status after rendering the section
+    window.checkOllamaStatus?.();
+    // Load current Ollama base URL setting
+    try {
+      const ollamaSettings = await fetch('/api/settings/ollama').then(r => r.json());
+      const urlInput = document.getElementById('ollama-base-url');
+      if (urlInput && ollamaSettings.base_url) urlInput.value = ollamaSettings.base_url;
+    } catch (_) {}
+    // Populate coach default settings
+    window.populateCoachDefaultSettings?.();
   } catch (e) {
     const container = document.getElementById('settings-keys');
     if (container) container.innerHTML = `<p style="color:#e74c3c;">Failed to load settings: ${escHtml(e.message)}</p>`;

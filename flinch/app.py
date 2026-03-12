@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
 import anthropic
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -57,10 +58,21 @@ async def lifespan(app: FastAPI):
     seed_examples(_conn)
     seed_policies(_conn)
     seed_strategies(_conn)
+    # Load strategies from markdown files
+    strategies_dir = Path(__file__).parent / "strategies"
+    if strategies_dir.exists():
+        db.import_all_strategies(_conn, str(strategies_dir))
     # Probes are loaded on-demand via /api/probes/load-defaults
     # Create runner
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     print(f"[flinch] API key loaded ({len(api_key)} chars)")
+    if not api_key:
+        import logging
+        logging.getLogger("flinch").warning(
+            "ANTHROPIC_API_KEY is not set. This key is required even for local-only "
+            "workflows because the response classifier uses Claude Haiku. "
+            "Set it via: export ANTHROPIC_API_KEY=sk-..."
+        )
     client = anthropic.AsyncAnthropic()
     _runner = Runner(_conn, client)
     yield
@@ -99,6 +111,8 @@ class CreateSessionRequest(BaseModel):
     coach_profile: str = "standard"
     notes: str = ""
     system_prompt: str = ""
+    coach_backend: str = "anthropic"
+    coach_model: str | None = None
 
 class SendProbeRequest(BaseModel):
     probe_id: int | None = None
@@ -149,6 +163,13 @@ class CreateSequenceBatchRequest(BaseModel):
     fixed_n: int | None = None
     max_warmup_turns: int = 10
 
+class OllamaSettingsRequest(BaseModel):
+    base_url: str = "http://localhost:11434"
+
+
+class ClearAllRequest(BaseModel):
+    confirm: str
+
 
 # --- Routes ---
 
@@ -183,6 +204,9 @@ async def load_default_probes():
         count = db.import_all_probes(_conn, str(PROBES_DIR))
     else:
         count = 0
+    strategies_dir = str(Path(__file__).parent / "strategies")
+    if Path(strategies_dir).exists():
+        db.import_all_strategies(_conn, strategies_dir)
     return {"loaded": count, "total": len(db.list_probes(_conn))}
 
 
@@ -203,7 +227,9 @@ async def list_sessions():
 @app.post("/api/sessions")
 async def create_session(req: CreateSessionRequest):
     session_id = db.create_session(
-        _conn, req.name, req.target_model, req.coach_profile, req.notes, req.system_prompt
+        _conn, req.name, req.target_model, req.coach_profile, req.notes, req.system_prompt,
+        coach_backend=req.coach_backend,
+        coach_model=req.coach_model,
     )
     return db.get_session(_conn, session_id)
 
@@ -1088,6 +1114,28 @@ async def export_compare(session_ids: str, format: str = "json"):
         )
 
 
+async def _check_ollama(base_url: str) -> bool:
+    """Check if Ollama is reachable at the given base URL."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{base_url}/api/tags")
+            return resp.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
+        return False
+
+
+async def _list_ollama_models(base_url: str) -> list[dict]:
+    """List available models from Ollama's API."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            return [{"id": f"ollama:{m['name']}", "name": m["name"]} for m in data.get("models", [])]
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
+        return []
+
+
 @app.get("/api/models")
 async def list_available_models():
     """Return available models grouped by provider, based on API keys and installed SDKs."""
@@ -1172,6 +1220,18 @@ async def list_available_models():
         ],
         "available": together_key and openai_sdk,
         "hint": "" if (together_key and openai_sdk) else ("Set TOGETHER_API_KEY" if openai_sdk else "pip install openai + Set TOGETHER_API_KEY"),
+    })
+
+    # Ollama (local)
+    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_available = await _check_ollama(ollama_url)
+    ollama_models = await _list_ollama_models(ollama_url) if ollama_available else []
+    models.append({
+        "provider": "ollama",
+        "models": ollama_models or [{"id": "ollama-default", "name": "No models found"}],
+        "available": ollama_available and len(ollama_models) > 0,
+        "hint": "" if ollama_available else "Ollama not detected. Install from ollama.com and run 'ollama serve'",
+        "local": True,
     })
 
     return models
@@ -1330,13 +1390,101 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
         results.append(probe_result)
 
     agreement_count = sum(1 for r in results if not r["disagreement"])
+
+    # Save comparison to DB for history/review
+    timestamp = datetime.now().strftime("%m/%d %H:%M")
+    comparison_name = f"Compare {timestamp} — {' vs '.join(m.split('-')[0] for m in req.models)}"
+    comparison_id = db.save_comparison(
+        _conn,
+        name=comparison_name,
+        models=req.models,
+        probe_ids=[p["id"] for p in probes],
+        session_ids=session_ids,
+        results=results,
+        agreement_rate=(agreement_count / len(results) * 100) if results else 0,
+        total_probes=len(results),
+    )
+
     return {
+        "comparison_id": comparison_id,
         "models": req.models,
         "session_ids": session_ids,
         "results": results,
         "agreement_rate": (agreement_count / len(results) * 100) if results else 0,
         "total_probes": len(results),
     }
+
+
+@app.get("/api/comparisons")
+async def list_comparisons():
+    return db.list_comparisons(_conn)
+
+
+@app.get("/api/comparisons/{comparison_id}")
+async def get_comparison(comparison_id: int):
+    comp = db.get_comparison(_conn, comparison_id)
+    if not comp:
+        raise HTTPException(404, "Comparison not found")
+    return comp
+
+
+@app.delete("/api/comparisons/{comparison_id}")
+async def delete_comparison_endpoint(comparison_id: int):
+    db.delete_comparison(_conn, comparison_id)
+    return {"deleted": comparison_id}
+
+
+@app.get("/api/comparisons/{comparison_id}/export")
+async def export_comparison(comparison_id: int, format: str = "json"):
+    comp = db.get_comparison(_conn, comparison_id)
+    if not comp:
+        raise HTTPException(404, "Comparison not found")
+
+    date_str = date.today().isoformat()
+
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        models = comp['models']
+        header = ['probe_name', 'probe_domain', 'prompt_text', 'disagreement']
+        for m in models:
+            header.extend([f'{m}_classification', f'{m}_response'])
+        writer.writerow(header)
+
+        for row in comp['results']:
+            csv_row = [row.get('probe_name', ''), row.get('probe_domain', ''), row.get('prompt_text', ''), row.get('disagreement', False)]
+            for m in models:
+                model_data = row.get('models', {}).get(m, {})
+                csv_row.append(model_data.get('classification', ''))
+                csv_row.append(model_data.get('response', ''))
+            writer.writerow(csv_row)
+
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="flinch-comparison-{comparison_id}-{date_str}.csv"'}
+        )
+
+    export_obj = {
+        "flinch_version": "0.2",
+        "export_type": "multi_model_comparison",
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "comparison": {
+            "id": comp['id'],
+            "name": comp['name'],
+            "models": comp['models'],
+            "agreement_rate": comp['agreement_rate'],
+            "total_probes": comp['total_probes'],
+            "created_at": comp['created_at'],
+        },
+        "results": comp['results'],
+    }
+    json_content = json.dumps(export_obj, indent=2, default=str)
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="flinch-comparison-{comparison_id}-{date_str}.json"'}
+    )
 
 
 # ─── TOU Mapper / Policy endpoints ────────────────────────────────────────────
@@ -1507,10 +1655,16 @@ async def run_sequence_auto(sequence_id: int):
         raise HTTPException(404, "Sequence not found")
 
     async def event_stream():
-        async for event in _runner.run_sequence_auto_stream(sequence_id):
-            evt_type = event.get("event", "message")
-            data = json.dumps(event.get("data", {}))
-            yield f"event: {evt_type}\ndata: {data}\n\n"
+        import traceback as _tb
+        try:
+            async for event in _runner.run_sequence_auto_stream(sequence_id):
+                evt_type = event.get("event", "message")
+                data = json.dumps(event.get("data", {}))
+                yield f"event: {evt_type}\ndata: {data}\n\n"
+        except Exception as e:
+            _tb.print_exc()
+            err_data = json.dumps({"error": f"{type(e).__name__}: {e}"})
+            yield f"event: error\ndata: {err_data}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1524,8 +1678,13 @@ async def run_sequence_turn(sequence_id: int):
     active_run = next((r for r in runs if r["status"] in ("pending", "running")), None)
     if not active_run:
         raise HTTPException(400, "No active run for this sequence")
-    result = await _runner.run_sequence_turn(sequence_id, active_run["id"])
-    return result
+    try:
+        result = await _runner.run_sequence_turn(sequence_id, active_run["id"])
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Run turn failed: {type(e).__name__}: {e}")
 
 @app.post("/api/sequences/{sequence_id}/drop-probe")
 async def drop_sequence_probe(sequence_id: int):
@@ -1821,6 +1980,153 @@ async def test_api_key(body: dict):
 
     else:
         raise HTTPException(400, f"Unknown provider: {provider}")
+
+
+@app.get("/api/ollama/status")
+async def ollama_status():
+    """Check Ollama availability, list models, and report ANTHROPIC_API_KEY status."""
+    url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    available = await _check_ollama(url)
+    models = await _list_ollama_models(url) if available else []
+    api_key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return {
+        "available": available,
+        "base_url": url,
+        "models": models,
+        "anthropic_key_set": api_key_set,
+        "anthropic_key_warning": "" if api_key_set else "ANTHROPIC_API_KEY is required for response classification, even with local models.",
+    }
+
+
+@app.get("/api/settings/ollama")
+async def get_ollama_settings():
+    """Get current Ollama configuration."""
+    url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    available = await _check_ollama(url)
+    return {
+        "base_url": url,
+        "available": available,
+    }
+
+
+@app.post("/api/settings/ollama")
+async def update_ollama_settings(req: OllamaSettingsRequest):
+    """Update Ollama base URL."""
+    os.environ["OLLAMA_BASE_URL"] = req.base_url
+    # Test connection with new URL
+    available = await _check_ollama(req.base_url)
+    models = await _list_ollama_models(req.base_url) if available else []
+    return {
+        "base_url": req.base_url,
+        "available": available,
+        "models": models,
+    }
+
+
+_coach_defaults = {"backend": "anthropic", "model": ""}
+
+
+@app.get("/api/settings/coach-default")
+async def get_coach_default():
+    """Get the default coach backend/model for new sessions."""
+    return _coach_defaults
+
+
+@app.post("/api/settings/coach-default")
+async def set_coach_default(req: dict):
+    """Set the default coach backend/model for new sessions."""
+    if "backend" in req:
+        _coach_defaults["backend"] = req["backend"]
+    if "model" in req:
+        _coach_defaults["model"] = req["model"]
+    return _coach_defaults
+
+
+# ─── Dashboard endpoints ─────────────────────────────────────────────────────
+
+@app.get("/api/dashboard/stats")
+async def dashboard_stats():
+    return db.get_dashboard_stats(_conn)
+
+@app.get("/api/dashboard/sessions")
+async def dashboard_sessions():
+    return db.list_all_sessions_summary(_conn)
+
+@app.get("/api/dashboard/comparisons")
+async def dashboard_comparisons():
+    return db.list_comparisons(_conn)
+
+@app.get("/api/dashboard/sequences")
+async def dashboard_sequences():
+    return db.list_all_sequences_summary(_conn)
+
+
+@app.get("/api/sequences/{sequence_id}/export")
+async def export_sequence(sequence_id: int, format: str = "json"):
+    """Export a single sequence with all turns."""
+    data = db.export_sequence_data(_conn, sequence_id)
+    if not data:
+        raise HTTPException(404, "Sequence not found")
+
+    date_str = date.today().isoformat()
+
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["turn_index", "role", "content", "classification"])
+        for turn in data.get("turns", []):
+            writer.writerow([
+                turn.get("turn_index", ""),
+                turn.get("role", ""),
+                turn.get("content", ""),
+                turn.get("classification", ""),
+            ])
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="flinch-sequence-{sequence_id}-{date_str}.csv"'}
+        )
+
+    export_obj = {
+        "flinch_version": "0.2",
+        "export_type": "sequence",
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "sequence": data,
+    }
+    json_content = json.dumps(export_obj, indent=2, default=str)
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="flinch-sequence-{sequence_id}-{date_str}.json"'}
+    )
+
+
+@app.delete("/api/dashboard/clear-all")
+async def clear_all_data_endpoint(req: ClearAllRequest):
+    """Clear all user-generated data. Requires confirmation string."""
+    if req.confirm != "DELETE_ALL_DATA":
+        raise HTTPException(400, "Must send confirm: 'DELETE_ALL_DATA' to proceed")
+
+    deleted = db.clear_all_data(_conn)
+    return {
+        "status": "cleared",
+        "deleted": deleted,
+        "preserved": ["probes", "strategy_templates", "policy_claims", "coach_profiles"],
+    }
+
+
+@app.get("/api/dashboard/export-all")
+async def export_all():
+    """Bulk export all data as a single JSON download."""
+    data = db.export_all_data(_conn)
+    data["exported_at"] = datetime.utcnow().isoformat() + "Z"
+    date_str = date.today().isoformat()
+    json_content = json.dumps(data, indent=2, default=str)
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="flinch-export-all-{date_str}.json"'}
+    )
 
 
 def main():

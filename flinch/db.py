@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
     notes TEXT DEFAULT '',
-    system_prompt TEXT DEFAULT ''
+    system_prompt TEXT DEFAULT '',
+    coach_backend TEXT DEFAULT 'anthropic',
+    coach_model TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -217,7 +219,30 @@ CREATE TABLE IF NOT EXISTS sequence_turns (
     turn_type TEXT NOT NULL DEFAULT 'warmup',
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS comparisons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    models TEXT NOT NULL,
+    probe_ids TEXT NOT NULL,
+    session_ids TEXT NOT NULL,
+    agreement_rate REAL DEFAULT 0,
+    results TEXT NOT NULL,
+    total_probes INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    notes TEXT DEFAULT ''
+);
 """
+
+
+def _migrate_sessions_table(conn):
+    """Add coach_backend and coach_model columns if missing (v0.3 migration)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "coach_backend" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN coach_backend TEXT DEFAULT 'anthropic'")
+    if "coach_model" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN coach_model TEXT DEFAULT NULL")
+    conn.commit()
 
 
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
@@ -228,6 +253,7 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate_sessions_table(conn)
     # Migrations: add columns that may not exist in older DBs
     try:
         conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT DEFAULT ''")
@@ -245,6 +271,23 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
             conn.commit()
         except Exception:
             pass
+    # Migration: comparisons table for existing DBs
+    try:
+        conn.execute("SELECT 1 FROM comparisons LIMIT 1")
+    except Exception:
+        conn.execute("""CREATE TABLE IF NOT EXISTS comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            models TEXT NOT NULL,
+            probe_ids TEXT NOT NULL,
+            session_ids TEXT NOT NULL,
+            agreement_rate REAL DEFAULT 0,
+            results TEXT NOT NULL,
+            total_probes INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            notes TEXT DEFAULT ''
+        )""")
+        conn.commit()
     return conn
 
 
@@ -291,10 +334,10 @@ def get_probe(conn, probe_id: int) -> dict | None:
 
 # --- Session CRUD ---
 
-def create_session(conn, name, target_model="claude-sonnet-4-20250514", coach_profile="standard", notes="", system_prompt="") -> int:
+def create_session(conn, name, target_model="claude-sonnet-4-20250514", coach_profile="standard", notes="", system_prompt="", coach_backend="anthropic", coach_model=None) -> int:
     cur = conn.execute(
-        "INSERT INTO sessions (name, target_model, coach_profile, notes, system_prompt) VALUES (?, ?, ?, ?, ?)",
-        (name, target_model, coach_profile, notes, system_prompt),
+        "INSERT INTO sessions (name, target_model, coach_profile, notes, system_prompt, coach_backend, coach_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, target_model, coach_profile, notes, system_prompt, coach_backend, coach_model),
     )
     conn.commit()
     return cur.lastrowid
@@ -354,7 +397,12 @@ def get_run(conn, run_id: int) -> dict | None:
 
 
 def list_runs(conn, session_id: int) -> list[dict]:
-    rows = conn.execute("SELECT * FROM runs WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
+    rows = conn.execute("""
+        SELECT r.*, p.prompt_text as probe_text, p.name as probe_name, p.domain as probe_domain
+        FROM runs r
+        LEFT JOIN probes p ON p.id = r.probe_id
+        WHERE r.session_id = ? ORDER BY r.id
+    """, (session_id,)).fetchall()
     result = []
     for row in rows:
         d = _row_to_dict(row)
@@ -668,6 +716,92 @@ def import_all_probes(conn, probes_dir: str) -> int:
         total += import_probes_from_yaml(conn, str(path))
     for path in Path(probes_dir).glob("**/*.md"):
         total += import_probes_from_markdown(conn, str(path))
+    return total
+
+
+def import_strategies_from_markdown(conn, md_path: str) -> int:
+    """Import strategy templates from a markdown file.
+
+    Format:
+    ## strategy-name
+    - category: category
+    - description: Short description
+    - goal: What this strategy aims to achieve
+    - opening: How to open the conversation
+    - escalation: How to escalate toward the target
+    - setup: How to set up the final probe
+    - notes: Effectiveness notes from research
+
+    """
+    import re
+    with open(md_path, encoding="utf-8") as f:
+        content = f.read()
+
+    sections = re.split(r'^## ', content, flags=re.MULTILINE)
+    count = 0
+
+    for section in sections:
+        section = section.strip()
+        if not section:
+            continue
+
+        lines = section.split('\n')
+        name = lines[0].strip()
+        if not name:
+            continue
+
+        # Skip if already exists
+        existing = conn.execute("SELECT id FROM strategy_templates WHERE name = ?", (name,)).fetchone()
+        if existing:
+            continue
+
+        fields = {}
+        field_map = {
+            'category': 'category',
+            'description': 'description',
+            'goal': 'goal',
+            'opening': 'opening_pattern',
+            'escalation': 'escalation_pattern',
+            'setup': 'setup_hint',
+            'notes': 'effectiveness_notes',
+        }
+
+        for line in lines[1:]:
+            stripped = line.strip()
+            for prefix, db_field in field_map.items():
+                if stripped.startswith(f'- {prefix}:'):
+                    fields[db_field] = stripped.split(':', 1)[1].strip()
+                    break
+
+        if not fields.get('goal'):
+            continue
+
+        conn.execute(
+            """INSERT OR IGNORE INTO strategy_templates
+               (name, description, goal, opening_pattern, escalation_pattern, setup_hint, category, effectiveness_notes, is_builtin)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+            (
+                name,
+                fields.get('description', ''),
+                fields.get('goal', ''),
+                fields.get('opening_pattern', ''),
+                fields.get('escalation_pattern', ''),
+                fields.get('setup_hint', ''),
+                fields.get('category', ''),
+                fields.get('effectiveness_notes', ''),
+            ),
+        )
+        count += 1
+
+    conn.commit()
+    return count
+
+
+def import_all_strategies(conn, strategies_dir: str) -> int:
+    """Import all strategy .md files from a directory."""
+    total = 0
+    for path in Path(strategies_dir).glob("**/*.md"):
+        total += import_strategies_from_markdown(conn, str(path))
     return total
 
 
@@ -1752,3 +1886,310 @@ def get_strategy_effectiveness(conn, session_id):
         ORDER BY success_count DESC
     """, (session_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- Comparison CRUD ---
+
+def save_comparison(conn, name, models, probe_ids, session_ids, results, agreement_rate, total_probes, notes=""):
+    cur = conn.execute(
+        "INSERT INTO comparisons (name, models, probe_ids, session_ids, agreement_rate, results, total_probes, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, json.dumps(models), json.dumps(probe_ids), json.dumps(session_ids), agreement_rate, json.dumps(results, default=str), total_probes, notes)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_comparisons(conn):
+    rows = conn.execute("SELECT * FROM comparisons ORDER BY created_at DESC").fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d['models'] = json.loads(d['models']) if d['models'] else []
+        d['probe_ids'] = json.loads(d['probe_ids']) if d['probe_ids'] else []
+        d['session_ids'] = json.loads(d['session_ids']) if d['session_ids'] else {}
+        # Don't parse results in list view — too large
+        result.append(d)
+    return result
+
+
+def get_comparison(conn, comparison_id):
+    row = conn.execute("SELECT * FROM comparisons WHERE id = ?", (comparison_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d['models'] = json.loads(d['models']) if d['models'] else []
+    d['probe_ids'] = json.loads(d['probe_ids']) if d['probe_ids'] else []
+    d['session_ids'] = json.loads(d['session_ids']) if d['session_ids'] else {}
+    d['results'] = json.loads(d['results']) if d['results'] else []
+    return d
+
+
+def delete_comparison(conn, comparison_id):
+    conn.execute("DELETE FROM comparisons WHERE id = ?", (comparison_id,))
+
+
+def export_all_data(conn):
+    """Assemble all data for bulk export."""
+    result = {
+        "flinch_version": "0.2",
+        "export_type": "full_export",
+    }
+
+    # Sessions with runs
+    sessions = []
+    for s in conn.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall():
+        sd = dict(s)
+        runs = conn.execute("SELECT * FROM runs WHERE session_id = ? ORDER BY created_at", (s["id"],)).fetchall()
+        sd["runs"] = []
+        for r in runs:
+            rd = dict(r)
+            turns = conn.execute("SELECT * FROM run_turns WHERE run_id = ? ORDER BY turn_index", (r["id"],)).fetchall()
+            rd["turns"] = [dict(t) for t in turns]
+            # Annotation
+            ann = conn.execute("SELECT * FROM annotations WHERE run_id = ?", (r["id"],)).fetchone()
+            rd["annotation"] = dict(ann) if ann else None
+            sd["runs"].append(rd)
+        sessions.append(sd)
+    result["sessions"] = sessions
+
+    # Comparisons
+    try:
+        comps = conn.execute("SELECT * FROM comparisons ORDER BY created_at DESC").fetchall()
+        result["comparisons"] = []
+        for c in comps:
+            cd = dict(c)
+            cd["models"] = json.loads(cd["models"]) if cd["models"] else []
+            cd["probe_ids"] = json.loads(cd["probe_ids"]) if cd["probe_ids"] else []
+            cd["session_ids"] = json.loads(cd["session_ids"]) if cd["session_ids"] else {}
+            cd["results"] = json.loads(cd["results"]) if cd["results"] else []
+            result["comparisons"].append(cd)
+    except:
+        result["comparisons"] = []
+
+    # Sequences
+    try:
+        seqs = conn.execute("SELECT * FROM sequences ORDER BY created_at DESC").fetchall()
+        result["sequences"] = [dict(s) for s in seqs]
+    except:
+        result["sequences"] = []
+
+    # Snapshots
+    try:
+        snaps = conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC").fetchall()
+        result["snapshots"] = [dict(s) for s in snaps]
+    except:
+        result["snapshots"] = []
+
+    # Variant groups
+    try:
+        vgs = conn.execute("SELECT * FROM probe_variants").fetchall()
+        result["variant_groups"] = [dict(v) for v in vgs]
+    except:
+        result["variant_groups"] = []
+
+    # Coach examples
+    try:
+        examples = conn.execute("SELECT * FROM coach_examples ORDER BY id").fetchall()
+        result["coach_examples"] = [dict(e) for e in examples]
+    except:
+        result["coach_examples"] = []
+
+    # Counts
+    result["counts"] = {
+        "sessions": len(result["sessions"]),
+        "comparisons": len(result["comparisons"]),
+        "sequences": len(result["sequences"]),
+        "snapshots": len(result["snapshots"]),
+    }
+
+    return result
+
+
+def get_dashboard_stats(conn):
+    """Aggregate stats across all data for the dashboard."""
+    stats = {}
+    for table, key in [("sessions", "total_sessions"), ("runs", "total_runs"),
+                       ("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
+        try:
+            stats[key] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        except:
+            stats[key] = 0
+
+    # Sequences
+    try:
+        stats["total_sequences"] = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()[0]
+    except:
+        stats["total_sequences"] = 0
+
+    # Annotations
+    try:
+        stats["total_annotations"] = conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0]
+    except:
+        stats["total_annotations"] = 0
+
+    # Classification breakdown from runs
+    try:
+        rows = conn.execute(
+            "SELECT COALESCE(initial_classification, 'unknown') as cls, COUNT(*) FROM runs GROUP BY cls"
+        ).fetchall()
+        stats["classification_breakdown"] = {r[0]: r[1] for r in rows}
+    except:
+        stats["classification_breakdown"] = {}
+
+    # Date range
+    try:
+        row = conn.execute("SELECT MIN(created_at), MAX(created_at) FROM sessions").fetchone()
+        stats["date_range"] = {"earliest": row[0], "latest": row[1]}
+    except:
+        stats["date_range"] = {"earliest": None, "latest": None}
+
+    return stats
+
+
+def list_all_sessions_summary(conn):
+    """List all sessions with run counts for dashboard."""
+    rows = conn.execute("""
+        SELECT s.*,
+               COUNT(r.id) as run_count,
+               SUM(CASE WHEN r.initial_classification = 'refused' THEN 1 ELSE 0 END) as refused_count,
+               SUM(CASE WHEN r.initial_classification = 'complied' THEN 1 ELSE 0 END) as complied_count,
+               SUM(CASE WHEN r.initial_classification = 'collapsed' THEN 1 ELSE 0 END) as collapsed_count,
+               SUM(CASE WHEN r.initial_classification = 'negotiated' THEN 1 ELSE 0 END) as negotiated_count
+        FROM sessions s
+        LEFT JOIN runs r ON r.session_id = s.id
+        WHERE s.notes NOT LIKE '%Auto-created by multi-model comparison%'
+        GROUP BY s.id
+        ORDER BY s.created_at DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def cleanup_stale_sequences(conn):
+    """Mark sequences stuck in running/pending for >1 hour as abandoned."""
+    try:
+        conn.execute("""
+            UPDATE sequences
+            SET status = 'abandoned'
+            WHERE status IN ('running', 'pending')
+              AND created_at < datetime('now', '-1 hour')
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+
+def list_all_sequences_summary(conn):
+    """List all sequences with turn counts for dashboard."""
+    cleanup_stale_sequences(conn)
+    try:
+        rows = conn.execute("""
+            SELECT seq.*,
+                   s.name as session_name, s.target_model
+            FROM sequences seq
+            LEFT JOIN sessions s ON s.id = seq.session_id
+            ORDER BY seq.created_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def clear_all_data(conn):
+    """Clear all user-generated data, preserving reference/seed data.
+
+    PRESERVES: probes, coach_profiles, strategy_templates, policy_claims, probe_claim_links
+    DELETES: all user-generated session/run/result data
+    """
+    deleted = {}
+
+    # Delete in dependency order (children first, parents last)
+    tables_to_clear = [
+        # Sequence leaf tables
+        "sequence_turns",
+        "sequence_runs",
+        "sequence_batches",
+        "sequences",
+        # Run leaf tables
+        "run_turns",
+        "annotations",
+        "compliance_results",
+        "comparisons",
+        "coach_examples",
+        "probe_variants",
+        "snapshots",
+        "batch_runs",
+        # Root user-generated tables
+        "runs",
+        "sessions",
+    ]
+
+    try:
+        for table in tables_to_clear:
+            try:
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                conn.execute(f"DELETE FROM {table}")
+                deleted[table] = count
+            except Exception:
+                # Table may not exist in this schema version
+                pass
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    return deleted
+
+
+def export_sequence_data(conn, sequence_id):
+    """Export a single sequence with all its runs and turns."""
+    seq = conn.execute("SELECT * FROM sequences WHERE id = ?", (sequence_id,)).fetchone()
+    if not seq:
+        return None
+    sd = dict(seq)
+
+    # Get session info
+    session = conn.execute("SELECT * FROM sessions WHERE id = ?", (seq["session_id"],)).fetchone()
+    sd["session"] = dict(session) if session else None
+
+    # Get strategy info
+    try:
+        strategy = conn.execute("SELECT * FROM strategy_templates WHERE id = ?", (seq["strategy_id"],)).fetchone()
+        sd["strategy"] = dict(strategy) if strategy else None
+    except Exception:
+        sd["strategy"] = None
+
+    # Get probe info
+    try:
+        probe = conn.execute("SELECT * FROM probes WHERE id = ?", (seq["probe_id"],)).fetchone()
+        sd["probe"] = dict(probe) if probe else None
+    except Exception:
+        sd["probe"] = None
+
+    # Get sequence runs with their turns
+    try:
+        runs = conn.execute(
+            "SELECT * FROM sequence_runs WHERE sequence_id = ? ORDER BY id",
+            (sequence_id,)
+        ).fetchall()
+        runs_with_turns = []
+        for run in runs:
+            run_dict = dict(run)
+            turns = conn.execute(
+                "SELECT * FROM sequence_turns WHERE sequence_run_id = ? ORDER BY turn_number",
+                (run["id"],)
+            ).fetchall()
+            run_dict["turns"] = [dict(t) for t in turns]
+            runs_with_turns.append(run_dict)
+        sd["runs"] = runs_with_turns
+        # Flatten all turns for convenience (CSV export)
+        sd["turns"] = [
+            {**t, "warmup_count": run["warmup_count"], "run_id": run["id"]}
+            for run in runs_with_turns
+            for t in run["turns"]
+        ]
+    except Exception:
+        sd["runs"] = []
+        sd["turns"] = []
+
+    return sd

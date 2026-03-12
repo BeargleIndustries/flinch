@@ -39,10 +39,20 @@ class Runner:
                 api_key=os.environ.get("TOGETHER_API_KEY"),
                 base_url="https://api.together.xyz/v1",
             )
+        elif model_name.startswith("ollama:"):
+            # Ollama local models via OpenAI-compatible API
+            ollama_model = model_name.removeprefix("ollama:")
+            ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            return OpenAITarget(
+                ollama_model,
+                system_prompt=system_prompt,
+                api_key="ollama",  # dummy key required by openai SDK
+                base_url=f"{ollama_url}/v1",
+            )
         else:
             raise ValueError(
                 f"Unknown model prefix for '{model_name}'. "
-                "Supported: claude-*, gpt-*, o1-*, o3-*, o4-*, gemini-*, grok-*, meta-llama/*"
+                "Supported: claude-*, gpt-*, o1-*, o3-*, o4-*, gemini-*, grok-*, meta-llama/*, ollama:*"
             )
 
     def _get_target(self, session_id: int) -> TargetModel:
@@ -58,13 +68,25 @@ class Runner:
         return self._targets[session_id]
 
     def _get_coach(self, session_id: int) -> Coach:
-        """Create a coach for a session."""
+        """Create a coach for a session, using local backend if configured."""
+        import os
+        from flinch.llm import AnthropicBackend, OpenAICompatibleBackend
+
         session = db.get_session(self._conn, session_id)
         profile = db.get_coach_profile(self._conn, session.get("coach_profile", "standard")) if session else None
         profile_moves = None
         if profile and profile.get("moves"):
             profile_moves = profile["moves"] if isinstance(profile["moves"], list) else None
-        return Coach(client=self._client, profile_moves=profile_moves)
+
+        coach_backend_type = session.get("coach_backend", "anthropic") if session else "anthropic"
+        if coach_backend_type == "local":
+            ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            coach_model = session.get("coach_model", "llama3.2")
+            backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=coach_model)
+            return Coach(backend=backend, profile_moves=profile_moves, is_local=True)
+        else:
+            backend = AnthropicBackend(self._client)
+            return Coach(backend=backend, profile_moves=profile_moves)
 
     async def send_probe(self, session_id: int, probe_id: int) -> dict:
         """Send a probe to the target model, classify, and get coach suggestion if refused."""
@@ -254,10 +276,21 @@ class Runner:
 
     # ── Narrative Momentum Methods ─────────────────────────────────
 
-    def _make_narrative_coach(self, strategy: dict, probe: dict, use_narrative_engine: bool = False) -> NarrativeCoach:
-        """Create a NarrativeCoach for a sequence."""
+    def _make_narrative_coach(self, strategy: dict, probe: dict, use_narrative_engine: bool = False, session_id: int | None = None) -> NarrativeCoach:
+        """Create a NarrativeCoach for a sequence, using local backend if configured."""
+        import os
+        from flinch.llm import AnthropicBackend, OpenAICompatibleBackend
+
+        backend = AnthropicBackend(self._client)  # default
+        if session_id:
+            session = db.get_session(self._conn, session_id)
+            if session and session.get("coach_backend") == "local":
+                ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+                coach_model = session.get("coach_model", "llama3.2")
+                backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=coach_model)
+
         return NarrativeCoach(
-            client=self._client,
+            backend=backend,
             strategy=strategy,
             probe_text=probe["prompt_text"],
             use_narrative_engine=use_narrative_engine,
@@ -299,7 +332,7 @@ class Runner:
 
         # Create coach and generate warmup turn
         use_ne = bool(seq.get("use_narrative_engine"))
-        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne)
+        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
 
         # Calculate which warmup turn this is (only counting coach turns)
         coach_turn_count = sum(1 for t in existing_turns if t["role"] == "coach") + 1
@@ -367,7 +400,7 @@ class Runner:
 
         # Generate setup turn (N-1) if we have warmup context
         if conversation_history:
-            coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne)
+            coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
             setup_text = await coach.generate_setup_turn(conversation_history)
 
             setup_response = await target.reply(setup_text)
@@ -382,7 +415,7 @@ class Runner:
 
         # Send the actual probe — adapt to story context if we have warmup history
         if conversation_history:
-            coach_for_adapt = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne)
+            coach_for_adapt = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
             adapted_probe = await coach_for_adapt.adapt_probe_to_story(conversation_history)
         else:
             adapted_probe = probe["prompt_text"]
@@ -433,7 +466,7 @@ class Runner:
         target = self._get_sequence_target(seq["session_id"], use_ne)
         target.reset()
 
-        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne)
+        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
         conversation_history = []
         all_turns = []
         turn_number = 1
@@ -529,7 +562,7 @@ class Runner:
         target = self._get_sequence_target(seq["session_id"], use_ne)
         target.reset()
 
-        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne)
+        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
         conversation_history = []
         turn_number = 1
         # Total turn pairs: warmup (N-1) + setup (1) + probe (1) = N+1
@@ -712,7 +745,7 @@ class Runner:
         target = self._get_sequence_target(seq["session_id"], use_ne)
         target.reset()
 
-        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne)
+        coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
         conversation_history = []
         turn_number = 1
 

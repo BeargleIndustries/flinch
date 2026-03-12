@@ -1,15 +1,29 @@
 // ─── Flinch — Entry Point ─────────────────────────────────────────────────────
 
 import { state } from './state.js';
-import { loadSessions, loadProbes, loadPatternTags, loadModels, loadVariantGroups } from './api.js';
+import { loadSessions, loadProbes, loadPatternTags, loadModels, loadVariantGroups, checkOllamaStatus } from './api.js';
 import { render } from './render.js';
 import { initKeyboardShortcuts } from './shortcuts.js';
 import { showError } from './components.js';
 
 // ─── Modal / form helpers (need window binding for inline onclick) ────────────
 
-function showNewSessionModal() {
+async function showNewSessionModal() {
   document.getElementById('new-session-modal').style.display = 'flex';
+  // Pre-fill coach backend from saved default
+  try {
+    const { loadCoachDefault } = await import('./api.js');
+    const defaults = await loadCoachDefault();
+    const backendSel = document.getElementById('modal-coach-backend');
+    if (backendSel && defaults.backend) {
+      backendSel.value = defaults.backend;
+      handleCoachBackendChange(defaults.backend);
+    }
+    if (defaults.backend === 'local' && defaults.model) {
+      const modelSel = document.getElementById('modal-coach-model');
+      if (modelSel) modelSel.value = defaults.model;
+    }
+  } catch (_) {}
   setTimeout(() => document.getElementById('modal-session-name').focus(), 50);
 }
 
@@ -18,6 +32,15 @@ function closeNewSessionModal() {
   document.getElementById('modal-session-name').value = '';
   document.getElementById('modal-session-coach').value = '';
   document.getElementById('modal-session-system').value = '';
+  const backendSel = document.getElementById('modal-coach-backend');
+  if (backendSel) backendSel.value = 'anthropic';
+  const localSection = document.getElementById('modal-coach-local-section');
+  if (localSection) localSection.style.display = 'none';
+}
+
+function handleCoachBackendChange(value) {
+  const localSection = document.getElementById('modal-coach-local-section');
+  if (localSection) localSection.style.display = value === 'local' ? 'block' : 'none';
 }
 
 function closeModalOnOverlay(e) {
@@ -32,12 +55,18 @@ async function submitNewSession() {
   const model = document.getElementById('modal-session-model').value.trim();
   const coach = document.getElementById('modal-session-coach').value.trim();
   const systemPrompt = document.getElementById('modal-session-system').value.trim();
+  const coachBackend = document.getElementById('modal-coach-backend')?.value || 'anthropic';
+  const coachModel = coachBackend === 'local' ? (document.getElementById('modal-coach-model')?.value || '') : '';
   if (!name || !model) {
     showError('Session name and target model are required.');
     return;
   }
+  if (coachBackend === 'local' && !coachModel) {
+    showError('Select a local model for the coach, or switch to Claude.');
+    return;
+  }
   try {
-    await createSession(name, model, coach, systemPrompt);
+    await createSession(name, model, coach, systemPrompt, coachBackend, coachModel);
     closeNewSessionModal();
   } catch (e) {
     showError('Failed to create session: ' + e.message);
@@ -102,6 +131,7 @@ window.showNewSessionModal = showNewSessionModal;
 window.closeNewSessionModal = closeNewSessionModal;
 window.closeModalOnOverlay = closeModalOnOverlay;
 window.submitNewSession = submitNewSession;
+window.handleCoachBackendChange = handleCoachBackendChange;
 window.toggleAddProbeForm = toggleAddProbeForm;
 window.submitAddProbeForm = submitAddProbe;
 window.submitAddProbe = submitAddProbe;
@@ -119,6 +149,8 @@ async function init() {
   await loadVariantGroups();
   render();
   initKeyboardShortcuts();
+  // Check Ollama in background — non-blocking
+  checkOllamaStatus();
 }
 
 init();

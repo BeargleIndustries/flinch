@@ -150,10 +150,13 @@ export async function loadTurns(runId) {
 
 // ─── Session actions ──────────────────────────────────────────────────────────
 
-export async function createSession(name, targetModel, coachProfile, systemPrompt) {
+export async function createSession(name, targetModel, coachProfile, systemPrompt, coachBackend, coachModel) {
+  const body = { name, target_model: targetModel, coach_profile: coachProfile || 'standard', system_prompt: systemPrompt || '' };
+  if (coachBackend) body.coach_backend = coachBackend;
+  if (coachModel) body.coach_model = coachModel;
   const session = await api('/api/sessions', {
     method: 'POST',
-    body: { name, target_model: targetModel, coach_profile: coachProfile || 'standard', system_prompt: systemPrompt || '' },
+    body,
   });
   state.sessions.push(session);
   state.currentSession = session;
@@ -614,21 +617,171 @@ export async function loadModels() {
     select.innerHTML = '';
     for (const provider of providers) {
       const group = document.createElement('optgroup');
+      const isOllama = provider.provider === 'ollama';
       const label = provider.provider.charAt(0).toUpperCase() + provider.provider.slice(1);
-      group.label = provider.available ? label : `${label} (${provider.hint || 'unavailable'})`;
+      const groupLabel = isOllama
+        ? `${label} [LOCAL]`
+        : (provider.available ? label : `${label} (${provider.hint || 'unavailable'})`);
+      group.label = groupLabel;
       for (const m of provider.models) {
         const opt = document.createElement('option');
         opt.value = m.id;
-        opt.textContent = m.name;
+        opt.textContent = isOllama ? `${m.name} [LOCAL]` : m.name;
         opt.disabled = !provider.available;
+        if (isOllama) opt.dataset.local = 'true';
         group.appendChild(opt);
       }
       select.appendChild(group);
     }
+    // Also populate the coach model picker for local backend if it exists
+    populateOllamaCoachPicker(providers);
   } catch (e) {
     console.error('Failed to load models:', e);
   }
 }
+
+function populateOllamaCoachPicker(providers) {
+  const picker = document.getElementById('modal-coach-model');
+  if (!picker) return;
+  picker.innerHTML = '<option value="">— select local model —</option>';
+  const ollamaProvider = (providers || []).find(p => p.provider === 'ollama');
+  if (ollamaProvider && ollamaProvider.models.length) {
+    for (const m of ollamaProvider.models) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      picker.appendChild(opt);
+    }
+  }
+}
+
+export async function checkOllamaStatus() {
+  try {
+    const resp = await fetch('/api/ollama/status');
+    const data = await resp.json();
+    const badge = document.getElementById('ollama-status-badge');
+    if (badge) {
+      if (data.available) {
+        badge.textContent = `connected (${data.models.length} models)`;
+        badge.style.background = 'rgba(34, 197, 94, 0.15)';
+        badge.style.color = '#22c55e';
+      } else {
+        badge.textContent = 'offline';
+        badge.style.background = 'rgba(239, 68, 68, 0.15)';
+        badge.style.color = '#ef4444';
+      }
+    }
+    const modelsList = document.getElementById('ollama-models-list');
+    if (modelsList && data.available && data.models.length > 0) {
+      modelsList.innerHTML = data.models.map(m =>
+        `<div style="padding: 2px 0;">${m.name}</div>`
+      ).join('');
+    } else if (modelsList) {
+      modelsList.innerHTML = data.available
+        ? '<div style="color: #888;">No models pulled. Run: ollama pull llama3.2</div>'
+        : '<div style="color: #666;">Start Ollama to use local models</div>';
+    }
+    // ANTHROPIC_API_KEY warning
+    if (!data.anthropic_key_set && data.anthropic_key_warning) {
+      if (!document.getElementById('anthropic-key-warning')) {
+        const warning = document.createElement('div');
+        warning.id = 'anthropic-key-warning';
+        warning.style.cssText = 'background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 8px 12px; margin: 8px 16px; font-size: 0.75rem; color: #ef4444;';
+        warning.textContent = data.anthropic_key_warning;
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) sidebar.prepend(warning);
+      }
+    }
+    return data;
+  } catch (e) {
+    console.error('Failed to check Ollama status:', e);
+    return { available: false, models: [] };
+  }
+}
+
+export async function testOllamaConnection() {
+  const urlInput = document.getElementById('ollama-base-url');
+  const url = urlInput?.value || 'http://localhost:11434';
+  try {
+    const resp = await fetch('/api/settings/ollama', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base_url: url }),
+    });
+    const data = await resp.json();
+    await checkOllamaStatus();
+    // Refresh model list so local models appear
+    await loadModels();
+    if (data.available) {
+      alert(`Connected! Found ${data.models.length} model(s).`);
+    } else {
+      alert('Could not connect to Ollama at ' + url);
+    }
+  } catch (e) {
+    alert('Connection test failed: ' + e.message);
+  }
+}
+
+// ─── Coach Default Settings ───────────────────────────────────────────────────
+
+export async function loadCoachDefault() {
+  try {
+    const resp = await fetch('/api/settings/coach-default');
+    return await resp.json();
+  } catch (e) {
+    return { backend: 'anthropic', model: '' };
+  }
+}
+
+export async function saveCoachDefault() {
+  const backendSel = document.getElementById('settings-coach-backend');
+  const modelSel = document.getElementById('settings-coach-model');
+  const backend = backendSel?.value || 'anthropic';
+  const model = backend === 'local' ? (modelSel?.value || '') : '';
+
+  // Toggle model section visibility
+  const modelSection = document.getElementById('settings-coach-model-section');
+  if (modelSection) modelSection.style.display = backend === 'local' ? 'block' : 'none';
+
+  try {
+    await fetch('/api/settings/coach-default', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend, model }),
+    });
+  } catch (e) {
+    console.error('Failed to save coach default:', e);
+  }
+}
+window.saveCoachDefault = saveCoachDefault;
+
+export async function populateCoachDefaultSettings() {
+  const defaults = await loadCoachDefault();
+  const backendSel = document.getElementById('settings-coach-backend');
+  const modelSel = document.getElementById('settings-coach-model');
+  const modelSection = document.getElementById('settings-coach-model-section');
+
+  if (backendSel) backendSel.value = defaults.backend || 'anthropic';
+  if (modelSection) modelSection.style.display = defaults.backend === 'local' ? 'block' : 'none';
+
+  // Populate model picker from Ollama status
+  if (modelSel) {
+    try {
+      const status = await fetch('/api/ollama/status').then(r => r.json());
+      modelSel.innerHTML = '<option value="">— select model —</option>';
+      if (status.available && status.models.length) {
+        for (const m of status.models) {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = m.name;
+          modelSel.appendChild(opt);
+        }
+      }
+      if (defaults.model) modelSel.value = defaults.model;
+    } catch (_) {}
+  }
+}
+window.populateCoachDefaultSettings = populateCoachDefaultSettings;
 
 export async function loadComparison(sessionIds) {
   try {
@@ -637,6 +790,34 @@ export async function loadComparison(sessionIds) {
     showError('Failed to load comparison: ' + e.message);
     return null;
   }
+}
+
+export async function loadComparisons() {
+  try {
+    state.comparisons = await api('/api/comparisons');
+  } catch (e) {
+    console.error('Failed to load comparisons:', e);
+    state.comparisons = [];
+  }
+}
+
+export async function getComparison(id) {
+  return api(`/api/comparisons/${id}`);
+}
+
+export async function deleteComparison(id) {
+  if (!confirm('Delete this comparison?')) return;
+  try {
+    await api(`/api/comparisons/${id}`, { method: 'DELETE' });
+    state.comparisons = state.comparisons.filter(c => c.id !== id);
+    render();
+  } catch (e) {
+    showError('Failed to delete comparison: ' + e.message);
+  }
+}
+
+export function exportComparisonById(comparisonId, format = 'json') {
+  triggerDownload(`/api/comparisons/${comparisonId}/export?format=${format}`);
 }
 
 // ─── TOU Mapper / Policies ────────────────────────────────────────────────────
@@ -901,7 +1082,10 @@ export async function runSequenceAuto(id, onProgress) {
 
 export async function runSequenceTurn(id) {
   const res = await fetch(`/api/sequences/${id}/run-turn`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to run turn');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to run turn');
+  }
   return res.json();
 }
 
@@ -1009,6 +1193,80 @@ export async function testApiKey(provider) {
   return res.json();
 }
 
+// ─── Dashboard API ───────────────────────────────────────────────
+
+export async function loadDashboardStats() {
+  try {
+    state.dashboardStats = await api('/api/dashboard/stats');
+  } catch (e) {
+    console.error('Failed to load dashboard stats:', e);
+    state.dashboardStats = null;
+  }
+}
+
+export async function loadDashboardSessions() {
+  try {
+    state.dashboardSessions = await api('/api/dashboard/sessions');
+  } catch (e) {
+    console.error('Failed to load dashboard sessions:', e);
+    state.dashboardSessions = [];
+  }
+}
+
+export async function loadDashboardComparisons() {
+  try {
+    state.dashboardComparisons = await api('/api/dashboard/comparisons');
+  } catch (e) {
+    console.error('Failed to load dashboard comparisons:', e);
+    state.dashboardComparisons = [];
+  }
+}
+
+export async function loadDashboardSequences() {
+  try {
+    state.dashboardSequences = await api('/api/dashboard/sequences');
+  } catch (e) {
+    console.error('Failed to load dashboard sequences:', e);
+    state.dashboardSequences = [];
+  }
+}
+
+export async function loadDashboardData() {
+  await Promise.all([
+    loadDashboardStats(),
+    loadDashboardSessions(),
+    loadDashboardComparisons(),
+    loadDashboardSequences(),
+  ]);
+  render();
+}
+
+export function exportAllData() {
+  triggerDownload('/api/dashboard/export-all');
+}
+
+export async function clearAllData() {
+  try {
+    const result = await api('/api/dashboard/clear-all', {
+      method: 'DELETE',
+      body: { confirm: 'DELETE_ALL_DATA' },
+    });
+    // Refresh everything
+    await loadDashboardData();
+    // Also refresh sidebar data
+    const { loadSessions, loadStats } = await import('./api.js');
+    await loadSessions();
+    return result;
+  } catch (e) {
+    showError('Failed to clear data: ' + e.message);
+    return null;
+  }
+}
+
+export function exportSequenceById(sequenceId, format = 'json') {
+  triggerDownload(`/api/sequences/${sequenceId}/export?format=${format}`);
+}
+
 // ─── Window bindings for onclick handlers in HTML strings ─────────────────────
 
 window.loadPolicies = loadPolicies;
@@ -1020,7 +1278,13 @@ window.hidePolicyView = hidePolicyView;
 window.showComplianceView = showComplianceView;
 window.filterPoliciesByProvider = filterPoliciesByProvider;
 window.loadModels = loadModels;
+window.checkOllamaStatus = checkOllamaStatus;
+window.testOllamaConnection = testOllamaConnection;
 window.loadComparison = loadComparison;
+window.loadComparisons = loadComparisons;
+window.getComparison = getComparison;
+window.deleteComparison = deleteComparison;
+window.exportComparisonById = exportComparisonById;
 window.loadVariantGroups = loadVariantGroups;
 window.createVariantGroup = createVariantGroup;
 window.deleteVariantGroup = deleteVariantGroup;
@@ -1083,3 +1347,63 @@ window.estimateSequenceBatch = estimateSequenceBatch;
 window.startSequenceBatch = startSequenceBatch;
 window.fetchThresholds = fetchThresholds;
 window.fetchStrategyEffectiveness = fetchStrategyEffectiveness;
+// Dashboard
+window.loadDashboardStats = loadDashboardStats;
+window.loadDashboardData = loadDashboardData;
+window.exportAllData = exportAllData;
+window.clearAllData = clearAllData;
+window.exportSequenceById = exportSequenceById;
+
+// ── Dashboard Detail Loaders ──────────────────────────────────────────────────
+
+export async function loadSessionDetail(sessionId) {
+  state.dashboardDetail = { type: 'session', id: sessionId };
+  state.dashboardDetailData = null;
+  window.renderDashboard();
+  try {
+    const session = await api(`/api/sessions/${sessionId}`);
+    // Load turns for each run
+    const runs = session.runs || [];
+    for (const run of runs) {
+      try {
+        run.turns = await api(`/api/runs/${run.id}/turns`);
+      } catch (e) {
+        run.turns = [];
+      }
+    }
+    state.dashboardDetailData = session;
+  } catch (e) {
+    state.dashboardDetailData = { error: e.message };
+  }
+  window.renderDashboard();
+}
+
+export async function loadComparisonDetail(comparisonId) {
+  state.dashboardDetail = { type: 'comparison', id: comparisonId };
+  state.dashboardDetailData = null;
+  window.renderDashboard();
+  try {
+    const comparison = await api(`/api/comparisons/${comparisonId}`);
+    state.dashboardDetailData = comparison;
+  } catch (e) {
+    state.dashboardDetailData = { error: e.message };
+  }
+  window.renderDashboard();
+}
+
+export async function loadSequenceDetail(sequenceId) {
+  state.dashboardDetail = { type: 'sequence', id: sequenceId };
+  state.dashboardDetailData = null;
+  window.renderDashboard();
+  try {
+    const sequence = await api(`/api/sequences/${sequenceId}`);
+    state.dashboardDetailData = sequence;
+  } catch (e) {
+    state.dashboardDetailData = { error: e.message };
+  }
+  window.renderDashboard();
+}
+
+window.loadSessionDetail = loadSessionDetail;
+window.loadComparisonDetail = loadComparisonDetail;
+window.loadSequenceDetail = loadSequenceDetail;

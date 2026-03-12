@@ -1057,6 +1057,7 @@
 
     <!-- Settings shortcut -->
     <div style="border-top:1px solid #1a1a1a; flex-shrink:0; padding:6px 12px;">
+      <button onclick="clearAllViews(); state.dashboardView=true; loadDashboardData();" class="nav-pill nav-pill-blue" style="width:100%; text-align:center; margin-bottom:4px;">Dashboard</button>
       <button onclick="clearAllViews(); state.settingsView=true; render();" class="nav-pill nav-pill-gray" style="width:100%; text-align:center;">Settings</button>
     </div>
 
@@ -1098,6 +1099,22 @@
           <select id="modal-session-model" style="width:100%; padding:8px 10px; background:#080808; border:1px solid #1a1a1a; border-radius:8px; color:#e0e0e0; font-family:'JetBrains Mono',monospace; font-size:13px;">
             <option value="">Loading models...</option>
           </select>
+        </div>
+        <div>
+          <div class="card-label">Coach Backend</div>
+          <select id="modal-coach-backend" onchange="handleCoachBackendChange(this.value)" style="width:100%; padding:8px 10px; background:#080808; border:1px solid #1a1a1a; border-radius:8px; color:#e0e0e0; font-family:'JetBrains Mono',monospace; font-size:13px;">
+            <option value="anthropic">Claude (recommended)</option>
+            <option value="local">Local Model (experimental)</option>
+          </select>
+        </div>
+        <div id="modal-coach-local-section" style="display:none;">
+          <div class="card-label">Local Coach Model</div>
+          <select id="modal-coach-model" style="width:100%; padding:8px 10px; background:#080808; border:1px solid #1a1a1a; border-radius:8px; color:#e0e0e0; font-family:'JetBrains Mono',monospace; font-size:13px;">
+            <option value="">— select local model —</option>
+          </select>
+          <div style="margin-top:6px; padding:8px 10px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2); border-radius:6px; font-size:11px; color:#fbbf24; line-height:1.5;">
+            &#9888; Local coach is experimental. Small models may produce lower-quality pushback suggestions and significantly slower response times. Recommended: 7B+ parameter model.
+          </div>
         </div>
         <div>
           <div class="card-label">Coach Profile (optional)</div>

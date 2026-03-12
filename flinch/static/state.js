@@ -97,4 +97,14 @@ export const state = {
   sequenceBatchRunning: false,
   sequenceBatchProgress: null,
   _modelProviders: [],          // cached /api/models response for compare view
+  comparisons: [],              // saved comparison history
+  // Dashboard
+  dashboardView: false,
+  dashboardStats: null,
+  dashboardSessions: [],
+  dashboardComparisons: [],
+  dashboardSequences: [],
+  dashboardTab: 'all',  // 'all' | 'sessions' | 'comparisons' | 'sequences'
+  dashboardDetail: null,      // {type: 'session'|'comparison'|'sequence', id: number} or null
+  dashboardDetailData: null,  // loaded detail data for inline view
 };

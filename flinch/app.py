@@ -73,7 +73,7 @@ app = FastAPI(title="Flinch", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1656,6 +1656,8 @@ _SUPPORTED_KEYS = {
     "ANTHROPIC_API_KEY": {"provider": "anthropic", "label": "Anthropic (Claude)", "required": True},
     "OPENAI_API_KEY": {"provider": "openai", "label": "OpenAI (GPT)", "required": False},
     "GOOGLE_API_KEY": {"provider": "google", "label": "Google (Gemini)", "required": False},
+    "XAI_API_KEY": {"provider": "xai", "label": "xAI (Grok)", "required": False},
+    "TOGETHER_API_KEY": {"provider": "meta", "label": "Together AI (Llama)", "required": False},
 }
 
 

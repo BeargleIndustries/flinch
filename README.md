@@ -102,6 +102,10 @@ Flinch builds on ["Rules Are Rules, Until They Aren't"](https://beargleindustrie
 
 This tool exists to make that kind of measurement systematic and reproducible.
 
+## Security Note
+
+Flinch is designed to run locally on your machine. It has no authentication — anyone who can reach port 8000 can access your research data and API keys. **Do not expose Flinch to the internet or shared networks.** It binds to `127.0.0.1` by default, which is correct.
+
 ## Disclaimer
 
 Flinch is a research tool for studying AI content restriction behavior. It is not designed to circumvent safety measures or generate harmful content. The probes test *creative writing and fictional scenarios* — the research question is about consistency, not capability.

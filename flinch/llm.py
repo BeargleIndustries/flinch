@@ -42,7 +42,7 @@ class AnthropicBackend(LLMBackend):
 class OpenAIBackend(LLMBackend):
     """Backend using the OpenAI SDK directly."""
 
-    def __init__(self, default_model: str = "gpt-4.1-mini"):
+    def __init__(self, default_model: str = "gpt-4.1-mini", api_key: str | None = None, base_url: str | None = None):
         try:
             import openai
         except ImportError:
@@ -50,7 +50,12 @@ class OpenAIBackend(LLMBackend):
                 "The 'openai' package is required for OpenAI support. "
                 "Install it with: pip install flinch[multi-model]"
             ) from None
-        self._client = openai.AsyncOpenAI()
+        kwargs = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = openai.AsyncOpenAI(**kwargs)
         self._default_model = default_model
 
     async def complete(self, system: str, messages: list[dict], model: str | None = None, max_tokens: int = 1024) -> str:
@@ -185,6 +190,11 @@ def get_backend_for_provider(provider: str) -> LLMBackend | None:
         return OpenAIBackend()
     elif provider == "google" and os.environ.get("GOOGLE_API_KEY"):
         return GoogleBackend()
-    elif provider == "ollama":
-        return OpenAICompatibleBackend(base_url="http://localhost:11434/v1", api_key="ollama")
+    elif provider == "xai" and os.environ.get("XAI_API_KEY"):
+        return OpenAIBackend(default_model="grok-3-mini", api_key=os.environ["XAI_API_KEY"], base_url="https://api.x.ai/v1")
+    elif provider == "together" and os.environ.get("TOGETHER_API_KEY"):
+        return OpenAIBackend(default_model="meta-llama/Llama-3.3-70B-Instruct-Turbo", api_key=os.environ["TOGETHER_API_KEY"], base_url="https://api.together.xyz/v1")
+    elif provider in ("ollama", "local"):
+        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        return OpenAICompatibleBackend(base_url=f"{ollama_url}/v1", api_key="ollama")
     return None

@@ -1086,8 +1086,12 @@
         <div>
           <div class="card-label">Coach Backend</div>
           <select id="modal-coach-backend" onchange="handleCoachBackendChange(this.value)" style="width:100%; padding:8px 10px; background:#080808; border:1px solid #1a1a1a; border-radius:8px; color:#e0e0e0; font-family:'JetBrains Mono',monospace; font-size:13px;">
-            <option value="anthropic">Claude (recommended)</option>
-            <option value="local">Local Model (experimental)</option>
+            <option value="anthropic">Claude</option>
+            <option value="openai">OpenAI (GPT)</option>
+            <option value="google">Google (Gemini)</option>
+            <option value="xai">xAI (Grok)</option>
+            <option value="together">Together (Llama)</option>
+            <option value="local">Local Model (Ollama)</option>
           </select>
         </div>
         <div id="modal-coach-local-section" style="display:none;">

@@ -3398,8 +3398,12 @@ async function renderSettingsView() {
         <div style="margin-top:1rem; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.75rem;">
           <label style="display:block; color:#aaa; font-size:0.75rem; margin-bottom:4px;">Default Coach Backend</label>
           <select id="settings-coach-backend" onchange="saveCoachDefault()" style="width:100%; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:6px 8px; color:#f0f0f0; font-size:0.8rem;">
-            <option value="anthropic">Claude (recommended)</option>
-            <option value="local">Local Model (experimental)</option>
+            <option value="anthropic">Claude</option>
+            <option value="openai">OpenAI (GPT)</option>
+            <option value="google">Google (Gemini)</option>
+            <option value="xai">xAI (Grok)</option>
+            <option value="together">Together (Llama)</option>
+            <option value="local">Local Model (Ollama)</option>
           </select>
           <div id="settings-coach-model-section" style="display:none; margin-top:0.5rem;">
             <label style="display:block; color:#aaa; font-size:0.75rem; margin-bottom:4px;">Default Coach Model</label>

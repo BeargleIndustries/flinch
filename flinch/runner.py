@@ -74,9 +74,9 @@ class Runner:
         return self._targets[session_id]
 
     def _get_coach(self, session_id: int) -> Coach:
-        """Create a coach for a session, using local backend if configured."""
+        """Create a coach for a session, using the configured backend provider."""
         import os
-        from flinch.llm import AnthropicBackend, OpenAICompatibleBackend
+        from flinch.llm import AnthropicBackend, OpenAICompatibleBackend, get_backend_for_provider
 
         session = db.get_session(self._conn, session_id)
         profile = db.get_coach_profile(self._conn, session.get("coach_profile", "standard")) if session else None
@@ -85,18 +85,23 @@ class Runner:
             profile_moves = profile["moves"] if isinstance(profile["moves"], list) else None
 
         coach_backend_type = session.get("coach_backend", "anthropic") if session else "anthropic"
+
         if coach_backend_type == "local":
             ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
             coach_model = session.get("coach_model", "llama3.2")
             backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=coach_model)
             return Coach(backend=backend, profile_moves=profile_moves, is_local=True)
-        elif self._client:
-            backend = AnthropicBackend(self._client)
+
+        # Try to get a backend for the specific provider requested
+        backend = get_backend_for_provider(coach_backend_type)
+        if backend:
             return Coach(backend=backend, profile_moves=profile_moves)
-        elif self._backend:
+
+        # Fall back to the runner's general backend
+        if self._backend:
             return Coach(backend=self._backend, profile_moves=profile_moves)
-        else:
-            raise ValueError("No LLM backend available for coach. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama.")
+
+        raise ValueError("No LLM backend available for coach. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama.")
 
     async def send_probe(self, session_id: int, probe_id: int) -> dict:
         """Send a probe to the target model, classify, and get coach suggestion if refused."""

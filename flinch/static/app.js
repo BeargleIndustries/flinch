@@ -1,7 +1,7 @@
 // ─── Flinch — Entry Point ─────────────────────────────────────────────────────
 
 import { state } from './state.js';
-import { loadSessions, loadProbes, loadPatternTags, loadModels, loadVariantGroups, checkOllamaStatus } from './api.js';
+import { api, loadSessions, loadProbes, loadPatternTags, loadModels, loadVariantGroups, loadVariantFiles, checkOllamaStatus } from './api.js';
 import { render } from './render.js';
 import { initKeyboardShortcuts } from './shortcuts.js';
 import { showError } from './components.js';
@@ -142,11 +142,18 @@ window.state = state;
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
+  // Fetch version
+  try {
+    state.appVersion = (await api('/api/version')).version;
+    const el = document.getElementById('app-version');
+    if (el) el.textContent = `v${state.appVersion}`;
+  } catch (_) {}
   await loadSessions();
   await loadProbes();
   await loadPatternTags();
   await loadModels();
   await loadVariantGroups();
+  await loadVariantFiles();
   render();
   initKeyboardShortcuts();
   // Check Ollama in background — non-blocking

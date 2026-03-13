@@ -78,6 +78,11 @@ export const state = {
   variantGroups: [],
   consistencyData: null,
   consistencyView: false,
+  variantTab: 'edit',           // 'edit' | 'results'
+  variantFiles: [],             // parsed variant group files
+  variantEditData: null,        // currently viewing/editing variant group
+  variantGenerating: false,     // AI generation in progress
+  variantCreateMode: 'ai',     // 'ai' | 'manual'
   snapshots: [],
   currentSnapshot: null,
   snapshotDiff: null,
@@ -98,8 +103,15 @@ export const state = {
   sequenceBatchProgress: null,
   _modelProviders: [],          // cached /api/models response for compare view
   comparisons: [],              // saved comparison history
+  // v0.4 features
+  statRunView: false,
+  statRunConfig: null,       // {probeIds, repeatCount}
+  statRunResults: null,      // results from stat runs
+  scorecardData: null,       // scorecard results
+  publicationExport: null,   // export preview data
   // Dashboard
   dashboardView: false,
+  dashboardSection: 'overview',  // 'overview' | 'scorecard' | 'publication'
   dashboardStats: null,
   dashboardSessions: [],
   dashboardComparisons: [],

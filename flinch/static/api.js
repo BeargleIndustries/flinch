@@ -948,6 +948,74 @@ export function hideConsistencyView() {
   render();
 }
 
+// ─── Variant Files ─────────────────────────────────────────────────────────────
+
+export async function loadVariantFiles() {
+  try {
+    state.variantFiles = await api('/api/variants/files');
+  } catch (e) {
+    console.error('Failed to load variant files:', e);
+    state.variantFiles = [];
+  }
+}
+
+export async function getVariantFile(groupId) {
+  try {
+    return await api(`/api/variants/files/${encodeURIComponent(groupId)}`);
+  } catch (e) {
+    showError('Failed to load variant file: ' + e.message);
+    return null;
+  }
+}
+
+export async function saveVariantFile(groupId, title, description, baseProbe, domain, variants) {
+  try {
+    const result = await api('/api/variants/files', {
+      method: 'POST',
+      body: { group_id: groupId, title, description, base_probe: baseProbe, domain, variants },
+    });
+    await loadVariantFiles();
+    await loadVariantGroups();
+    await loadProbes();
+    return result;
+  } catch (e) {
+    showError('Failed to save variant file: ' + e.message);
+    return null;
+  }
+}
+
+export async function deleteVariantFile(groupId) {
+  if (!confirm(`Delete variant group "${groupId}" and its probes?`)) return false;
+  try {
+    await api(`/api/variants/files/${encodeURIComponent(groupId)}`, { method: 'DELETE' });
+    await loadVariantFiles();
+    await loadVariantGroups();
+    await loadProbes();
+    render();
+    return true;
+  } catch (e) {
+    showError('Failed to delete variant file: ' + e.message);
+    return false;
+  }
+}
+
+export async function generateVariants(probeId, strategies) {
+  try {
+    state.variantGenerating = true;
+    render();
+    const result = await api('/api/variants/generate', {
+      method: 'POST',
+      body: { probe_id: probeId, strategies },
+    });
+    state.variantGenerating = false;
+    return result;
+  } catch (e) {
+    state.variantGenerating = false;
+    showError('Failed to generate variants: ' + e.message);
+    return null;
+  }
+}
+
 // ─── Snapshots ────────────────────────────────────────────────────────────────
 
 export async function saveSnapshot(sessionId, name, description) {
@@ -1304,6 +1372,11 @@ window.exportComparisonById = exportComparisonById;
 window.loadVariantGroups = loadVariantGroups;
 window.createVariantGroup = createVariantGroup;
 window.deleteVariantGroup = deleteVariantGroup;
+window.loadVariantFiles = loadVariantFiles;
+window.getVariantFile = getVariantFile;
+window.saveVariantFile = saveVariantFile;
+window.deleteVariantFile = deleteVariantFile;
+window.generateVariants = generateVariants;
 window.loadConsistency = loadConsistency;
 window.showConsistencyView = showConsistencyView;
 window.hideConsistencyView = hideConsistencyView;
@@ -1423,3 +1496,157 @@ export async function loadSequenceDetail(sequenceId) {
 window.loadSessionDetail = loadSessionDetail;
 window.loadComparisonDetail = loadComparisonDetail;
 window.loadSequenceDetail = loadSequenceDetail;
+
+// ─── Statistical Runs ────────────────────────────────────────────────────────
+
+export async function startStatRun(sessionId, probeIds, repeatCount, onProgress) {
+  state.statRunResults = { running: true, completed: 0, total: probeIds.length * repeatCount, failed: 0, results: [] };
+  render();
+
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/stat-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ probe_ids: probeIds, repeat_count: repeatCount }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error ${res.status}: ${text}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      let currentEvent = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ') && currentEvent) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (currentEvent === 'start') {
+              state.statRunResults.running = true;
+            } else if (currentEvent === 'iteration') {
+              state.statRunResults.completed = (state.statRunResults.completed || 0) + 1;
+              if (onProgress) onProgress(data);
+            } else if (currentEvent === 'iteration_error') {
+              state.statRunResults.failed = (state.statRunResults.failed || 0) + 1;
+              if (onProgress) onProgress(data);
+            } else if (currentEvent === 'complete') {
+              state.statRunResults.running = false;
+              state.statRunResults.summary = data;
+            } else if (currentEvent === 'batch_start') {
+              state.statRunResults.batchRunning = true;
+            } else if (currentEvent === 'batch_complete') {
+              state.statRunResults.batchRunning = false;
+              state.statRunResults.running = false;
+            } else if (currentEvent === 'error') {
+              state.statRunResults.running = false;
+              showError('Stat run error: ' + (data.message || 'Unknown error'));
+            }
+            render();
+          } catch (_) {}
+          currentEvent = null;
+        }
+      }
+    }
+
+    state.statRunResults.running = false;
+    render();
+    return state.statRunResults;
+  } catch (e) {
+    state.statRunResults.running = false;
+    showError('Stat run failed: ' + e.message);
+    render();
+    throw e;
+  }
+}
+
+export async function getSessionStatRuns(sessionId) {
+  try {
+    return await api(`/api/sessions/${sessionId}/stat-runs`);
+  } catch (e) {
+    showError('Failed to load stat runs: ' + e.message);
+    throw e;
+  }
+}
+
+export async function getStatRunDetail(statRunId) {
+  try {
+    return await api(`/api/stat-runs/${statRunId}`);
+  } catch (e) {
+    showError('Failed to load stat run detail: ' + e.message);
+    throw e;
+  }
+}
+
+// ─── Policy Scorecard ────────────────────────────────────────────────────────
+
+export async function generateScorecard(name, models, sessionIds, statRunIds) {
+  try {
+    const result = await api('/api/scorecard/generate', {
+      method: 'POST',
+      body: { name, models, session_ids: sessionIds, stat_run_ids: statRunIds },
+    });
+    state.scorecardData = result;
+    render();
+    return result;
+  } catch (e) {
+    showError('Failed to generate scorecard: ' + e.message);
+    throw e;
+  }
+}
+
+export async function listScorecards() {
+  try {
+    return await api('/api/scorecards');
+  } catch (e) {
+    showError('Failed to load scorecards: ' + e.message);
+    throw e;
+  }
+}
+
+// ─── Publication Export ──────────────────────────────────────────────────────
+
+export async function generatePublicationExport(name, format, template, filters) {
+  try {
+    const result = await api('/api/publication/export', {
+      method: 'POST',
+      body: { name, format, template, filters },
+    });
+    state.publicationExport = result;
+    render();
+    return result;
+  } catch (e) {
+    showError('Failed to generate export: ' + e.message);
+    throw e;
+  }
+}
+
+export async function downloadPublicationExport(exportId) {
+  try {
+    const res = await fetch(`/api/publication/exports/${exportId}/download`);
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `flinch-export-${exportId}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    showError('Download failed: ' + e.message);
+    throw e;
+  }
+}

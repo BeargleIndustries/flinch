@@ -125,3 +125,25 @@ class SessionStats(BaseModel):
     coach_accepted: int = 0
     coach_overridden: int = 0
     skipped: int = 0
+
+# ─── Statistical Runs ─────────────────────────────────────────────────────────
+
+class StartStatRunRequest(BaseModel):
+    probe_ids: list[int]
+    repeat_count: int = Field(default=10, ge=1, le=100)
+
+# ─── Policy Scorecard ─────────────────────────────────────────────────────────
+
+class GenerateScorecardRequest(BaseModel):
+    name: str = Field(max_length=200)
+    models: list[str]
+    session_ids: list[int] | None = None
+    stat_run_ids: list[int] | None = None
+
+# ─── Publication Export ───────────────────────────────────────────────────────
+
+class PublicationExportRequest(BaseModel):
+    name: str = Field(max_length=200)
+    format: str = "markdown"  # markdown, html, csv
+    template: str = "full_report"  # comparison_table, consistency_matrix, pushback_summary, full_report
+    filters: dict | None = None

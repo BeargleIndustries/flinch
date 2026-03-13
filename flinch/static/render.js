@@ -1,7 +1,7 @@
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 import { state, setPhase } from './state.js';
-import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById } from './api.js';
+import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants } from './api.js';
 import {
   escHtml,
   normalizeClassification,
@@ -45,6 +45,14 @@ function renderSidebar() {
 export function renderProbeListOnly() {
   const container = document.getElementById('probe-list');
   if (!container) return;
+
+  if (!state.currentSession) {
+    container.innerHTML = `
+      <div style="padding:24px 16px; text-align:center;">
+        <div style="font-size:10px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:#252a35; font-family:'JetBrains Mono',monospace;">Select a session to view probes</div>
+      </div>`;
+    return;
+  }
 
   if (!state.probes.length) {
     container.innerHTML = `
@@ -225,7 +233,14 @@ function renderMain() {
   }
 
   if (state.dashboardView) {
-    renderDashboard();
+    const dashTab = state.dashboardSection || 'overview';
+    if (dashTab === 'scorecard') {
+      renderScorecardView();
+    } else if (dashTab === 'publication') {
+      renderPublicationExportView();
+    } else {
+      renderDashboard();
+    }
     return;
   }
 
@@ -241,6 +256,11 @@ function renderMain() {
 
   if (state.sequenceView) {
     renderSequenceView();
+    return;
+  }
+
+  if (state.statRunView) {
+    renderStatRunView();
     return;
   }
 
@@ -289,35 +309,52 @@ function renderIdleState() {
   const systemPrompt = hasSession && state.currentSession.system_prompt;
 
   const toolCards = `
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:24px; max-width:640px; width:100%; text-align:left;">
-      <div class="card" style="cursor:pointer; border-color:#a855f720;" onclick="clearAllViews(); showCompareModal();">
-        <div style="font-size:13px; font-weight:600; color:#a855f7; margin-bottom:6px;">Multi-Model Compare</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">Run the same probes against 2-5 models simultaneously. See responses side-by-side with classification badges.</div>
+    <div style="margin-top:24px; max-width:640px; width:100%; text-align:left;">
+
+      <div style="font-size:9px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:#555; font-family:var(--font-system); margin-bottom:8px;">Research Tools</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:24px;">
+        <div class="card" style="cursor:pointer; border-color:#a855f720;" onclick="clearAllViews(); showCompareModal();">
+          <div style="font-size:13px; font-weight:600; color:#a855f7; margin-bottom:6px;">Multi-Model Compare</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">Run probes against multiple models. Side-by-side responses with classification badges.</div>
+        </div>
+        <div class="card" style="cursor:pointer; border-color:#3b82f620;" onclick="clearAllViews(); ${hasSession ? "state.sequenceView=true; render(); refreshSequences();" : "showNewSessionModal()"}">
+          <div style="font-size:13px; font-weight:600; color:#3b82f6; margin-bottom:6px;">Narrative Momentum</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">Multi-turn warmup sequences before the real probe. Auto-whittle finds minimum turns needed.</div>
+        </div>
+        <div class="card" style="cursor:pointer; border-color:#f59e0b20;" onclick="clearAllViews(); ${hasSession ? "state.consistencyView=true; render();" : "showNewSessionModal()"}">
+          <div style="font-size:13px; font-weight:600; color:#f59e0b; margin-bottom:6px;">Framing Variants</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">Test if models respond consistently to the same request framed differently.</div>
+        </div>
+        <div class="card" style="cursor:pointer; border-color:#f4364c20;" onclick="clearAllViews(); ${hasSession ? "state.statRunView=true; render();" : "showNewSessionModal()"}">
+          <div style="font-size:13px; font-weight:600; color:#f43f5e; margin-bottom:6px;">Statistical Analysis</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">Run probes N times to measure refusal consistency rates and patterns.</div>
+        </div>
       </div>
-      <div class="card" style="cursor:pointer; border-color:#3b82f620;" onclick="clearAllViews(); ${hasSession ? "state.sequenceView=true; render(); refreshSequences();" : "showNewSessionModal()"}">
-        <div style="font-size:13px; font-weight:600; color:#3b82f6; margin-bottom:6px;">Narrative Momentum</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">Multi-turn warmup sequences that build conversation context before the real probe. Auto-whittle finds minimum turns needed.</div>
+
+      <div style="font-size:9px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:#555; font-family:var(--font-system); margin-bottom:8px;">Results & Export</div>
+      <div style="display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:24px;">
+        <div class="card" style="cursor:pointer; border-color:#10b98120;" onclick="clearAllViews(); state.dashboardView=true; state.dashboardSection='overview'; loadDashboardData();">
+          <div style="font-size:13px; font-weight:600; color:#10b981; margin-bottom:6px;">Dashboard</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">View results, generate policy scorecards, and export publication-ready tables and reports.</div>
+        </div>
       </div>
-      <div class="card" style="cursor:pointer; border-color:#f59e0b20;" onclick="clearAllViews(); ${hasSession ? "state.consistencyView=true; render();" : "showNewSessionModal()"}">
-        <div style="font-size:13px; font-weight:600; color:#f59e0b; margin-bottom:6px;">Framing Variants</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">Test if models respond consistently to the same request framed differently. Group probe variants and compare outcomes.</div>
+
+      <div style="font-size:9px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:#555; font-family:var(--font-system); margin-bottom:8px;">Extras</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
+        <div class="card" style="cursor:pointer; border-color:#14b8a620;" onclick="clearAllViews(); window.showPolicyBrowser ? showPolicyBrowser() : null;">
+          <div style="font-size:13px; font-weight:600; color:#14b8a6; margin-bottom:6px;">Policy Browser</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">Browse content policies and link claims to probes.</div>
+        </div>
+        <div class="card" style="cursor:pointer; border-color:#3b82f620;" onclick="clearAllViews(); showCoachExamples();">
+          <div style="font-size:13px; font-weight:600; color:#60a5fa; margin-bottom:6px;">Pushback Coach</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">View and manage pushback strategy examples.</div>
+        </div>
+        <div class="card" style="cursor:pointer; border-color:#64748b20;" onclick="clearAllViews(); state.settingsView=true; render();">
+          <div style="font-size:13px; font-weight:600; color:#94a3b8; margin-bottom:6px;">Settings</div>
+          <div style="font-size:11px; color:#64748b; line-height:1.5;">API keys, connections, and preferences.</div>
+        </div>
       </div>
-      <div class="card" style="cursor:pointer; border-color:#14b8a620;" onclick="clearAllViews(); window.showPolicyBrowser ? showPolicyBrowser() : null;">
-        <div style="font-size:13px; font-weight:600; color:#14b8a6; margin-bottom:6px;">Policy Browser</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">Browse published content policies from Anthropic, OpenAI, Google, and xAI. Link claims to probes for compliance testing.</div>
-      </div>
-      <div class="card" style="cursor:pointer; border-color:#3b82f620;" onclick="clearAllViews(); showCoachExamples();">
-        <div style="font-size:13px; font-weight:600; color:#60a5fa; margin-bottom:6px;">Pushback Coach</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">AI-powered pushback suggestions when models refuse. Multiple strategies: reframe, appeal to authority, academic context.</div>
-      </div>
-      <div class="card" style="cursor:pointer; border-color:#64748b20;" onclick="clearAllViews(); state.settingsView=true; render();">
-        <div style="font-size:13px; font-weight:600; color:#94a3b8; margin-bottom:6px;">Settings</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">Configure API keys for Anthropic, OpenAI, and Google. Test connections and manage credentials.</div>
-      </div>
-      <div class="card" style="cursor:pointer; border-color:#10b98120;" onclick="clearAllViews(); state.dashboardView=true; loadDashboardData();">
-        <div style="font-size:13px; font-weight:600; color:#10b981; margin-bottom:6px;">Dashboard</div>
-        <div style="font-size:11px; color:#64748b; line-height:1.5;">View all sessions, comparisons, and sequences. Export data and manage history.</div>
-      </div>
+
     </div>`;
 
   return `
@@ -327,7 +364,7 @@ function renderIdleState() {
         <div class="idle-crosshair-dot"></div>
       </div>
       <div style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.2em; text-transform:uppercase; color:#2d3348; margin-bottom:12px;">
-        ${hasSession ? escHtml(state.currentSession.name) : 'flinch v0.2'}
+        ${hasSession ? escHtml(state.currentSession.name) : `flinch v${state.appVersion || '...'}`}
       </div>
       <div style="font-size:18px; color:#94a3b8; font-weight:500; margin-bottom:4px; letter-spacing:-0.01em;">
         ${hasSession ? 'Select a probe to begin' : 'AI Content Restriction Research Tool'}
@@ -388,9 +425,12 @@ function renderIdleState() {
 
 function renderProbeSelectedState() {
   const { currentProbe, currentSession } = state;
+  const backBtn = `<button class="btn-ghost" onclick="state.currentProbe=null; state.phase='idle'; render();" style="padding:6px 12px; font-size:12px; margin-bottom:16px;">← Back to Tools</button>`;
+
   if (currentProbe && currentProbe.id === 'custom') {
     return `
       <div style="max-width:720px;">
+        ${backBtn}
         <div class="card">
           <div class="card-label" style="color:#f59e0b;">Custom Prompt</div>
           <textarea id="custom-probe-text" placeholder="Type your probe text here..." rows="6"
@@ -408,6 +448,7 @@ function renderProbeSelectedState() {
   }
   return `
     <div style="max-width:720px;">
+      ${backBtn}
       ${renderProbeCard(currentProbe)}
       <div style="margin-top:20px; display:flex; gap:10px; align-items:center;">
         <button class="btn-primary" onclick="sendProbe()" ${!currentSession ? 'disabled title="Select a session first"' : ''}>
@@ -1374,25 +1415,315 @@ function _showCompareModal_legacy() {
 
 export async function renderConsistencyView() {
   const main = document.getElementById('main');
-  if (!state.currentSession) {
-    main.innerHTML = needsSession('Framing Variants');
-    return;
-  }
 
   main.innerHTML = `
     <div style="display:flex; align-items:center; gap:8px; padding:20px 0;">
       <span class="spinner"></span>
-      <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Loading consistency data...</span>
+      <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Loading variant data...</span>
     </div>
   `;
 
-  const { loadConsistency } = await import('./api.js');
-  await loadConsistency(state.currentSession.id);
+  // Load variant files + consistency data in parallel
+  await loadVariantFiles();
+  if (state.currentSession) {
+    const { loadConsistency } = await import('./api.js');
+    await loadConsistency(state.currentSession.id);
+  }
+
+  const tab = state.variantTab || 'edit';
   const data = state.consistencyData;
 
+  let html = `<div class="fade-in" style="max-width:960px;">`;
+
+  // Header
+  html += `
+    <div style="margin-bottom:4px;">
+      ${viewHeader('Framing Variants', 'Test whether models respond consistently to the same request framed differently')}
+    </div>
+    <div class="feature-description" style="margin-bottom:16px;">
+      <strong>What are framing variants?</strong> The same content request can be framed as a direct ask,
+      a fiction writing exercise, an academic analysis, a roleplay, or satire. If a model refuses one framing
+      but complies with another, that's a <em>framing inconsistency</em> — a key finding in content restriction research.
+      Create variant groups below, then run them in a session to see the results.
+    </div>
+  `;
+
+  // Tab bar
+  html += `
+    <div style="display:flex; gap:2px; margin-bottom:16px; border-bottom:1px solid #252a35; padding-bottom:0;">
+      <button onclick="window._setVariantTab('edit')"
+        style="padding:8px 16px; font-size:12px; font-family:'JetBrains Mono',monospace; border:none; cursor:pointer; border-bottom:2px solid ${tab === 'edit' ? '#3b82f6' : 'transparent'}; color:${tab === 'edit' ? '#e2e8f0' : '#4b5563'}; background:none;">
+        Edit Groups</button>
+      <button onclick="window._setVariantTab('results')"
+        style="padding:8px 16px; font-size:12px; font-family:'JetBrains Mono',monospace; border:none; cursor:pointer; border-bottom:2px solid ${tab === 'results' ? '#3b82f6' : 'transparent'}; color:${tab === 'results' ? '#e2e8f0' : '#4b5563'}; background:none;">
+        Results${data && data.consistency_score !== null ? ` (${data.consistency_score}%)` : ''}</button>
+    </div>
+  `;
+
+  if (tab === 'edit') {
+    html += renderVariantEditTab();
+  } else {
+    html += renderVariantResultsTab(data);
+  }
+
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+function renderVariantEditTab() {
+  const files = state.variantFiles || [];
+  let html = '';
+
+  // Existing variant groups from files
+  if (files.length > 0) {
+    html += `<div style="margin-bottom:20px;">`;
+    for (const f of files) {
+      html += `
+        <div class="card" style="margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+              <div style="font-size:14px; font-weight:600; color:#e2e8f0; margin-bottom:4px;">${escHtml(f.title || f.group_id)}</div>
+              ${f.description ? `<div style="font-size:11px; color:#64748b; margin-bottom:8px;">${escHtml(f.description)}</div>` : ''}
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                ${f.labels.map(l => `<span style="display:inline-block; padding:2px 8px; background:#1e293b; border:1px solid #334155; border-radius:4px; font-size:10px; color:#94a3b8; font-family:'JetBrains Mono',monospace;">${escHtml(l)}</span>`).join('')}
+              </div>
+              ${f.domain ? `<div style="font-size:10px; color:#4b5563; margin-top:6px; font-family:'JetBrains Mono',monospace;">domain: ${escHtml(f.domain)}</div>` : ''}
+            </div>
+            <div style="display:flex; gap:6px; flex-shrink:0;">
+              <button class="btn-secondary" onclick="window._viewVariantGroup('${escHtml(f.group_id)}')" style="font-size:11px; padding:4px 10px;">View</button>
+              <button onclick="window._deleteVariantFile('${escHtml(f.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:4px 8px;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    html += `</div>`;
+  }
+
+  // Also show DB-only groups (created via old builder, not backed by files)
+  const dbGroups = (state.variantGroups || []).filter(g =>
+    !files.some(f => f.group_id === g.group_id)
+  );
+  if (dbGroups.length > 0) {
+    html += `<div style="font-size:10px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.08em;">Legacy groups (DB only)</div>`;
+    for (const g of dbGroups) {
+      html += `
+        <div class="card" style="margin-bottom:8px; opacity:0.7;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <span style="font-size:12px; color:#94a3b8; font-family:'JetBrains Mono',monospace;">${escHtml(g.group_id)}</span>
+              <span style="font-size:10px; color:#4b5563; margin-left:8px;">${g.variants.length} variants</span>
+            </div>
+            <button onclick="deleteVariantGroup('${escHtml(g.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  // Viewing a specific variant group
+  if (state.variantEditData) {
+    const vd = state.variantEditData;
+    html += `
+      <div class="card" style="border-color:#334155; margin-bottom:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div class="card-label">${escHtml(vd.title || vd.group_id)}</div>
+          <button class="btn-ghost" onclick="state.variantEditData=null; renderConsistencyView();" style="font-size:11px;">Close</button>
+        </div>
+        ${vd.description ? `<div style="font-size:11px; color:#64748b; margin-bottom:12px;">${escHtml(vd.description)}</div>` : ''}
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px;">
+          ${vd.variants.map(v => `
+            <div style="background:#0d0f16; border:1px solid #252a35; border-radius:6px; padding:12px;">
+              <div style="font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#3b82f6; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">${escHtml(v.label)}</div>
+              <div style="font-size:11px; color:#94a3b8; line-height:1.5; white-space:pre-wrap; max-height:160px; overflow-y:auto;">${escHtml(v.prompt_text)}</div>
+            </div>
+          `).join('')}
+        </div>
+        <div style="margin-top:12px; font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace;">
+          File: flinch/variants/${escHtml(vd.group_id)}.md
+        </div>
+      </div>
+    `;
+  }
+
+  // Create new section
+  html += renderVariantCreateSection();
+
+  // Empty state
+  if (files.length === 0 && dbGroups.length === 0 && !state.variantEditData) {
+    html += `
+      <div class="card" style="text-align:center; padding:32px; margin-bottom:16px;">
+        <div style="font-size:24px; margin-bottom:8px; opacity:0.3;">&#x2696;</div>
+        <div style="font-size:13px; color:#64748b; font-family:'JetBrains Mono',monospace; margin-bottom:8px;">No variant groups yet</div>
+        <div style="font-size:11px; color:#4b5563; max-width:400px; margin:0 auto 16px;">
+          Create your first variant group to test whether a model responds differently
+          to the same request under different framings.
+        </div>
+      </div>
+    `;
+  }
+
+  return html;
+}
+
+function renderVariantCreateSection() {
+  const mode = state.variantCreateMode || 'ai';
+  const probes = state.probes || [];
+  const generating = state.variantGenerating;
+
+  let html = `
+    <div class="card" style="border-color:#252a35;">
+      <div class="card-label">Create New Variant Group</div>
+      <div style="display:flex; gap:2px; margin-bottom:16px;">
+        <button onclick="state.variantCreateMode='ai'; renderConsistencyView();"
+          style="padding:5px 12px; font-size:11px; font-family:'JetBrains Mono',monospace; border:1px solid ${mode === 'ai' ? '#3b82f6' : '#252a35'}; background:${mode === 'ai' ? '#1e3a5f' : 'transparent'}; color:${mode === 'ai' ? '#93c5fd' : '#4b5563'}; border-radius:4px 0 0 4px; cursor:pointer;">
+          AI-Assisted</button>
+        <button onclick="state.variantCreateMode='manual'; renderConsistencyView();"
+          style="padding:5px 12px; font-size:11px; font-family:'JetBrains Mono',monospace; border:1px solid ${mode === 'manual' ? '#3b82f6' : '#252a35'}; background:${mode === 'manual' ? '#1e3a5f' : 'transparent'}; color:${mode === 'manual' ? '#93c5fd' : '#4b5563'}; border-radius:0 4px 4px 0; cursor:pointer;">
+          Manual</button>
+      </div>
+  `;
+
+  if (mode === 'ai') {
+    const defaultStrategies = ['Fiction Workshop', 'Academic Analysis', 'Historical Context', 'Roleplay Scenario', 'Satire/Parody'];
+    html += `
+      <div class="hint-text" style="margin-bottom:12px;">
+        Pick a base probe and choose framing strategies. The AI will generate variant prompts
+        that ask for the same content through different lenses.
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Base Probe</div>
+          <select id="vg-ai-base-probe" style="width:100%;">
+            <option value="">— select a probe —</option>
+            ${probes.map(p => `<option value="${p.id}">${escHtml(p.name)} (${escHtml(p.domain || 'no domain')})</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Group ID</div>
+          <input id="vg-ai-group-id" type="text" placeholder="e.g. violence-framing" style="width:100%;" />
+        </div>
+      </div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Framing Strategies</div>
+        <div id="vg-ai-strategies" style="display:flex; gap:6px; flex-wrap:wrap;">
+          ${defaultStrategies.map(s => `
+            <label style="display:flex; align-items:center; gap:4px; padding:4px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; cursor:pointer; font-size:11px; color:#94a3b8; font-family:'JetBrains Mono',monospace;">
+              <input type="checkbox" checked value="${escHtml(s)}" style="accent-color:#3b82f6;" />
+              ${escHtml(s)}
+            </label>
+          `).join('')}
+        </div>
+        <div style="margin-top:6px;">
+          <input id="vg-ai-custom-strategy" type="text" placeholder="Add custom strategy..." style="width:200px; font-size:11px;" onkeydown="if(event.key==='Enter'){window._addCustomStrategy();}" />
+          <button class="btn-ghost" onclick="window._addCustomStrategy()" style="font-size:11px;">Add</button>
+        </div>
+      </div>
+      ${generating ? `
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="spinner"></span>
+          <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Generating variants...</span>
+        </div>
+      ` : `
+        <button class="btn-primary" onclick="window._generateAndPreview()" style="font-size:12px;">Generate Variants</button>
+      `}
+    `;
+
+    // Show generated preview if we have one
+    if (state._generatedPreview) {
+      html += renderGeneratedPreview();
+    }
+  } else {
+    // Manual mode
+    html += `
+      <div class="hint-text" style="margin-bottom:12px;">
+        Manually write variant prompts for the same content request under different framings.
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Group ID</div>
+          <input id="vg-manual-group-id" type="text" placeholder="e.g. violence-framing" style="width:100%;" />
+        </div>
+        <div>
+          <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Domain</div>
+          <input id="vg-manual-domain" type="text" placeholder="e.g. crime, sexuality" style="width:100%;" />
+        </div>
+      </div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Description</div>
+        <input id="vg-manual-desc" type="text" placeholder="What does this variant group test?" style="width:100%;" />
+      </div>
+      <div id="vg-manual-variants" style="display:flex; flex-direction:column; gap:10px; margin-bottom:12px;">
+        ${_manualVariantRow(0)}
+        ${_manualVariantRow(1)}
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-secondary" onclick="window._addManualVariantRow()" style="font-size:12px;">+ Add Variant</button>
+        <button class="btn-primary" onclick="window._saveManualVariantGroup()" style="font-size:12px;">Save Group</button>
+      </div>
+    `;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+function _manualVariantRow(index) {
+  const defaultLabels = ['Direct Request', 'Fiction Framing', 'Academic Framing', 'Roleplay', 'Historical Context', 'Satire'];
+  return `
+    <div class="vg-manual-row" style="background:#0d0f16; border:1px solid #252a35; border-radius:6px; padding:10px;">
+      <div style="margin-bottom:6px;">
+        <input type="text" class="vg-manual-label" placeholder="Framing label" style="width:200px; font-size:12px;" value="${escHtml(defaultLabels[index] || '')}" />
+      </div>
+      <textarea class="vg-manual-prompt" rows="3" placeholder="Write the variant prompt here..." style="width:100%; font-size:11px; resize:vertical;"></textarea>
+    </div>
+  `;
+}
+
+function renderGeneratedPreview() {
+  const preview = state._generatedPreview;
+  if (!preview || !preview.variants) return '';
+
+  let html = `
+    <div style="margin-top:16px; border-top:1px solid #252a35; padding-top:16px;">
+      <div style="font-size:12px; font-weight:600; color:#e2e8f0; margin-bottom:8px;">Generated Variants — Review & Save</div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px; margin-bottom:12px;">
+  `;
+  for (let i = 0; i < preview.variants.length; i++) {
+    const v = preview.variants[i];
+    html += `
+      <div style="background:#0d0f16; border:1px solid #252a35; border-radius:6px; padding:10px;">
+        <div style="font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#3b82f6; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">${escHtml(v.label)}</div>
+        <textarea id="vg-gen-prompt-${i}" rows="4" style="width:100%; font-size:11px; resize:vertical; color:#94a3b8; background:#0d0f16; border:1px solid #1e293b; border-radius:4px; padding:6px;">${escHtml(v.prompt_text)}</textarea>
+      </div>
+    `;
+  }
+  html += `
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-primary" onclick="window._saveGeneratedVariants()" style="font-size:12px;">Save to File</button>
+        <button class="btn-ghost" onclick="state._generatedPreview=null; renderConsistencyView();" style="font-size:12px;">Discard</button>
+      </div>
+    </div>
+  `;
+  return html;
+}
+
+function renderVariantResultsTab(data) {
+  let html = '';
+
+  if (!state.currentSession) {
+    html += `
+      <div class="card" style="text-align:center; padding:24px;">
+        <div style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Select a session to see variant results.</div>
+      </div>
+    `;
+    return html;
+  }
+
   if (!data) {
-    main.innerHTML = `<div style="color:#4b5563; padding:20px; font-family:'JetBrains Mono',monospace; font-size:13px;">Failed to load consistency data.</div>`;
-    return;
+    html += `<div style="color:#4b5563; padding:20px; font-family:'JetBrains Mono',monospace; font-size:13px;">Failed to load consistency data.</div>`;
+    return html;
   }
 
   const score = data.consistency_score;
@@ -1401,106 +1732,63 @@ export async function renderConsistencyView() {
     : score >= 50 ? '#f59e0b'
     : '#ef4444';
 
-  let html = `
-    <div class="fade-in" style="max-width:900px;">
-      ${viewHeader('Framing Variants', escHtml(state.currentSession.name) + ' — variant groups')}
-      <div style="display:flex; align-items:center; gap:16px; margin-bottom:16px;">
-        ${score !== null ? `
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span class="consistency-score" style="color:${scoreColor}; font-size:24px;">${score}%</span>
-          <span style="font-size:10px; color:#4b5563; font-family:'JetBrains Mono',monospace;">consistency (${data.consistent_count}/${data.total_groups} groups)</span>
-        </div>` : `
-        <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">No data yet</span>`}
-        <button class="btn-secondary" onclick="showVariantGroupBuilder()" style="font-size:12px;">+ New Group</button>
-      </div>
-      <div class="feature-description">
-        <strong>Framing Consistency Testing</strong> — Do models respond consistently to the same request framed differently?
-        Create variant groups with semantically equivalent probes (e.g., direct request vs. fiction framing vs. roleplay)
-        and test whether the model's classification changes based purely on framing.
-      </div>
+  // Consistency score header
+  html += `
+    <div style="display:flex; align-items:center; gap:16px; margin-bottom:16px;">
+      ${score !== null ? `
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="color:${scoreColor}; font-size:28px; font-weight:700; font-family:'JetBrains Mono',monospace;">${score}%</span>
+        <div style="display:flex; flex-direction:column;">
+          <span style="font-size:11px; color:#64748b; font-family:'JetBrains Mono',monospace;">consistency score</span>
+          <span style="font-size:10px; color:#4b5563; font-family:'JetBrains Mono',monospace;">${data.consistent_count}/${data.total_groups} groups consistent</span>
+        </div>
+      </div>` : `
+      <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">No results yet — run variant probes in a session first</span>`}
+    </div>
   `;
 
   if (!data.groups || !data.groups.length) {
     html += `
-      <div class="card" style="text-align:center; padding:32px;">
-        <div style="font-size:13px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:12px;">No variant groups defined yet.</div>
-        <button class="btn-primary" onclick="showVariantGroupBuilder()" style="font-size:12px;">Create a Variant Group</button>
+      <div class="card" style="text-align:center; padding:24px;">
+        <div style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">
+          No variant groups defined. Switch to the Edit tab to create some.
+        </div>
       </div>
     `;
-  } else {
-    html += `
-      <div style="overflow-x:auto; border:1px solid #252a35; border-radius:6px; margin-bottom:20px;">
-        <table class="consistency-table">
-          <thead>
-            <tr>
-              <th style="width:180px;">Group</th>
-              <th>Variants &amp; Results</th>
-              <th style="width:100px;">Consistent</th>
-              <th style="width:80px;"></th>
-            </tr>
-          </thead>
-          <tbody>
-    `;
-    for (const group of data.groups) {
-      const rowClass = group.has_data && !group.consistent ? 'consistency-inconsistent' : '';
-      html += `<tr class="${rowClass}">`;
-      html += `<td style="font-size:12px; color:#94a3b8; font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;" title="${escHtml(group.group_id)}">${escHtml(group.group_id)}</td>`;
-      html += `<td><div style="display:flex; flex-wrap:wrap; gap:12px;">`;
-      for (const v of group.variants) {
-        const badge = v.classification
-          ? classificationBadge(v.classification, v.run_id, null)
-          : `<span class="badge badge-unknown">not run</span>`;
-        html += `
-          <div style="display:flex; flex-direction:column; gap:3px; min-width:110px;">
-            <div style="font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#4b5563; font-family:'JetBrains Mono',monospace;">${escHtml(v.variant_label)}</div>
-            <div style="font-size:11px; color:#64748b; font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:140px;" title="${escHtml(v.probe_name)}">${escHtml(v.probe_name)}</div>
-            ${badge}
-          </div>
-        `;
-      }
-      html += `</div></td>`;
-      if (!group.has_data) {
-        html += `<td><span style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace;">pending</span></td>`;
-      } else if (group.consistent) {
-        html += `<td><span style="font-size:11px; color:#22c55e; font-family:'JetBrains Mono',monospace; font-weight:600;">yes</span></td>`;
-      } else {
-        html += `<td><span style="font-size:11px; color:#f59e0b; font-family:'JetBrains Mono',monospace; font-weight:600;">no</span><span class="hint-text" style="margin-left:4px;">(classifications differ across framings)</span></td>`;
-      }
-      html += `<td><button onclick="deleteVariantGroup('${escHtml(group.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:2px 6px;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button></td>`;
-      html += `</tr>`;
-    }
-    html += `</tbody></table></div>`;
+    return html;
   }
 
-  // Inline variant group builder (hidden by default)
-  html += `
-    <div id="variant-group-builder" style="display:none;">
-      <div class="card" style="border-color:#252a35;">
-        <div class="card-label">Create Variant Group</div>
-        <div class="hint-text">
-          A variant group contains 2+ probes that ask the same thing in different ways.
-          Labels describe the framing approach (e.g., "Direct", "Fiction", "Academic").
-          Run all probes in a session, then check if the model gave consistent classifications.
+  // Results matrix
+  for (const group of data.groups) {
+    const borderColor = !group.has_data ? '#252a35' : group.consistent ? '#22c55e33' : '#f59e0b33';
+    html += `
+      <div class="card" style="margin-bottom:12px; border-color:${borderColor};">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-size:13px; font-weight:600; color:#e2e8f0; font-family:'JetBrains Mono',monospace;">${escHtml(group.group_id)}</div>
+          ${group.has_data ? `
+            <span style="font-size:11px; font-weight:600; color:${group.consistent ? '#22c55e' : '#f59e0b'}; font-family:'JetBrains Mono',monospace;">
+              ${group.consistent ? 'CONSISTENT' : 'INCONSISTENT'}
+            </span>
+          ` : `<span style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace;">not run yet</span>`}
         </div>
-        <div style="margin-bottom:12px;">
-          <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:6px;">Group ID</div>
-          <input id="vg-group-id" type="text" placeholder="e.g. violence-framing" style="max-width:320px;" />
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:10px;">
+    `;
+    for (const v of group.variants) {
+      const badge = v.classification
+        ? classificationBadge(v.classification, v.run_id, null)
+        : `<span class="badge badge-unknown">not run</span>`;
+      html += `
+        <div style="background:#0d0f16; border:1px solid #1e293b; border-radius:6px; padding:10px;">
+          <div style="font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:4px;">${escHtml(v.variant_label)}</div>
+          <div style="font-size:11px; color:#64748b; font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:6px;" title="${escHtml(v.probe_name)}">${escHtml(v.probe_name)}</div>
+          ${badge}
         </div>
-        <div id="vg-variant-rows" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;">
-          ${renderVariantRow(0)}
-          ${renderVariantRow(1)}
-        </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn-secondary" onclick="addVariantRow()" style="font-size:12px;">+ Add Variant</button>
-          <button class="btn-primary" onclick="submitVariantGroup()" style="font-size:12px;">Create Group</button>
-          <button class="btn-ghost" onclick="hideVariantGroupBuilder()" style="font-size:12px;">Cancel</button>
-        </div>
-      </div>
-    </div>
-  `;
+      `;
+    }
+    html += `</div></div>`;
+  }
 
-  html += `</div>`;
-  main.innerHTML = html;
+  return html;
 }
 
 function renderVariantRow(index) {
@@ -1530,6 +1818,13 @@ function clearAllViews() {
   state.dashboardView = false;
   state.dashboardDetail = null;
   state.dashboardDetailData = null;
+  // v0.4
+  state.statRunView = false;
+  state.dashboardSection = 'overview';
+  // Variant state
+  state.variantTab = 'edit';
+  state.variantEditData = null;
+  state._generatedPreview = null;
 }
 window.clearAllViews = clearAllViews;
 
@@ -1549,7 +1844,15 @@ function renderDashboard() {
   const totalRuns = stats.total_runs || 0;
 
   let html = `<div class="fade-in" style="max-width:960px;">`;
-  html += viewHeader('Dashboard', 'All sessions, comparisons, and sequences');
+  html += viewHeader('Dashboard', 'Results, analysis, and exports');
+
+  // ── Dashboard section tabs ──
+  const dashSec = state.dashboardSection || 'overview';
+  html += `<div style="display:flex; gap:4px; margin-bottom:20px;">
+    <button class="nav-pill ${dashSec === 'overview' ? 'nav-pill-blue' : 'nav-pill-gray'}" onclick="state.dashboardSection='overview'; render();" style="font-size:11px; padding:5px 14px;">Overview</button>
+    <button class="nav-pill ${dashSec === 'scorecard' ? 'nav-pill-blue' : 'nav-pill-gray'}" onclick="state.dashboardSection='scorecard'; render();" style="font-size:11px; padding:5px 14px;">Policy Scorecard</button>
+    <button class="nav-pill ${dashSec === 'publication' ? 'nav-pill-blue' : 'nav-pill-gray'}" onclick="state.dashboardSection='publication'; render();" style="font-size:11px; padding:5px 14px;">Publication Export</button>
+  </div>`;
 
   // ── Stats Bar ──
   html += `<div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:20px;">`;
@@ -2214,6 +2517,129 @@ window.submitVariantGroup = async function() {
 window.hideConsistencyView = function() {
   state.consistencyView = false;
   render();
+};
+
+// ─── Variant redesign handlers ────────────────────────────────────────────────
+
+window._setVariantTab = function(tab) {
+  state.variantTab = tab;
+  renderConsistencyView();
+};
+
+window._viewVariantGroup = async function(groupId) {
+  const data = await getVariantFile(groupId);
+  if (data) {
+    state.variantEditData = data;
+    renderConsistencyView();
+  }
+};
+
+window._deleteVariantFile = async function(groupId) {
+  const deleted = await deleteVariantFile(groupId);
+  if (deleted) {
+    state.variantEditData = null;
+    renderConsistencyView();
+  }
+};
+
+window._addCustomStrategy = function() {
+  const input = document.getElementById('vg-ai-custom-strategy');
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+  const container = document.getElementById('vg-ai-strategies');
+  if (!container) return;
+  const label = document.createElement('label');
+  label.style.cssText = 'display:flex; align-items:center; gap:4px; padding:4px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; cursor:pointer; font-size:11px; color:#94a3b8; font-family:JetBrains Mono,monospace;';
+  label.innerHTML = `<input type="checkbox" checked value="${val.replace(/"/g, '&quot;')}" style="accent-color:#3b82f6;" /> ${val.replace(/</g, '&lt;')}`;
+  container.appendChild(label);
+  input.value = '';
+};
+
+window._generateAndPreview = async function() {
+  const probeId = parseInt(document.getElementById('vg-ai-base-probe')?.value || '0');
+  if (!probeId) { showError('Select a base probe first'); return; }
+  const checkboxes = document.querySelectorAll('#vg-ai-strategies input[type=checkbox]:checked');
+  const strategies = Array.from(checkboxes).map(cb => cb.value);
+  if (strategies.length < 1) { showError('Select at least one framing strategy'); return; }
+
+  const result = await generateVariants(probeId, strategies);
+  if (result && result.variants) {
+    // Add the base probe as "Direct Request" at the start
+    const baseSel = document.getElementById('vg-ai-base-probe');
+    const baseProbe = state.probes.find(p => p.id === probeId);
+    if (baseProbe) {
+      result.variants.unshift({ label: 'Direct Request', prompt_text: baseProbe.prompt_text });
+    }
+    state._generatedPreview = result;
+    renderConsistencyView();
+  }
+};
+
+window._saveGeneratedVariants = async function() {
+  const groupId = (document.getElementById('vg-ai-group-id')?.value || '').trim();
+  if (!groupId) { showError('Enter a Group ID before saving'); return; }
+  const preview = state._generatedPreview;
+  if (!preview || !preview.variants) return;
+
+  // Read possibly-edited prompt text from textareas
+  const variants = preview.variants.map((v, i) => {
+    const ta = document.getElementById(`vg-gen-prompt-${i}`);
+    return { label: v.label, prompt_text: ta ? ta.value : v.prompt_text };
+  });
+
+  const probeId = parseInt(document.getElementById('vg-ai-base-probe')?.value || '0');
+  const baseProbe = state.probes.find(p => p.id === probeId);
+
+  const result = await saveVariantFile(
+    groupId,
+    groupId.replace(/-/g, ' '),
+    `Framing consistency test generated from probe: ${baseProbe ? baseProbe.name : 'unknown'}`,
+    baseProbe ? baseProbe.name : '',
+    baseProbe ? (baseProbe.domain || '') : '',
+    variants
+  );
+  if (result) {
+    state._generatedPreview = null;
+    state.variantEditData = null;
+    renderConsistencyView();
+  }
+};
+
+window._addManualVariantRow = function() {
+  const container = document.getElementById('vg-manual-variants');
+  if (!container) return;
+  const index = container.querySelectorAll('.vg-manual-row').length;
+  const defaultLabels = ['Direct Request', 'Fiction Framing', 'Academic Framing', 'Roleplay', 'Historical Context', 'Satire'];
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div class="vg-manual-row" style="background:#0d0f16; border:1px solid #252a35; border-radius:6px; padding:10px;">
+      <div style="margin-bottom:6px;">
+        <input type="text" class="vg-manual-label" placeholder="Framing label" style="width:200px; font-size:12px;" value="${defaultLabels[index] || ''}" />
+      </div>
+      <textarea class="vg-manual-prompt" rows="3" placeholder="Write the variant prompt here..." style="width:100%; font-size:11px; resize:vertical;"></textarea>
+    </div>
+  `;
+  container.appendChild(div.firstElementChild);
+};
+
+window._saveManualVariantGroup = async function() {
+  const groupId = (document.getElementById('vg-manual-group-id')?.value || '').trim();
+  if (!groupId) { showError('Group ID is required'); return; }
+  const domain = (document.getElementById('vg-manual-domain')?.value || '').trim();
+  const desc = (document.getElementById('vg-manual-desc')?.value || '').trim();
+  const rows = document.querySelectorAll('#vg-manual-variants .vg-manual-row');
+  const variants = [];
+  for (const row of rows) {
+    const label = (row.querySelector('.vg-manual-label')?.value || '').trim();
+    const prompt = (row.querySelector('.vg-manual-prompt')?.value || '').trim();
+    if (label && prompt) variants.push({ label, prompt_text: prompt });
+  }
+  if (variants.length < 2) { showError('Need at least 2 variants with labels and prompts'); return; }
+  const result = await saveVariantFile(groupId, groupId.replace(/-/g, ' '), desc, '', domain, variants);
+  if (result) {
+    renderConsistencyView();
+  }
 };
 
 window.toggleCompareCell = function(cellId) {
@@ -3493,3 +3919,417 @@ window.handleSaveKey = handleSaveKey;
 window.handleClearKey = handleClearKey;
 window.handleTestKey = handleTestKey;
 window.renderSettingsView = renderSettingsView;
+
+// ─── v0.4: Statistical Analysis View ─────────────────────────────────────────
+
+function renderStatRunView() {
+  const main = document.getElementById('main');
+  const session = state.currentSession;
+  const results = state.statRunResults;
+
+  if (!session) {
+    main.innerHTML = `<div class="fade-in" style="text-align:center; padding:60px;">
+      <div style="font-size:14px; color:var(--text-muted);">Select a session to run statistical analysis.</div>
+    </div>`;
+    return;
+  }
+
+  let html = `<div class="fade-in" style="max-width:900px;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:24px;">
+      <button class="btn-ghost" onclick="clearAllViews(); render();" style="padding:6px 12px; font-size:12px;">← Back</button>
+      <div style="font-size:10px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:#f43f5e; font-family:var(--font-system);">Statistical Analysis</div>
+      <div style="font-size:11px; color:var(--text-dim); font-family:var(--font-mono);">${escHtml(session.name)}</div>
+    </div>
+
+    <div class="feature-description">
+      Run each probe multiple times to measure <strong>consistency rates</strong>. A model that refuses the same prompt 7/10 times has a 70% refusal rate — revealing probabilistic enforcement patterns.
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-label">Configuration</div>
+      <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="font-size:12px; color:var(--text-secondary);">Repeat count:</label>
+          <input type="number" id="stat-repeat-count" min="1" max="100" value="10" style="width:70px;" />
+        </div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-primary" onclick="handleStartStatRun(false)" style="background:#f43f5e;" ${results && results.running ? 'disabled' : ''}>Run Selected Probes</button>
+        <button class="btn-secondary" onclick="handleStartStatRun(true)" ${results && results.running ? 'disabled' : ''}>Run All Probes</button>
+      </div>
+    </div>`;
+
+  // Progress bar
+  if (results && results.running) {
+    const pct = results.total > 0 ? (results.completed / results.total * 100).toFixed(0) : 0;
+    html += `
+    <div class="card" style="margin-bottom:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div style="font-size:12px; color:var(--text-secondary);">Progress: ${results.completed}/${results.total} iterations</div>
+        <span class="spinner" style="width:16px; height:16px;"></span>
+      </div>
+      <div style="height:8px; background:var(--bg-deep); border-radius:4px; overflow:hidden;">
+        <div style="height:100%; width:${pct}%; background:#f43f5e; border-radius:4px; transition:width 0.3s;"></div>
+      </div>
+      ${results.failed > 0 ? `<div style="font-size:11px; color:var(--color-refused); margin-top:6px;">${results.failed} failed</div>` : ''}
+    </div>`;
+  }
+
+  // Results
+  if (results && results.results && results.results.length > 0 && !results.running) {
+    const viewMode = state._statViewMode || 'simple';
+
+    html += `
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <div style="font-size:10px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-dim); font-family:var(--font-system);">Results</div>
+      <div style="display:flex; gap:4px;">
+        <button class="nav-pill ${viewMode === 'simple' ? 'nav-pill-blue' : 'nav-pill-gray'}" onclick="state._statViewMode='simple'; render();" style="font-size:10px; padding:3px 10px;">Simple</button>
+        <button class="nav-pill ${viewMode === 'detailed' ? 'nav-pill-blue' : 'nav-pill-gray'}" onclick="state._statViewMode='detailed'; render();" style="font-size:10px; padding:3px 10px;">Detailed</button>
+      </div>
+    </div>`;
+
+    if (viewMode === 'simple') {
+      html += `
+      <div class="card" style="padding:0; overflow:hidden;">
+        <table style="width:100%; border-collapse:collapse; font-family:var(--font-mono); font-size:12px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border);">
+              <th style="padding:12px 14px; text-align:left; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); font-family:var(--font-system);">Probe</th>
+              <th style="padding:12px 14px; text-align:left; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); font-family:var(--font-system);">Model</th>
+              <th style="padding:12px 14px; text-align:right; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); font-family:var(--font-system);">Refusal Rate</th>
+            </tr>
+          </thead>
+          <tbody>`;
+
+      // Group results by probe
+      const byProbe = {};
+      results.results.forEach(r => {
+        const key = r.probe_name || r.probe_id;
+        if (!byProbe[key]) byProbe[key] = { name: r.probe_name || 'Probe ' + r.probe_id, model: r.model || session.target_model, refused: 0, total: 0 };
+        byProbe[key].total++;
+        if (normalizeClassification(r.classification) === 'refused') byProbe[key].refused++;
+      });
+
+      Object.values(byProbe).forEach(row => {
+        const rate = row.total > 0 ? (row.refused / row.total * 100).toFixed(0) : 0;
+        const rateColor = rate >= 80 ? 'var(--color-refused)' : rate >= 50 ? 'var(--color-collapsed)' : rate >= 20 ? 'var(--color-negotiated)' : 'var(--color-complied)';
+        html += `
+            <tr style="border-bottom:1px solid var(--border); transition:background 0.15s;" onmouseenter="this.style.background='var(--bg-elevated)'" onmouseleave="this.style.background='transparent'">
+              <td style="padding:12px 14px; color:var(--text-secondary); max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escHtml(row.name)}</td>
+              <td style="padding:12px 14px; color:var(--text-muted);">${escHtml(row.model)}</td>
+              <td style="padding:12px 14px; text-align:right; color:${rateColor}; font-weight:600;">${row.refused}/${row.total} (${rate}%)</td>
+            </tr>`;
+      });
+
+      html += `</tbody></table></div>`;
+
+    } else {
+      // Detailed view with stacked bars
+      const byProbe = {};
+      results.results.forEach(r => {
+        const key = r.probe_name || r.probe_id;
+        if (!byProbe[key]) byProbe[key] = { name: r.probe_name || 'Probe ' + r.probe_id, model: r.model || session.target_model, refused: 0, collapsed: 0, negotiated: 0, complied: 0, total: 0 };
+        byProbe[key].total++;
+        const cls = normalizeClassification(r.classification);
+        if (byProbe[key][cls] !== undefined) byProbe[key][cls]++;
+      });
+
+      Object.values(byProbe).forEach(row => {
+        const t = row.total || 1;
+        html += `
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <div style="font-size:12px; color:var(--text-secondary); font-family:var(--font-mono);">${escHtml(row.name)}</div>
+          <div style="font-size:11px; color:var(--text-muted);">${escHtml(row.model)}</div>
+        </div>
+        <div style="display:flex; height:20px; border-radius:4px; overflow:hidden; background:var(--bg-deep); margin-bottom:8px;">
+          ${row.refused ? `<div style="width:${row.refused/t*100}%; background:var(--color-refused);" title="Refused: ${row.refused}"></div>` : ''}
+          ${row.collapsed ? `<div style="width:${row.collapsed/t*100}%; background:var(--color-collapsed);" title="Collapsed: ${row.collapsed}"></div>` : ''}
+          ${row.negotiated ? `<div style="width:${row.negotiated/t*100}%; background:var(--color-negotiated);" title="Negotiated: ${row.negotiated}"></div>` : ''}
+          ${row.complied ? `<div style="width:${row.complied/t*100}%; background:var(--color-complied);" title="Complied: ${row.complied}"></div>` : ''}
+        </div>
+        <div style="display:flex; gap:16px; font-size:11px;">
+          <span style="color:var(--color-refused);">refused: ${row.refused} (${(row.refused/t*100).toFixed(0)}%)</span>
+          <span style="color:var(--color-collapsed);">collapsed: ${row.collapsed} (${(row.collapsed/t*100).toFixed(0)}%)</span>
+          <span style="color:var(--color-negotiated);">negotiated: ${row.negotiated} (${(row.negotiated/t*100).toFixed(0)}%)</span>
+          <span style="color:var(--color-complied);">complied: ${row.complied} (${(row.complied/t*100).toFixed(0)}%)</span>
+        </div>
+      </div>`;
+      });
+    }
+  }
+
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+window.handleStartStatRun = async function(runAll) {
+  const session = state.currentSession;
+  if (!session) return;
+  const repeatCount = parseInt(document.getElementById('stat-repeat-count')?.value || '10', 10);
+  const probeIds = runAll
+    ? state.probes.map(p => p.id)
+    : (state.currentProbe ? [state.currentProbe.id] : state.probes.map(p => p.id));
+  if (probeIds.length === 0) {
+    showError('No probes available to run.');
+    return;
+  }
+  try {
+    await startStatRun(session.id, probeIds, repeatCount);
+  } catch (e) { showError('Statistical run failed: ' + e.message); }
+};
+
+window.renderStatRunView = renderStatRunView;
+
+// ─── v0.4: Policy Scorecard View ─────────────────────────────────────────────
+
+function renderScorecardView() {
+  const main = document.getElementById('main');
+  const data = state.scorecardData;
+
+  // Build model list from sessions
+  const models = [...new Set(state.sessions.map(s => s.target_model))].sort();
+
+  let html = `<div class="fade-in" style="max-width:960px;">`;
+  html += viewHeader('Dashboard', 'Results, analysis, and exports');
+  html += `<div style="display:flex; gap:4px; margin-bottom:20px;">
+    <button class="nav-pill nav-pill-gray" onclick="state.dashboardSection='overview'; render();" style="font-size:11px; padding:5px 14px;">Overview</button>
+    <button class="nav-pill nav-pill-blue" style="font-size:11px; padding:5px 14px;">Policy Scorecard</button>
+    <button class="nav-pill nav-pill-gray" onclick="state.dashboardSection='publication'; render();" style="font-size:11px; padding:5px 14px;">Publication Export</button>
+  </div>`;
+
+  html += `<div class="feature-description">
+      Generate a cross-model scorecard comparing how consistently each model enforces content policies across domains.
+      <strong>Consistent</strong> = predictable enforcement. <strong>Over</strong> = refuses more than expected. <strong>Under</strong> = allows more than expected.
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-label">Configuration</div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px; color:var(--text-secondary); display:block; margin-bottom:4px;">Scorecard name</label>
+        <input type="text" id="scorecard-name" placeholder="e.g. March 2026 Baseline" style="max-width:320px;" />
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px; color:var(--text-secondary); display:block; margin-bottom:8px;">Models</label>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          ${models.map(m => `
+            <label style="display:flex; align-items:center; gap:6px; padding:6px 12px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:6px; cursor:pointer; font-size:12px; color:var(--text-primary); font-family:var(--font-mono); transition:all var(--transition);"
+              onmouseenter="this.style.borderColor='var(--border-hover)'" onmouseleave="this.style.borderColor='var(--border)'">
+              <input type="checkbox" class="scorecard-model-cb" value="${escHtml(m)}" checked style="accent-color:#06b6d4; cursor:pointer;" />
+              ${escHtml(m)}
+            </label>`).join('')}
+        </div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px; color:var(--text-secondary); display:block; margin-bottom:8px;">Data sources</label>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-primary); cursor:pointer;">
+            <input type="checkbox" id="scorecard-use-sessions" checked style="accent-color:#06b6d4;" /> Sessions
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-primary); cursor:pointer;">
+            <input type="checkbox" id="scorecard-use-statruns" checked style="accent-color:#06b6d4;" /> Stat Runs
+          </label>
+        </div>
+      </div>
+
+      <button class="btn-primary" onclick="handleGenerateScorecard()" style="background:#06b6d4;">Generate Scorecard</button>
+    </div>`;
+
+  // Results table
+  if (data && data.categories) {
+    const scModels = data.models || [];
+
+    html += `
+    <div class="card" style="padding:0; overflow-x:auto;">
+      <table style="width:100%; border-collapse:collapse; font-size:12px;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);">
+            <th style="padding:12px 14px; text-align:left; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); font-family:var(--font-system);">Category</th>
+            ${scModels.map(m => `<th style="padding:12px 14px; text-align:center; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); font-family:var(--font-system);">${escHtml(m)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>`;
+
+    data.categories.forEach(cat => {
+      html += `<tr style="border-bottom:1px solid var(--border); transition:background 0.15s;" onmouseenter="this.style.background='var(--bg-elevated)'" onmouseleave="this.style.background='transparent'">
+        <td style="padding:12px 14px; color:var(--text-secondary); font-family:var(--font-mono);">${escHtml(cat.name)}</td>`;
+      scModels.forEach(m => {
+        const cell = (cat.scores || {})[m];
+        let icon = '—';
+        let color = 'var(--text-dim)';
+        let bg = 'transparent';
+        if (cell) {
+          if (cell.status === 'consistent') { icon = '&#10003;'; color = 'var(--color-complied)'; bg = 'rgba(34,197,94,0.06)'; }
+          else if (cell.status === 'over') { icon = '&#8856;'; color = 'var(--color-collapsed)'; bg = 'rgba(245,158,11,0.06)'; }
+          else if (cell.status === 'under') { icon = '&#8854;'; color = 'var(--color-refused)'; bg = 'rgba(239,68,68,0.06)'; }
+        }
+        html += `<td style="padding:12px 14px; text-align:center; color:${color}; background:${bg}; font-size:16px; cursor:default;" title="${cell ? escHtml(cell.detail || cell.status) : 'No data'}">${icon}</td>`;
+      });
+      html += `</tr>`;
+    });
+
+    html += `</tbody></table></div>
+    <div style="display:flex; gap:16px; margin-top:12px; font-size:11px; color:var(--text-muted);">
+      <span><span style="color:var(--color-complied);">&#10003;</span> Consistent</span>
+      <span><span style="color:var(--color-collapsed);">&#8856;</span> Over-enforcement</span>
+      <span><span style="color:var(--color-refused);">&#8854;</span> Under-enforcement</span>
+    </div>`;
+  }
+
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+window.handleGenerateScorecard = async function() {
+  const name = document.getElementById('scorecard-name')?.value.trim() || 'Untitled Scorecard';
+  const modelCbs = document.querySelectorAll('.scorecard-model-cb:checked');
+  const models = Array.from(modelCbs).map(cb => cb.value);
+  const useSessions = document.getElementById('scorecard-use-sessions')?.checked;
+  const useStatRuns = document.getElementById('scorecard-use-statruns')?.checked;
+
+  const sessionIds = useSessions ? state.sessions.map(s => s.id) : [];
+  const statRunIds = useStatRuns ? [] : []; // Will be populated when stat runs have IDs
+
+  if (models.length === 0) {
+    showError('Select at least one model.');
+    return;
+  }
+  try {
+    await generateScorecard(name, models, sessionIds, statRunIds);
+  } catch (e) { showError('Scorecard generation failed: ' + e.message); }
+};
+
+window.renderScorecardView = renderScorecardView;
+
+// ─── v0.4: Publication Export View ───────────────────────────────────────────
+
+function renderPublicationExportView() {
+  const main = document.getElementById('main');
+  const exp = state.publicationExport;
+
+  const templates = [
+    { id: 'comparison_table', name: 'Comparison Table' },
+    { id: 'consistency_matrix', name: 'Consistency Matrix' },
+    { id: 'pushback_summary', name: 'Pushback Effectiveness' },
+    { id: 'full_report', name: 'Full Report' },
+  ];
+
+  const formats = [
+    { id: 'markdown', name: 'Markdown' },
+    { id: 'html', name: 'HTML' },
+    { id: 'csv', name: 'CSV' },
+    { id: 'json', name: 'JSON' },
+  ];
+
+  const models = [...new Set(state.sessions.map(s => s.target_model))].sort();
+  const domains = [...new Set(state.probes.map(p => p.domain || 'uncategorized'))].sort();
+
+  let html = `<div class="fade-in" style="max-width:900px;">`;
+  html += viewHeader('Dashboard', 'Results, analysis, and exports');
+  html += `<div style="display:flex; gap:4px; margin-bottom:20px;">
+    <button class="nav-pill nav-pill-gray" onclick="state.dashboardSection='overview'; render();" style="font-size:11px; padding:5px 14px;">Overview</button>
+    <button class="nav-pill nav-pill-gray" onclick="state.dashboardSection='scorecard'; render();" style="font-size:11px; padding:5px 14px;">Policy Scorecard</button>
+    <button class="nav-pill nav-pill-blue" style="font-size:11px; padding:5px 14px;">Publication Export</button>
+  </div>`;
+
+  html += `<div class="feature-description">
+      Generate publication-ready tables and reports from your research data. Choose a template, format, and filters to create output suitable for research papers and presentations.
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+        <div>
+          <div class="card-label">Template</div>
+          <select id="pub-template">
+            ${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div class="card-label">Format</div>
+          <select id="pub-format">
+            ${formats.map(f => `<option value="${f.id}">${f.name}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <div class="card-label">Filters</div>
+        <div style="display:flex; flex-wrap:wrap; gap:12px;">
+          <div>
+            <label style="font-size:11px; color:var(--text-dim); display:block; margin-bottom:4px;">Models</label>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${models.map(m => `
+                <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text-primary); cursor:pointer; padding:4px 8px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:4px;">
+                  <input type="checkbox" class="pub-model-cb" value="${escHtml(m)}" checked style="accent-color:#84cc16;" />
+                  ${escHtml(m)}
+                </label>`).join('')}
+            </div>
+          </div>
+          <div>
+            <label style="font-size:11px; color:var(--text-dim); display:block; margin-bottom:4px;">Domains</label>
+            <select id="pub-domain-filter">
+              <option value="">All domains</option>
+              ${domains.map(d => `<option value="${escHtml(d)}">${escHtml(d)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-primary" onclick="handleGeneratePublication()" style="background:#84cc16; color:#000;">Generate Preview</button>
+    </div>`;
+
+  // Preview area
+  if (exp && exp.preview) {
+    html += `
+    <div style="margin-bottom:12px;">
+      <div class="card-label">Preview</div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="font-family:var(--font-mono); font-size:12px; line-height:1.7; color:var(--text-secondary); white-space:pre-wrap; overflow-x:auto; background:var(--bg-deep); padding:16px; border-radius:6px; border:1px solid var(--border);">${escHtml(exp.preview)}</div>
+    </div>
+
+    <div style="display:flex; gap:8px;">
+      ${exp.export_id ? `<button class="btn-primary" onclick="handleDownloadPublication('${exp.export_id}')" style="background:#84cc16; color:#000;">Download</button>` : ''}
+      <button class="btn-secondary" onclick="handleCopyPublication(event)">Copy to Clipboard</button>
+    </div>`;
+  }
+
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+window.handleGeneratePublication = async function() {
+  const template = document.getElementById('pub-template')?.value || 'comparison_table';
+  const format = document.getElementById('pub-format')?.value || 'markdown';
+  const modelCbs = document.querySelectorAll('.pub-model-cb:checked');
+  const models = Array.from(modelCbs).map(cb => cb.value);
+  const domain = document.getElementById('pub-domain-filter')?.value || '';
+
+  const filters = { models };
+  if (domain) filters.domain = domain;
+
+  try {
+    await generatePublicationExport('export', format, template, filters);
+  } catch (e) { showError('Publication export failed: ' + e.message); }
+};
+
+window.handleDownloadPublication = async function(exportId) {
+  try {
+    await downloadPublicationExport(exportId);
+  } catch (e) { showError('Download failed: ' + e.message); }
+};
+
+window.handleCopyPublication = function(event) {
+  if (!state.publicationExport || !state.publicationExport.preview) return;
+  navigator.clipboard.writeText(state.publicationExport.preview).then(() => {
+    // Brief success indicator
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  }).catch(() => showError('Failed to copy to clipboard.'));
+};
+
+window.renderPublicationExportView = renderPublicationExportView;

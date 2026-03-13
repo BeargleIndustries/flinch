@@ -1,6 +1,6 @@
 [project]
 name = "flinch"
-version = "0.3.0"
+version = "0.5.0"
 description = "AI content restriction consistency research tool"
 readme = "README.md"
 license = "MIT"
@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.0",
     "rich>=13.0",
     "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

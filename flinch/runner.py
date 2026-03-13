@@ -20,6 +20,14 @@ class Runner:
         self._backend = backend  # For classifier + coach
         self._targets: dict[int, TargetModel] = {}  # session_id -> target
 
+    @property
+    def backend(self) -> LLMBackend | None:
+        return self._backend
+
+    @property
+    def client(self):
+        return self._client
+
     def _make_target(self, model_name: str, system_prompt: str = "") -> TargetModel:
         """Factory: dispatch to correct target based on model name prefix."""
         if model_name.startswith("claude-"):

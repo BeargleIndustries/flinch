@@ -372,9 +372,20 @@ def create_run(conn, probe_id, session_id, target_model) -> int:
     return cur.lastrowid
 
 
+ALLOWED_RUN_FIELDS = {
+    "initial_response", "initial_classification", "coach_suggestion",
+    "coach_pattern_detected", "coach_move_suggested", "final_response",
+    "final_classification", "pushback_text", "pushback_source",
+    "override_text", "notes",
+}
+
+
 def update_run(conn, run_id: int, **kwargs):
     if not kwargs:
         return
+    unknown = set(kwargs.keys()) - ALLOWED_RUN_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown run fields: {unknown}")
     if "coach_suggestion" in kwargs and isinstance(kwargs["coach_suggestion"], dict):
         kwargs["coach_suggestion"] = json.dumps(kwargs["coach_suggestion"])
     fields = ", ".join(f"{k} = ?" for k in kwargs)
@@ -453,9 +464,18 @@ def list_coach_examples(conn, profile: str, limit: int = 10) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
+ALLOWED_COACH_EXAMPLE_FIELDS = {
+    "coach_profile", "refusal_text", "pushback_text", "outcome",
+    "pattern", "move", "effectiveness",
+}
+
+
 def update_coach_example(conn, example_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    unknown = set(kwargs.keys()) - ALLOWED_COACH_EXAMPLE_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown coach_example fields: {unknown}")
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [example_id]
     conn.execute(f"UPDATE coach_examples SET {sets} WHERE id = ?", vals)
@@ -816,9 +836,17 @@ def create_batch_run(conn, session_id: int, probes_total: int, delay_ms: int = 2
     return cur.lastrowid
 
 
+ALLOWED_BATCH_RUN_FIELDS = {
+    "status", "probes_total", "probes_completed", "delay_ms", "completed_at",
+}
+
+
 def update_batch_run(conn, batch_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    unknown = set(kwargs.keys()) - ALLOWED_BATCH_RUN_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown batch_run fields: {unknown}")
     fields = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [batch_id]
     conn.execute(f"UPDATE batch_runs SET {fields} WHERE id = ?", values)
@@ -1969,35 +1997,35 @@ def export_all_data(conn):
             cd["session_ids"] = json.loads(cd["session_ids"]) if cd["session_ids"] else {}
             cd["results"] = json.loads(cd["results"]) if cd["results"] else []
             result["comparisons"].append(cd)
-    except:
+    except Exception:
         result["comparisons"] = []
 
     # Sequences
     try:
         seqs = conn.execute("SELECT * FROM sequences ORDER BY created_at DESC").fetchall()
         result["sequences"] = [dict(s) for s in seqs]
-    except:
+    except Exception:
         result["sequences"] = []
 
     # Snapshots
     try:
         snaps = conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC").fetchall()
         result["snapshots"] = [dict(s) for s in snaps]
-    except:
+    except Exception:
         result["snapshots"] = []
 
     # Variant groups
     try:
         vgs = conn.execute("SELECT * FROM probe_variants").fetchall()
         result["variant_groups"] = [dict(v) for v in vgs]
-    except:
+    except Exception:
         result["variant_groups"] = []
 
     # Coach examples
     try:
         examples = conn.execute("SELECT * FROM coach_examples ORDER BY id").fetchall()
         result["coach_examples"] = [dict(e) for e in examples]
-    except:
+    except Exception:
         result["coach_examples"] = []
 
     # Counts
@@ -2018,19 +2046,19 @@ def get_dashboard_stats(conn):
                        ("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
         try:
             stats[key] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        except:
+        except Exception:
             stats[key] = 0
 
     # Sequences
     try:
         stats["total_sequences"] = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()[0]
-    except:
+    except Exception:
         stats["total_sequences"] = 0
 
     # Annotations
     try:
         stats["total_annotations"] = conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0]
-    except:
+    except Exception:
         stats["total_annotations"] = 0
 
     # Classification breakdown from runs
@@ -2039,14 +2067,14 @@ def get_dashboard_stats(conn):
             "SELECT COALESCE(initial_classification, 'unknown') as cls, COUNT(*) FROM runs GROUP BY cls"
         ).fetchall()
         stats["classification_breakdown"] = {r[0]: r[1] for r in rows}
-    except:
+    except Exception:
         stats["classification_breakdown"] = {}
 
     # Date range
     try:
         row = conn.execute("SELECT MIN(created_at), MAX(created_at) FROM sessions").fetchone()
         stats["date_range"] = {"earliest": row[0], "latest": row[1]}
-    except:
+    except Exception:
         stats["date_range"] = {"earliest": None, "latest": None}
 
     return stats

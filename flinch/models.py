@@ -24,9 +24,9 @@ class PushbackMove(str, Enum):
     MINIMAL_PRESSURE = "minimal_pressure"
 
 class ProbeCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
     domain: str = ""
-    prompt_text: str
+    prompt_text: str = Field(max_length=10000)
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     source_file: str | None = None
@@ -36,11 +36,11 @@ class Probe(ProbeCreate):
     created_at: datetime
 
 class SessionCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
     target_model: str = "claude-sonnet-4-20250514"
     coach_profile: str = "standard"
-    notes: str = ""
-    system_prompt: str = ""
+    notes: str = Field(default="", max_length=2000)
+    system_prompt: str = Field(default="", max_length=10000)
     coach_backend: str = "anthropic"
     coach_model: str | None = None
 
@@ -67,12 +67,12 @@ class RunUpdate(BaseModel):
     coach_suggestion: CoachSuggestion | None = None
     coach_pattern_detected: str | None = None
     coach_move_suggested: PushbackMove | None = None
-    pushback_text: str | None = None
+    pushback_text: str | None = Field(default=None, max_length=5000)
     pushback_source: PushbackSource | None = None
     final_response: str | None = None
     final_classification: Classification | None = None
-    override_text: str | None = None
-    notes: str | None = None
+    override_text: str | None = Field(default=None, max_length=5000)
+    notes: str | None = Field(default=None, max_length=2000)
 
 class Run(BaseModel):
     id: int
@@ -107,8 +107,8 @@ class CoachExample(CoachExampleCreate):
     promoted_at: datetime
 
 class CoachProfileCreate(BaseModel):
-    name: str
-    system_prompt: str
+    name: str = Field(max_length=200)
+    system_prompt: str = Field(max_length=10000)
     moves: list[dict]
     description: str = ""
 

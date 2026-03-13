@@ -1,6 +1,8 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 from flinch import db
@@ -20,7 +22,6 @@ class Runner:
 
     def _make_target(self, model_name: str, system_prompt: str = "") -> TargetModel:
         """Factory: dispatch to correct target based on model name prefix."""
-        import os
         if model_name.startswith("claude-"):
             if not self._client:
                 raise ValueError(
@@ -78,7 +79,6 @@ class Runner:
 
     def _get_coach(self, session_id: int) -> Coach:
         """Create a coach for a session, using the configured backend provider."""
-        import os
         from flinch.llm import AnthropicBackend, OpenAICompatibleBackend, get_backend_for_provider
 
         session = db.get_session(self._conn, session_id)
@@ -89,20 +89,22 @@ class Runner:
 
         coach_backend_type = session.get("coach_backend", "anthropic") if session else "anthropic"
 
+        coach_model = session.get("coach_model") if session else None
+
         if coach_backend_type == "local":
             ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-            coach_model = session.get("coach_model", "llama3.2")
-            backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=coach_model)
-            return Coach(backend=backend, profile_moves=profile_moves, is_local=True)
+            local_model = coach_model or "llama3.2"
+            backend = OpenAICompatibleBackend(f"{ollama_url}/v1", default_model=local_model)
+            return Coach(backend=backend, profile_moves=profile_moves, is_local=True, model=local_model)
 
         # Try to get a backend for the specific provider requested
         backend = get_backend_for_provider(coach_backend_type)
         if backend:
-            return Coach(backend=backend, profile_moves=profile_moves)
+            return Coach(backend=backend, profile_moves=profile_moves, model=coach_model)
 
         # Fall back to the runner's general backend
         if self._backend:
-            return Coach(backend=self._backend, profile_moves=profile_moves)
+            return Coach(backend=self._backend, profile_moves=profile_moves, model=coach_model)
 
         raise ValueError("No LLM backend available for coach. Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama.")
 
@@ -265,7 +267,7 @@ class Runner:
             batch_id,
             status="complete",
             probes_completed=completed,
-            completed_at=__import__("datetime").datetime.utcnow().isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
         yield {
             "event": "complete",
@@ -299,7 +301,6 @@ class Runner:
 
     def _make_narrative_coach(self, strategy: dict, probe: dict, use_narrative_engine: bool = False, session_id: int | None = None) -> NarrativeCoach:
         """Create a NarrativeCoach for a sequence, using local backend if configured."""
-        import os
         from flinch.llm import AnthropicBackend, OpenAICompatibleBackend
 
         # Determine backend: session-specific local > Anthropic client > general backend

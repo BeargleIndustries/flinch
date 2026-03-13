@@ -21,7 +21,7 @@ from flinch.runner import Runner
 from flinch.seed import seed_default_profile, seed_examples
 from flinch.seeds.policies import seed_policies
 from flinch.seeds.strategies import seed_strategies
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # App state
 _conn = None
@@ -106,29 +106,29 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # --- Request models ---
 
 class CreateProbeRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
     domain: str = ""
-    prompt_text: str
+    prompt_text: str = Field(max_length=10000)
     description: str = ""
     tags: list[str] = []
     narrative_opening: str | None = None
     narrative_target: str | None = None
 
 class CreateSessionRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
     target_model: str = "claude-sonnet-4-20250514"
     coach_profile: str = "standard"
-    notes: str = ""
-    system_prompt: str = ""
+    notes: str = Field(default="", max_length=2000)
+    system_prompt: str = Field(default="", max_length=10000)
     coach_backend: str = "anthropic"
     coach_model: str | None = None
 
 class SendProbeRequest(BaseModel):
     probe_id: int | None = None
-    custom_text: str | None = None
+    custom_text: str | None = Field(default=None, max_length=10000)
 
 class SendPushbackRequest(BaseModel):
-    text: str
+    text: str = Field(max_length=5000)
     source: str = "coach"  # "coach" or "override"
 
 class UpdateClassificationRequest(BaseModel):
@@ -140,9 +140,9 @@ class BatchRequest(BaseModel):
     delay_ms: int = 2000
 
 class AnnotationRequest(BaseModel):
-    note_text: str | None = None
+    note_text: str | None = Field(default=None, max_length=2000)
     pattern_tags: list[str] | None = None
-    finding: str | None = None
+    finding: str | None = Field(default=None, max_length=2000)
 
 class CreateVariantGroupRequest(BaseModel):
     group_id: str

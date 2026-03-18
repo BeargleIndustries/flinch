@@ -15,10 +15,18 @@ dependencies = [
     "rich>=13.0",
     "httpx>=0.27.0",
     "python-multipart>=0.0.9",
+    "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
 multi-model = ["openai", "google-genai"]
+experiment = [
+    "textstat>=0.7.3",
+    "scipy>=1.11.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "krippendorff>=0.7.0",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.8.0",

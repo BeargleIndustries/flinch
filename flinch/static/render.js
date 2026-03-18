@@ -1825,6 +1825,12 @@ function clearAllViews() {
   state.variantTab = 'edit';
   state.variantEditData = null;
   state._generatedPreview = null;
+  // Experiment view
+  state.experimentView = false;
+  const expContainer = document.getElementById('experiment-container');
+  if (expContainer) expContainer.style.display = 'none';
+  const mainEl = document.getElementById('main');
+  if (mainEl) mainEl.style.display = '';
 }
 window.clearAllViews = clearAllViews;
 

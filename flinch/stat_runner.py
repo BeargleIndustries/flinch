@@ -80,7 +80,7 @@ async def run_statistical(
             target = _make_target(target_model, client)
 
             start_time = time.time()
-            response_text = await target.send(probe["prompt_text"])
+            response_text = (await target.send(probe["prompt_text"])).text
             latency_ms = int((time.time() - start_time) * 1000)
 
             classification = await classify(response_text, probe["prompt_text"], backend)

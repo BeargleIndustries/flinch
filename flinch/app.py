@@ -19,12 +19,29 @@ from flinch.classifier import classify
 from flinch.models import (
     PushbackSource,
     StartStatRunRequest, GenerateScorecardRequest, PublicationExportRequest,
+    CreateExperimentRequest, StartExperimentRequest, RunAIRatersRequest,
+    GenerateProlificExportRequest, BulkPromptImportRequest, RunAnalysisRequest,
+    GenerateReportRequest, ConditionCreate, ExperimentPromptCreate,
+)
+from flinch.db import (
+    get_async_db, create_experiment, get_experiment, list_experiments,
+    update_experiment, create_condition, list_conditions,
+    add_experiment_prompts, bulk_import_prompts, list_experiment_prompts,
+    create_experiment_responses, get_experiment_progress, get_pending_responses,
+    list_ai_ratings, list_eval_tasks, list_analysis_results, get_response_metrics,
 )
 from flinch.runner import Runner
 from flinch.seed import seed_default_profile, seed_examples
 from flinch.seeds.policies import seed_policies
 from flinch.seeds.strategies import seed_strategies
 from pydantic import BaseModel, Field
+
+
+class UpdateExperimentRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    config: dict | None = None
+    # status is NOT allowed here - managed by pipeline
 
 # App state
 _conn = None
@@ -1463,7 +1480,7 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
         async def _run_one(model_name: str, p: dict, sid: int):
             target = _runner._make_target(model_name, req.system_prompt)
             try:
-                response = await target.send(p["prompt_text"])
+                response = (await target.send(p["prompt_text"])).text
                 classification = await classify(response, p["prompt_text"], _runner.backend)
 
                 # Persist as a real run
@@ -2404,6 +2421,328 @@ async def download_publication_export(export_id: int):
         media_type=ct,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ============================================================
+# EXPERIMENT API ENDPOINTS
+# ============================================================
+
+@app.post("/api/experiments")
+async def api_create_experiment(req: CreateExperimentRequest):
+    """Create a new experiment with conditions."""
+    async with await get_async_db() as db_conn:
+        exp_id = await create_experiment(
+            db_conn, req.name, req.description,
+            model_ids=req.model_ids, base_model_ids=req.base_model_ids,
+            random_seed=req.random_seed, config=req.config,
+        )
+        for cond in req.conditions:
+            await create_condition(db_conn, exp_id, cond.label, cond.system_prompt, cond.description, cond.sort_order)
+        await db_conn.commit()
+        exp = await get_experiment(db_conn, exp_id)
+        conditions = await list_conditions(db_conn, exp_id)
+    return {"experiment": exp, "conditions": conditions}
+
+
+@app.get("/api/experiments")
+async def api_list_experiments():
+    async with await get_async_db() as db_conn:
+        return {"experiments": await list_experiments(db_conn)}
+
+
+@app.get("/api/experiments/{experiment_id}")
+async def api_get_experiment(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        exp = await get_experiment(db_conn, experiment_id)
+        if not exp:
+            raise HTTPException(404, "Experiment not found")
+        conditions = await list_conditions(db_conn, experiment_id)
+        progress = await get_experiment_progress(db_conn, experiment_id)
+    return {"experiment": exp, "conditions": conditions, "progress": progress}
+
+
+@app.put("/api/experiments/{experiment_id}")
+async def api_update_experiment(experiment_id: int, req: UpdateExperimentRequest):
+    async with await get_async_db() as db_conn:
+        updates = {k: v for k, v in req.model_dump().items() if v is not None}
+        if updates:
+            await update_experiment(db_conn, experiment_id, **updates)
+            await db_conn.commit()
+        return await get_experiment(db_conn, experiment_id)
+
+
+@app.delete("/api/experiments/{experiment_id}")
+async def api_delete_experiment(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        await db_conn.execute("DELETE FROM experiments WHERE id = ?", (experiment_id,))
+        await db_conn.commit()
+    return {"deleted": True}
+
+
+@app.post("/api/experiments/{experiment_id}/conditions")
+async def api_add_condition(experiment_id: int, req: ConditionCreate):
+    async with await get_async_db() as db_conn:
+        cond_id = await create_condition(db_conn, experiment_id, req.label, req.system_prompt, req.description, req.sort_order)
+        await db_conn.commit()
+    return {"id": cond_id}
+
+
+@app.get("/api/experiments/{experiment_id}/conditions")
+async def api_list_conditions(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return {"conditions": await list_conditions(db_conn, experiment_id)}
+
+
+@app.post("/api/experiments/{experiment_id}/prompts")
+async def api_add_prompts(experiment_id: int, req: list[ExperimentPromptCreate]):
+    async with await get_async_db() as db_conn:
+        entries = [{"probe_id": p.probe_id, "custom_prompt_text": p.custom_prompt_text, "domain": p.domain} for p in req]
+        await add_experiment_prompts(db_conn, experiment_id, entries)
+        await db_conn.commit()
+    return {"added": len(entries)}
+
+
+@app.post("/api/experiments/{experiment_id}/prompts/import")
+async def api_bulk_import_prompts(experiment_id: int, req: BulkPromptImportRequest):
+    async with await get_async_db() as db_conn:
+        count = await bulk_import_prompts(db_conn, experiment_id, req.csv_text or "")
+        await db_conn.commit()
+    return {"imported": count}
+
+
+@app.get("/api/experiments/{experiment_id}/prompts")
+async def api_list_prompts(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return {"prompts": await list_experiment_prompts(db_conn, experiment_id)}
+
+
+@app.post("/api/experiments/{experiment_id}/estimate")
+async def api_estimate_experiment(experiment_id: int):
+    """Cost/time estimate before running."""
+    async with await get_async_db() as db_conn:
+        exp = await get_experiment(db_conn, experiment_id)
+        conditions = await list_conditions(db_conn, experiment_id)
+        prompts = await list_experiment_prompts(db_conn, experiment_id)
+    model_ids = json.loads(exp.get("model_ids", "[]")) if isinstance(exp.get("model_ids"), str) else exp.get("model_ids", [])
+    base_ids = json.loads(exp.get("base_model_ids", "[]")) if isinstance(exp.get("base_model_ids"), str) else exp.get("base_model_ids", [])
+    total_models = len(model_ids) + len(base_ids)
+    total_cells = len(prompts) * len(conditions) * total_models
+    from flinch.runner import ExperimentRunner
+    runner = ExperimentRunner(None, None)
+    estimate = runner.estimate_cost(total_cells)
+    return {"estimate": estimate, "cells": total_cells, "prompts": len(prompts), "conditions": len(conditions), "models": total_models}
+
+
+@app.post("/api/experiments/{experiment_id}/start")
+async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
+    """Start experiment execution with SSE progress stream."""
+    from flinch.runner import ExperimentRunner
+    from flinch.rate_limiter import RateLimiterPool
+    import json as json_mod
+
+    async def event_stream():
+        async with await get_async_db() as db_conn:
+            await create_experiment_responses(db_conn, experiment_id)
+            await db_conn.commit()
+            pool = RateLimiterPool(req.concurrency_per_provider)
+            runner = ExperimentRunner(db_conn, pool)
+            async for event in runner.run_experiment(experiment_id):
+                yield f"data: {json_mod.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/experiments/{experiment_id}/pause")
+async def api_pause_experiment(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        await update_experiment(db_conn, experiment_id, status="paused")
+        await db_conn.commit()
+    return {"paused": True}
+
+
+@app.post("/api/experiments/{experiment_id}/resume")
+async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
+    """Resume experiment execution."""
+    from flinch.runner import ExperimentRunner
+    from flinch.rate_limiter import RateLimiterPool
+    import json as json_mod
+
+    async def event_stream():
+        async with await get_async_db() as db_conn:
+            pool = RateLimiterPool(req.concurrency_per_provider)
+            runner = ExperimentRunner(db_conn, pool)
+            async for event in runner.run_experiment(experiment_id):
+                yield f"data: {json_mod.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/experiments/{experiment_id}/progress")
+async def api_experiment_progress(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return await get_experiment_progress(db_conn, experiment_id)
+
+
+@app.post("/api/experiments/{experiment_id}/metrics")
+async def api_compute_metrics(experiment_id: int):
+    """Compute NLP metrics for all responses. SSE stream."""
+    import json as json_mod
+
+    async def event_stream():
+        from flinch.metrics import ResponseMetricsAnalyzer
+        async with await get_async_db() as db_conn:
+            analyzer = ResponseMetricsAnalyzer()
+            async for event in analyzer.analyze_experiment(db_conn, experiment_id):
+                yield f"data: {json_mod.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/experiments/{experiment_id}/rate")
+async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
+    """Run AI rater pipeline. SSE stream."""
+    import json as json_mod
+
+    async def event_stream():
+        from flinch.rater import AIRaterPipeline
+        from flinch.rate_limiter import RateLimiterPool
+        async with await get_async_db() as db_conn:
+            pool = RateLimiterPool()
+            pipeline = AIRaterPipeline(db_conn, req.rater_models, pool)
+            async for event in pipeline.rate_experiment(experiment_id):
+                yield f"data: {json_mod.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/experiments/{experiment_id}/prolific")
+async def api_generate_prolific(experiment_id: int, req: GenerateProlificExportRequest):
+    """Generate Prolific evaluation tasks."""
+    from flinch.prolific import ProlificExporter
+    async with await get_async_db() as db_conn:
+        exporter = ProlificExporter(db_conn)
+        result = await exporter.generate_tasks(
+            experiment_id, req.prompt_count, req.model_ids, req.raters_per_task, req.batch_id,
+        )
+    return result
+
+
+@app.get("/api/experiments/{experiment_id}/prolific/csv")
+async def api_export_prolific_csv(experiment_id: int):
+    """Export Prolific tasks as CSV download."""
+    from flinch.prolific import ProlificExporter
+    async with await get_async_db() as db_conn:
+        exporter = ProlificExporter(db_conn)
+        csv_data = await exporter.export_csv(experiment_id)
+    return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=prolific_experiment_{experiment_id}.csv"})
+
+
+@app.post("/api/experiments/{experiment_id}/human-evals/import")
+async def api_import_prolific_results(experiment_id: int, req: dict):
+    """Import Prolific results CSV."""
+    from flinch.prolific import ProlificExporter
+    async with await get_async_db() as db_conn:
+        exporter = ProlificExporter(db_conn)
+        result = await exporter.import_results(experiment_id, req.get("csv_text", ""))
+    return result
+
+
+@app.post("/api/experiments/{experiment_id}/analyze")
+async def api_run_analysis(experiment_id: int, req: RunAnalysisRequest = RunAnalysisRequest()):
+    """Run statistical analysis."""
+    from flinch.stats import ExperimentAnalyzer
+    async with await get_async_db() as db_conn:
+        analyzer = ExperimentAnalyzer(db_conn)
+        results = await analyzer.full_analysis(experiment_id)
+    return {"analysis": results}
+
+
+@app.post("/api/experiments/{experiment_id}/report")
+async def api_generate_report(experiment_id: int, req: GenerateReportRequest = GenerateReportRequest()):
+    """Generate publication report."""
+    from flinch.reporting import ExperimentReporter
+    charts = []
+    async with await get_async_db() as db_conn:
+        reporter = ExperimentReporter(db_conn)
+        if req.include_charts:
+            charts = await reporter.generate_charts(experiment_id)
+        report = await reporter.generate_full_report(experiment_id, req.format)
+        tables = await reporter.generate_tables(experiment_id)
+    return {"report": report, "tables": tables, "charts": charts}
+
+
+@app.get("/api/experiments/{experiment_id}/responses")
+async def api_list_responses(experiment_id: int, model_id: str = None, condition_id: int = None, status: str = None):
+    """List experiment responses with optional filters."""
+    async with await get_async_db() as db_conn:
+        query = "SELECT * FROM experiment_responses WHERE experiment_id = ?"
+        params = [experiment_id]
+        if model_id:
+            query += " AND model_id = ?"
+            params.append(model_id)
+        if condition_id:
+            query += " AND condition_id = ?"
+            params.append(condition_id)
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY id LIMIT 1000"
+        cursor = await db_conn.execute(query, params)
+        rows = [dict(r) for r in await cursor.fetchall()]
+    return {"responses": rows}
+
+
+@app.get("/api/experiments/{experiment_id}/ratings")
+async def api_list_ratings(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return {"ratings": await list_ai_ratings(db_conn, experiment_id)}
+
+
+@app.get("/api/experiments/{experiment_id}/human-evals")
+async def api_list_human_evals(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return {"eval_tasks": await list_eval_tasks(db_conn, experiment_id)}
+
+
+@app.get("/api/experiments/{experiment_id}/analysis")
+async def api_list_analysis(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return {"results": await list_analysis_results(db_conn, experiment_id)}
+
+
+@app.get("/api/experiments/{experiment_id}/metrics")
+async def api_get_metrics(experiment_id: int):
+    async with await get_async_db() as db_conn:
+        return {"metrics": await get_response_metrics(db_conn, experiment_id)}
+
+
+@app.get("/api/experiments/{experiment_id}/export")
+async def api_export_experiment(experiment_id: int):
+    """Full experiment data export as JSON."""
+    async with await get_async_db() as db_conn:
+        exp = await get_experiment(db_conn, experiment_id)
+        conditions = await list_conditions(db_conn, experiment_id)
+        prompts = await list_experiment_prompts(db_conn, experiment_id)
+        progress = await get_experiment_progress(db_conn, experiment_id)
+        ratings = await list_ai_ratings(db_conn, experiment_id)
+        evals = await list_eval_tasks(db_conn, experiment_id)
+        analysis = await list_analysis_results(db_conn, experiment_id)
+        metrics = await get_response_metrics(db_conn, experiment_id)
+    return {
+        "experiment": exp, "conditions": conditions, "prompts": prompts,
+        "progress": progress, "ratings": ratings, "eval_tasks": evals,
+        "analysis": analysis, "metrics": metrics,
+    }
+
+
+@app.get("/api/experiments/{experiment_id}/preregistration")
+async def api_preregistration(experiment_id: int):
+    """Generate OSF preregistration document."""
+    from flinch.reporting import ExperimentReporter
+    async with await get_async_db() as db_conn:
+        reporter = ExperimentReporter(db_conn)
+        doc = await reporter.generate_preregistration(experiment_id)
+    return {"preregistration": doc}
 
 
 def main():

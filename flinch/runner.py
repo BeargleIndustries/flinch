@@ -11,6 +11,7 @@ from flinch.models import Classification, PushbackSource, CoachSuggestion, Pushb
 from flinch.target import TargetModel, ClaudeTarget, OpenAITarget, GeminiTarget
 from flinch.classifier import classify
 from flinch.coach import Coach, NarrativeCoach, NARRATIVE_ENGINE_SYSTEM_PROMPT
+from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
 
 
 class Runner:
@@ -130,7 +131,7 @@ class Runner:
         target.reset()  # Fresh conversation for each probe
 
         # Send probe
-        response_text = await target.send(probe["prompt_text"])
+        response_text = (await target.send(probe["prompt_text"])).text
 
         # Classify
         classification = await classify(response_text, probe["prompt_text"], self._backend)
@@ -174,7 +175,7 @@ class Runner:
         target = self._get_target(run["session_id"])
 
         # Send pushback in same conversation
-        response_text = await target.reply(pushback_text)
+        response_text = (await target.reply(pushback_text)).text
 
         # Classify the response after pushback
         probe = db.get_probe(self._conn, run["probe_id"])
@@ -204,7 +205,7 @@ class Runner:
 
         target = self._get_target(run["session_id"])
         # Don't reset — continue the existing conversation
-        response_text = await target.reply(text)
+        response_text = (await target.reply(text)).text
 
         probe = db.get_probe(self._conn, run["probe_id"])
         classification = await classify(response_text, probe["prompt_text"], self._backend)
@@ -305,6 +306,203 @@ class Runner:
             return self._make_target(session["target_model"], NARRATIVE_ENGINE_SYSTEM_PROMPT)
         return self._get_target(session_id)
 
+
+class ExperimentRunner:
+    """Runs the full prompt × model × condition matrix for experiments."""
+
+    MAX_RETRIES = 5
+    BACKOFF_BASE = 1.0  # seconds
+    BACKOFF_MAX = 60.0
+
+    def __init__(self, async_db, rate_pool: RateLimiterPool, backend=None):
+        self.db = async_db
+        self.rate_pool = rate_pool
+        self.backend = backend or "anthropic"
+        self._paused = False
+
+    def _get_provider(self, model_id: str) -> str:
+        """Determine provider from model ID."""
+        model_lower = model_id.lower()
+        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
+            return "anthropic"
+        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
+            return "openai"
+        elif "gemini" in model_lower:
+            return "google"
+        elif any(x in model_lower for x in ["grok"]):
+            return "xai"
+        else:
+            return "together"
+
+    async def run_experiment(self, experiment_id: int):
+        """Execute full matrix, yielding SSE progress events."""
+        from flinch.db import get_pending_responses, update_experiment_response, update_experiment, get_experiment_progress
+
+        # Mark experiment as running
+        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(timezone.utc).isoformat())
+
+        # Group pending cells by provider for parallel execution
+        pending = await get_pending_responses(self.db, experiment_id, limit=50000)
+        if not pending:
+            yield {"type": "complete", "message": "No pending responses"}
+            return
+
+        by_provider = {}
+        for cell in pending:
+            provider = self._get_provider(cell["model_id"])
+            by_provider.setdefault(provider, []).append(cell)
+
+        total = len(pending)
+        completed = 0
+        failed = 0
+
+        yield {"type": "started", "total": total}
+
+        results_queue: asyncio.Queue = asyncio.Queue()
+
+        cell_count = 0
+
+        async def provider_worker(provider, cells):
+            nonlocal completed, failed, cell_count
+            limiter = self.rate_pool.get(provider)
+            for cell in cells:
+                if self._paused:
+                    break
+                # Check DB for pause signal every 10 cells
+                cell_count += 1
+                if cell_count % 10 == 0:
+                    cursor = await self.db.execute(
+                        "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0] == "paused":
+                        break
+                try:
+                    await self._run_single_cell(cell, limiter)
+                    completed += 1
+                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"]})
+                except Exception as e:
+                    failed += 1
+                    await update_experiment_response(self.db, cell["id"], status="failed", error_message=str(e))
+                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"], "error": str(e)})
+
+        tasks = [asyncio.create_task(provider_worker(p, cells)) for p, cells in by_provider.items()]
+
+        while True:
+            try:
+                event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
+                yield event
+            except asyncio.TimeoutError:
+                if all(t.done() for t in tasks):
+                    break
+                yield {"type": "heartbeat"}
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Final status
+        progress = await get_experiment_progress(self.db, experiment_id)
+        final_status = "completed"
+        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(timezone.utc).isoformat())
+
+        yield {"type": "complete", "completed": completed, "failed": failed, "total": total}
+
+    async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
+        """Execute one matrix cell with retry logic."""
+        from flinch.db import update_experiment_response
+        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget
+
+        model_id = cell["model_id"]
+        system_prompt = cell.get("condition_system_prompt", "")
+        prompt_text = cell.get("prompt_text") or cell.get("probe_text", "")
+        response_id = cell["id"]
+
+        target = self._create_target(model_id, system_prompt)
+        released = False
+
+        for attempt in range(self.MAX_RETRIES):
+            released = False
+            try:
+                await limiter.acquire()
+                try:
+                    resp = await target.send(prompt_text)
+                finally:
+                    limiter.release()
+                    released = True
+
+                limiter.record_usage(
+                    input_tokens=resp.input_tokens or 0,
+                    output_tokens=resp.output_tokens or 0,
+                )
+
+                await update_experiment_response(
+                    self.db, response_id,
+                    response_text=resp.text,
+                    latency_ms=resp.latency_ms,
+                    token_count_input=resp.input_tokens,
+                    token_count_output=resp.output_tokens,
+                    finish_reason=resp.finish_reason,
+                    status="completed",
+                    attempt_count=attempt + 1,
+                    completed_at=datetime.now(timezone.utc).isoformat(),
+                )
+                return
+
+            except Exception as e:
+                if not released:
+                    try:
+                        limiter.release()
+                    except ValueError:
+                        pass
+                limiter.record_retry()
+                if attempt < self.MAX_RETRIES - 1:
+                    backoff = min(self.BACKOFF_BASE * (2 ** attempt), self.BACKOFF_MAX)
+                    logger.warning(f"Retry {attempt+1} for cell {response_id}: {e}, waiting {backoff}s")
+                    await asyncio.sleep(backoff)
+                else:
+                    raise
+
+    def _create_target(self, model_id: str, system_prompt: str):
+        """Create appropriate TargetModel instance."""
+        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, BaseModelTarget
+
+        provider = self._get_provider(model_id)
+        # Check if it's a known base model
+        if model_id in BaseModelTarget.BASE_MODELS:
+            return BaseModelTarget(model=model_id, system_prompt=system_prompt)
+        if provider == "anthropic":
+            return ClaudeTarget(model=model_id, system_prompt=system_prompt)
+        elif provider in ("openai", "xai", "together"):
+            base_url = None
+            if provider == "xai":
+                base_url = "https://api.x.ai/v1"
+            elif provider == "together":
+                base_url = "https://api.together.xyz/v1"
+            return OpenAITarget(model=model_id, system_prompt=system_prompt, base_url=base_url)
+        elif provider == "google":
+            return GeminiTarget(model=model_id, system_prompt=system_prompt)
+        else:
+            raise ValueError(f"Unknown provider for model: {model_id}")
+
+    async def pause(self, experiment_id: int):
+        """Pause execution."""
+        from flinch.db import update_experiment
+        self._paused = True
+        await update_experiment(self.db, experiment_id, status="paused")
+
+    def estimate_cost(self, total_cells: int, avg_input_tokens: int = 500, avg_output_tokens: int = 1000) -> dict:
+        """Estimate cost for the experiment."""
+        pricing = {
+            "anthropic": {"input": 0.003, "output": 0.015},   # Sonnet
+            "openai": {"input": 0.005, "output": 0.015},       # GPT-4o
+            "google": {"input": 0.00125, "output": 0.005},     # Gemini Pro
+            "together": {"input": 0.0009, "output": 0.0009},   # Llama
+        }
+        estimated_cost = 0.0
+        for p, rates in pricing.items():
+            estimated_cost += (avg_input_tokens / 1000 * rates["input"] + avg_output_tokens / 1000 * rates["output"])
+        estimated_cost *= total_cells / len(pricing)
+        return {"estimated_cost_usd": round(estimated_cost, 2), "total_cells": total_cells}
+
     # ── Narrative Momentum Methods ─────────────────────────────────
 
     def _make_narrative_coach(self, strategy: dict, probe: dict, use_narrative_engine: bool = False, session_id: int | None = None) -> NarrativeCoach:
@@ -382,9 +580,9 @@ class Runner:
 
         # Send warmup to target
         if not existing_turns:
-            response_text = await target.send(warmup_text)
+            response_text = (await target.send(warmup_text)).text
         else:
-            response_text = await target.reply(warmup_text)
+            response_text = (await target.reply(warmup_text)).text
 
         # Classify the response (use warmup text as probe_text context for classification)
         classification = await classify(response_text, warmup_text, self._backend)
@@ -440,7 +638,7 @@ class Runner:
             coach = self._make_narrative_coach(strategy, probe, use_narrative_engine=use_ne, session_id=seq["session_id"])
             setup_text = await coach.generate_setup_turn(conversation_history)
 
-            setup_response = await target.reply(setup_text)
+            setup_response = (await target.reply(setup_text)).text
             setup_classification = await classify(setup_response, setup_text, self._backend)
 
             db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "coach", setup_text, None, "setup")
@@ -456,7 +654,7 @@ class Runner:
             adapted_probe = await coach_for_adapt.adapt_probe_to_story(conversation_history)
         else:
             adapted_probe = probe["prompt_text"]
-        probe_response = await target.reply(adapted_probe)
+        probe_response = (await target.reply(adapted_probe)).text
         probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
         db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -518,9 +716,9 @@ class Runner:
 
                 # Send to target
                 if not conversation_history:
-                    response_text = await target.send(warmup_text)
+                    response_text = (await target.send(warmup_text)).text
                 else:
-                    response_text = await target.reply(warmup_text)
+                    response_text = (await target.reply(warmup_text)).text
 
                 classification = await classify(response_text, warmup_text, self._backend)
 
@@ -538,7 +736,7 @@ class Runner:
             # Setup turn (N-1) — steers toward probe topic
             if warmup_count > 0:
                 setup_text = await coach.generate_setup_turn(conversation_history)
-                setup_response = await target.reply(setup_text)
+                setup_response = (await target.reply(setup_text)).text
                 setup_classification = await classify(setup_response, setup_text, self._backend)
 
                 db.add_sequence_turn(self._conn, run_id, turn_number, "coach", setup_text, None, "setup")
@@ -553,7 +751,7 @@ class Runner:
 
             # Probe turn (N) — adapt probe to story context then send
             adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = await target.reply(adapted_probe)
+            probe_response = (await target.reply(adapted_probe)).text
             probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -613,9 +811,9 @@ class Runner:
                 warmup_text = await coach.generate_warmup_turn(conversation_history, coach_turn_num, warmup_count)
 
                 if not conversation_history:
-                    response_text = await target.send(warmup_text)
+                    response_text = (await target.send(warmup_text)).text
                 else:
-                    response_text = await target.reply(warmup_text)
+                    response_text = (await target.reply(warmup_text)).text
 
                 classification = await classify(response_text, warmup_text, self._backend)
 
@@ -640,7 +838,7 @@ class Runner:
             # Setup turn
             if warmup_count > 0:
                 setup_text = await coach.generate_setup_turn(conversation_history)
-                setup_response = await target.reply(setup_text)
+                setup_response = (await target.reply(setup_text)).text
                 setup_classification = await classify(setup_response, setup_text, self._backend)
 
                 db.add_sequence_turn(self._conn, run_id, turn_number, "coach", setup_text, None, "setup")
@@ -663,7 +861,7 @@ class Runner:
 
             # Probe turn — adapt to story context
             adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = await target.reply(adapted_probe)
+            probe_response = (await target.reply(adapted_probe)).text
             probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -793,9 +991,9 @@ class Runner:
             warmup_text = await coach.generate_warmup_turn(conversation_history, i + 1, warmup_count)
 
             if not conversation_history:
-                response_text = await target.send(warmup_text)
+                response_text = (await target.send(warmup_text)).text
             else:
-                response_text = await target.reply(warmup_text)
+                response_text = (await target.reply(warmup_text)).text
 
             classification = await classify(response_text, warmup_text, self._backend)
 
@@ -811,9 +1009,9 @@ class Runner:
             setup_text = await coach.generate_setup_turn(conversation_history)
 
             if not conversation_history:
-                setup_response = await target.send(setup_text)
+                setup_response = (await target.send(setup_text)).text
             else:
-                setup_response = await target.reply(setup_text)
+                setup_response = (await target.reply(setup_text)).text
 
             setup_classification = await classify(setup_response, setup_text, self._backend)
 
@@ -827,10 +1025,10 @@ class Runner:
         # Probe turn — adapt to story context
         if conversation_history:
             adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = await target.reply(adapted_probe)
+            probe_response = (await target.reply(adapted_probe)).text
         else:
             adapted_probe = probe["prompt_text"]
-            probe_response = await target.send(adapted_probe)
+            probe_response = (await target.send(adapted_probe)).text
 
         probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 

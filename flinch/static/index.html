@@ -1059,6 +1059,7 @@
     <div style="border-top:1px solid #1a1a1a; flex-shrink:0; padding:6px 12px;">
       <button onclick="clearAllViews(); state.statRunView=true; render();" class="nav-pill" style="width:100%; text-align:center; margin-bottom:4px; color:#f43f5e; border-color:rgba(244,63,94,0.2);" onmouseenter="this.style.background='rgba(244,63,94,0.08)'" onmouseleave="this.style.background='transparent'">Stat Analysis</button>
       <button onclick="clearAllViews(); state.dashboardView=true; state.dashboardSection='overview'; loadDashboardData();" class="nav-pill nav-pill-blue" style="width:100%; text-align:center; margin-bottom:4px;">Dashboard</button>
+      <button onclick="showExperimentsTab()" class="nav-pill" style="width:100%; text-align:center; margin-bottom:4px; color:#a78bfa; border-color:rgba(167,139,250,0.2);" onmouseenter="this.style.background='rgba(167,139,250,0.08)'" onmouseleave="this.style.background='transparent'">Experiments</button>
     </div>
 
     <!-- Extras -->
@@ -1144,5 +1145,34 @@
   </div>
 
   <script type="module" src="/static/app.js"></script>
+  <script type="module">
+    import { initExperimentUI, cleanupExperimentUI } from '/static/experiment.js';
+
+    // Patch clearAllViews to close any active SSE when leaving the experiments tab
+    const _origClearAllViews = window.clearAllViews;
+    window.clearAllViews = function() {
+      cleanupExperimentUI();
+      if (_origClearAllViews) _origClearAllViews();
+    };
+
+    window.showExperimentsTab = function() {
+      // Clear existing views (render.js clearAllViews also hides experiment container)
+      if (window.clearAllViews) window.clearAllViews();
+
+      const main = document.getElementById('main');
+      let expContainer = document.getElementById('experiment-container');
+      if (!expContainer) {
+        expContainer = document.createElement('div');
+        expContainer.id = 'experiment-container';
+        expContainer.style.cssText = 'flex:1;height:100vh;overflow-y:auto;padding:36px 44px;background:#0a0a0a;';
+        main.parentNode.insertBefore(expContainer, main.nextSibling);
+      }
+      main.style.display = 'none';
+      expContainer.style.display = 'block';
+      if (window.state) window.state.experimentView = true;
+
+      initExperimentUI(expContainer);
+    };
+  </script>
 </body>
 </html>

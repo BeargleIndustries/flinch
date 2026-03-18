@@ -1,6 +1,15 @@
+from __future__ import annotations
+
+import csv
+import io
 import json
 import sqlite3
 from pathlib import Path
+
+try:
+    import aiosqlite
+except ImportError:
+    aiosqlite = None  # Experiment features require aiosqlite
 
 DB_PATH = Path("data/flinch.db")
 
@@ -304,6 +313,155 @@ CREATE TABLE IF NOT EXISTS publication_exports (
     content TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- ============================================================
+-- EXPERIMENT FRAMEWORK (RLHF Deception Experiment)
+-- ============================================================
+
+-- Experiment: top-level container
+CREATE TABLE IF NOT EXISTS experiments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    prompt_source TEXT DEFAULT 'probes',
+    model_ids TEXT NOT NULL DEFAULT '[]',
+    base_model_ids TEXT DEFAULT '[]',
+    random_seed INTEGER,
+    config TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS experiment_conditions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    system_prompt TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    UNIQUE(experiment_id, label)
+);
+
+CREATE TABLE IF NOT EXISTS experiment_prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    probe_id INTEGER REFERENCES probes(id) ON DELETE SET NULL,
+    custom_prompt_text TEXT,
+    domain TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    UNIQUE(experiment_id, probe_id)
+);
+
+CREATE TABLE IF NOT EXISTS experiment_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    condition_id INTEGER NOT NULL REFERENCES experiment_conditions(id) ON DELETE CASCADE,
+    prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    response_text TEXT,
+    raw_response TEXT,
+    latency_ms INTEGER,
+    token_count_input INTEGER,
+    token_count_output INTEGER,
+    finish_reason TEXT,
+    status TEXT DEFAULT 'pending',
+    error_message TEXT,
+    attempt_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT,
+    UNIQUE(experiment_id, condition_id, prompt_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_status
+    ON experiment_responses(experiment_id, status);
+CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_cond_prompt_model
+    ON experiment_responses(experiment_id, condition_id, prompt_id, model_id);
+CREATE INDEX IF NOT EXISTS idx_expr_resp_model
+    ON experiment_responses(model_id);
+
+CREATE TABLE IF NOT EXISTS response_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    response_id INTEGER NOT NULL REFERENCES experiment_responses(id) ON DELETE CASCADE UNIQUE,
+    word_count INTEGER,
+    sentence_count INTEGER,
+    flesch_kincaid_grade REAL,
+    flesch_reading_ease REAL,
+    hedging_count INTEGER,
+    hedging_ratio REAL,
+    confidence_marker_count INTEGER,
+    confidence_ratio REAL,
+    refusal_classification TEXT,
+    avg_sentence_length REAL,
+    lexical_diversity REAL,
+    computed_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ai_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    rater_model TEXT NOT NULL,
+    prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
+    target_model_id TEXT NOT NULL,
+    blinding_order TEXT NOT NULL,
+    rater_reasoning TEXT,
+    raw_response TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_rating_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rating_id INTEGER NOT NULL REFERENCES ai_ratings(id) ON DELETE CASCADE,
+    response_id INTEGER NOT NULL REFERENCES experiment_responses(id) ON DELETE CASCADE,
+    position_label TEXT NOT NULL,
+    rank INTEGER,
+    UNIQUE(rating_id, position_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_rating_items_rating ON ai_rating_items(rating_id);
+CREATE INDEX IF NOT EXISTS idx_ai_ratings_exp ON ai_ratings(experiment_id, status);
+
+CREATE TABLE IF NOT EXISTS eval_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL,
+    prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
+    target_model_id TEXT NOT NULL,
+    blinding_order TEXT NOT NULL,
+    tracking_id TEXT UNIQUE NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS eval_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_task_id INTEGER NOT NULL REFERENCES eval_tasks(id) ON DELETE CASCADE,
+    rater_id TEXT NOT NULL,
+    response_id INTEGER NOT NULL REFERENCES experiment_responses(id) ON DELETE CASCADE,
+    position_label TEXT NOT NULL,
+    rank INTEGER,
+    reasoning TEXT,
+    completion_time_s INTEGER,
+    completed_at TEXT,
+    UNIQUE(eval_task_id, rater_id, position_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_eval_ratings_task ON eval_ratings(eval_task_id);
+CREATE INDEX IF NOT EXISTS idx_eval_tasks_exp ON eval_tasks(experiment_id, status);
+
+CREATE TABLE IF NOT EXISTS analysis_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    analysis_type TEXT NOT NULL,
+    scope TEXT DEFAULT 'full',
+    model_id TEXT,
+    parameters TEXT DEFAULT '{}',
+    results TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -361,6 +519,17 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
         )""")
         conn.commit()
     return conn
+
+
+async def get_async_db() -> "aiosqlite.Connection":
+    """Get an async database connection for experiment operations."""
+    if aiosqlite is None:
+        raise ImportError("aiosqlite is required for experiment features. Run: pip install aiosqlite")
+    db = await aiosqlite.connect(str(DB_PATH))
+    db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA foreign_keys = ON")
+    await db.execute("PRAGMA journal_mode = WAL")
+    return db
 
 
 def _row_to_dict(row) -> dict:
@@ -2911,3 +3080,536 @@ def list_publication_exports(conn) -> list[dict]:
         "SELECT id, name, format, template, created_at FROM publication_exports ORDER BY id DESC"
     ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+# ============================================================
+# ASYNC EXPERIMENT CRUD (requires aiosqlite)
+# ============================================================
+
+# --- Experiment CRUD ---
+
+async def create_experiment(db, name, description="", model_ids=None, base_model_ids=None, random_seed=None, config=None):
+    """Create experiment, return its id."""
+    cur = await db.execute(
+        """INSERT INTO experiments (name, description, model_ids, base_model_ids, random_seed, config)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (name, description, json.dumps(model_ids or []), json.dumps(base_model_ids or []),
+         random_seed, json.dumps(config or {})),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_experiment(db, experiment_id):
+    """Get experiment by id as dict."""
+    async with db.execute("SELECT * FROM experiments WHERE id = ?", (experiment_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    for field in ("model_ids", "base_model_ids", "config"):
+        if d.get(field):
+            try:
+                d[field] = json.loads(d[field])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return d
+
+
+async def list_experiments(db):
+    """List all experiments, ordered by created_at desc."""
+    async with db.execute("SELECT * FROM experiments ORDER BY created_at DESC") as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        for field in ("model_ids", "base_model_ids", "config"):
+            if d.get(field):
+                try:
+                    d[field] = json.loads(d[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        result.append(d)
+    return result
+
+
+ALLOWED_EXPERIMENT_FIELDS = {
+    "name", "description", "status", "config", "started_at", "completed_at",
+    "model_ids", "base_model_ids", "random_seed", "prompt_source",
+}
+
+
+async def update_experiment(db, experiment_id, **kwargs):
+    """Update experiment fields. Supports: name, description, status, config, started_at, completed_at."""
+    if not kwargs:
+        return
+    unknown = set(kwargs.keys()) - ALLOWED_EXPERIMENT_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown experiment fields: {unknown}")
+    for field in ("model_ids", "base_model_ids", "config"):
+        if field in kwargs and not isinstance(kwargs[field], str):
+            kwargs[field] = json.dumps(kwargs[field])
+    fields = ", ".join(f"{k} = ?" for k in kwargs)
+    values = list(kwargs.values()) + [experiment_id]
+    await db.execute(f"UPDATE experiments SET {fields} WHERE id = ?", values)
+    await db.commit()
+
+
+# --- Condition CRUD ---
+
+async def create_condition(db, experiment_id, label, system_prompt, description="", sort_order=0):
+    """Create condition for an experiment."""
+    cur = await db.execute(
+        """INSERT INTO experiment_conditions (experiment_id, label, system_prompt, description, sort_order)
+           VALUES (?, ?, ?, ?, ?)""",
+        (experiment_id, label, system_prompt, description, sort_order),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_conditions(db, experiment_id):
+    """List conditions for an experiment."""
+    async with db.execute(
+        "SELECT * FROM experiment_conditions WHERE experiment_id = ? ORDER BY sort_order, id",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_condition(db, condition_id):
+    """Get single condition."""
+    async with db.execute(
+        "SELECT * FROM experiment_conditions WHERE id = ?", (condition_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+# --- Prompt CRUD ---
+
+async def add_experiment_prompts(db, experiment_id, prompt_entries):
+    """Add prompts to experiment. prompt_entries is list of dicts with probe_id or custom_prompt_text + domain."""
+    rows = []
+    for i, entry in enumerate(prompt_entries):
+        rows.append((
+            experiment_id,
+            entry.get("probe_id"),
+            entry.get("custom_prompt_text"),
+            entry.get("domain", ""),
+            entry.get("sort_order", i),
+        ))
+    await db.executemany(
+        """INSERT OR IGNORE INTO experiment_prompts
+           (experiment_id, probe_id, custom_prompt_text, domain, sort_order)
+           VALUES (?, ?, ?, ?, ?)""",
+        rows,
+    )
+    await db.commit()
+
+
+async def bulk_import_prompts(db, experiment_id, csv_text):
+    """Parse CSV text (columns: prompt_text, domain) and create experiment_prompts rows. Return count."""
+    reader = csv.DictReader(io.StringIO(csv_text.strip()))
+    entries = []
+    for i, row in enumerate(reader):
+        prompt_text = row.get("prompt_text", "").strip()
+        if not prompt_text:
+            continue
+        entries.append({
+            "custom_prompt_text": prompt_text,
+            "domain": row.get("domain", "").strip(),
+            "sort_order": i,
+        })
+    if entries:
+        await add_experiment_prompts(db, experiment_id, entries)
+    return len(entries)
+
+
+async def list_experiment_prompts(db, experiment_id):
+    """List prompts for an experiment."""
+    async with db.execute(
+        """SELECT ep.*, p.prompt_text as probe_text, p.name as probe_name
+           FROM experiment_prompts ep
+           LEFT JOIN probes p ON p.id = ep.probe_id
+           WHERE ep.experiment_id = ?
+           ORDER BY ep.sort_order, ep.id""",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Response CRUD ---
+
+async def create_experiment_responses(db, experiment_id):
+    """Pre-create all response matrix cells (pending) for the experiment.
+    For each prompt × condition × model, insert a row with status='pending'.
+    Uses INSERT OR IGNORE to support resume (don't duplicate existing cells)."""
+    exp = await get_experiment(db, experiment_id)
+    if not exp:
+        raise ValueError(f"Experiment {experiment_id} not found")
+    model_ids = exp["model_ids"] if isinstance(exp["model_ids"], list) else json.loads(exp["model_ids"])
+    base_model_ids = exp.get("base_model_ids", [])
+    if isinstance(base_model_ids, str):
+        base_model_ids = json.loads(base_model_ids) if base_model_ids else []
+    all_model_ids = model_ids + base_model_ids
+
+    async with db.execute(
+        "SELECT id FROM experiment_conditions WHERE experiment_id = ?", (experiment_id,)
+    ) as cur:
+        cond_rows = await cur.fetchall()
+    async with db.execute(
+        "SELECT id FROM experiment_prompts WHERE experiment_id = ?", (experiment_id,)
+    ) as cur:
+        prompt_rows = await cur.fetchall()
+
+    cells = []
+    for cond_row in cond_rows:
+        for prompt_row in prompt_rows:
+            for model_id in all_model_ids:
+                cells.append((
+                    experiment_id,
+                    cond_row["id"],
+                    prompt_row["id"],
+                    model_id,
+                ))
+    await db.executemany(
+        """INSERT OR IGNORE INTO experiment_responses
+           (experiment_id, condition_id, prompt_id, model_id, status)
+           VALUES (?, ?, ?, ?, 'pending')""",
+        cells,
+    )
+    await db.commit()
+    return len(cells)
+
+
+async def get_experiment_response(db, response_id):
+    """Get single response."""
+    async with db.execute(
+        "SELECT * FROM experiment_responses WHERE id = ?", (response_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+ALLOWED_RESPONSE_FIELDS = {
+    "response_text", "raw_response", "latency_ms", "token_count_input",
+    "token_count_output", "finish_reason", "status", "error_message",
+    "attempt_count", "completed_at",
+}
+
+
+async def update_experiment_response(db, response_id, **kwargs):
+    """Update response fields: response_text, raw_response, latency_ms, token counts, status, error_message, attempt_count, completed_at."""
+    if not kwargs:
+        return
+    unknown = set(kwargs.keys()) - ALLOWED_RESPONSE_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown response fields: {unknown}")
+    fields = ", ".join(f"{k} = ?" for k in kwargs)
+    values = list(kwargs.values()) + [response_id]
+    await db.execute(f"UPDATE experiment_responses SET {fields} WHERE id = ?", values)
+    await db.commit()
+
+
+async def get_experiment_progress(db, experiment_id):
+    """Return completion stats: {total, completed, failed, pending, by_model: {...}, by_condition: {...}}."""
+    async with db.execute(
+        """SELECT status, model_id, condition_id, COUNT(*) as cnt
+           FROM experiment_responses
+           WHERE experiment_id = ?
+           GROUP BY status, model_id, condition_id""",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    total = completed = failed = pending = 0
+    by_model: dict = {}
+    by_condition: dict = {}
+
+    for row in rows:
+        d = dict(row)
+        cnt = d["cnt"]
+        status = d["status"]
+        model = d["model_id"]
+        cond = d["condition_id"]
+        total += cnt
+        if status == "completed":
+            completed += cnt
+        elif status == "failed":
+            failed += cnt
+        else:
+            pending += cnt
+
+        if model not in by_model:
+            by_model[model] = {"total": 0, "completed": 0, "failed": 0, "pending": 0}
+        by_model[model]["total"] += cnt
+        by_model[model][status if status in ("completed", "failed") else "pending"] += cnt
+
+        cond_key = str(cond)
+        if cond_key not in by_condition:
+            by_condition[cond_key] = {"total": 0, "completed": 0, "failed": 0, "pending": 0}
+        by_condition[cond_key]["total"] += cnt
+        by_condition[cond_key][status if status in ("completed", "failed") else "pending"] += cnt
+
+    return {
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "pending": pending,
+        "by_model": by_model,
+        "by_condition": by_condition,
+    }
+
+
+async def get_pending_responses(db, experiment_id, limit=100):
+    """Get pending response cells for execution. Returns list of dicts with all needed context."""
+    async with db.execute(
+        """SELECT
+               er.id,
+               er.experiment_id,
+               er.condition_id,
+               er.prompt_id,
+               er.model_id,
+               er.attempt_count,
+               ec.label as condition_label,
+               ec.system_prompt as condition_system_prompt,
+               ep.probe_id,
+               ep.custom_prompt_text,
+               ep.domain,
+               p.prompt_text as probe_text,
+               p.name as probe_name
+           FROM experiment_responses er
+           JOIN experiment_conditions ec ON ec.id = er.condition_id
+           JOIN experiment_prompts ep ON ep.id = er.prompt_id
+           LEFT JOIN probes p ON p.id = ep.probe_id
+           WHERE er.experiment_id = ? AND er.status = 'pending'
+           ORDER BY er.id
+           LIMIT ?""",
+        (experiment_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Metrics CRUD ---
+
+ALLOWED_METRIC_COLS = {
+    "word_count", "sentence_count", "flesch_kincaid_grade", "flesch_reading_ease",
+    "hedging_count", "hedging_ratio", "confidence_marker_count", "confidence_ratio",
+    "refusal_classification", "avg_sentence_length", "lexical_diversity",
+}
+
+
+async def save_response_metrics(db, response_id, metrics_dict):
+    """Insert or replace response_metrics row."""
+    # Filter to allowed columns only
+    metrics_dict = {k: v for k, v in metrics_dict.items() if k in ALLOWED_METRIC_COLS}
+    cols = list(metrics_dict.keys())
+    placeholders = ", ".join("?" for _ in cols)
+    col_list = ", ".join(cols)
+    values = [response_id] + list(metrics_dict.values())
+    await db.execute(
+        f"""INSERT OR REPLACE INTO response_metrics (response_id, {col_list})
+            VALUES (?, {placeholders})""",
+        values,
+    )
+    await db.commit()
+
+
+async def get_response_metrics(db, experiment_id):
+    """Get all metrics for an experiment, joined with response data."""
+    async with db.execute(
+        """SELECT rm.*, er.model_id, er.condition_id, er.prompt_id, er.status
+           FROM response_metrics rm
+           JOIN experiment_responses er ON er.id = rm.response_id
+           WHERE er.experiment_id = ?
+           ORDER BY rm.id""",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- AI Rating CRUD ---
+
+async def save_ai_rating(db, rating_data, items_data):
+    """Insert ai_ratings parent + ai_rating_items children atomically."""
+    async with db.execute(
+        """INSERT INTO ai_ratings
+           (experiment_id, rater_model, prompt_id, target_model_id, blinding_order,
+            rater_reasoning, raw_response, status, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            rating_data["experiment_id"],
+            rating_data["rater_model"],
+            rating_data["prompt_id"],
+            rating_data["target_model_id"],
+            json.dumps(rating_data.get("blinding_order", [])),
+            rating_data.get("rater_reasoning"),
+            rating_data.get("raw_response"),
+            rating_data.get("status", "completed"),
+            rating_data.get("completed_at"),
+        ),
+    ) as cur:
+        rating_id = cur.lastrowid
+
+    item_rows = [
+        (rating_id, item["response_id"], item["position_label"], item.get("rank"))
+        for item in items_data
+    ]
+    await db.executemany(
+        """INSERT INTO ai_rating_items (rating_id, response_id, position_label, rank)
+           VALUES (?, ?, ?, ?)""",
+        item_rows,
+    )
+    await db.commit()
+    return rating_id
+
+
+async def list_ai_ratings(db, experiment_id):
+    """List ratings with items joined."""
+    async with db.execute(
+        "SELECT * FROM ai_ratings WHERE experiment_id = ? ORDER BY id",
+        (experiment_id,),
+    ) as cur:
+        rating_rows = await cur.fetchall()
+
+    result = []
+    for row in rating_rows:
+        d = dict(row)
+        if d.get("blinding_order"):
+            try:
+                d["blinding_order"] = json.loads(d["blinding_order"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        async with db.execute(
+            "SELECT * FROM ai_rating_items WHERE rating_id = ? ORDER BY position_label",
+            (d["id"],),
+        ) as cur:
+            items = await cur.fetchall()
+        d["items"] = [dict(i) for i in items]
+        result.append(d)
+    return result
+
+
+# --- Eval Task CRUD ---
+
+async def create_eval_tasks(db, tasks):
+    """Bulk insert eval_tasks rows."""
+    rows = [
+        (
+            t["experiment_id"],
+            t["batch_id"],
+            t["prompt_id"],
+            t["target_model_id"],
+            json.dumps(t.get("blinding_order", [])),
+            t["tracking_id"],
+            t.get("status", "pending"),
+        )
+        for t in tasks
+    ]
+    await db.executemany(
+        """INSERT INTO eval_tasks
+           (experiment_id, batch_id, prompt_id, target_model_id, blinding_order, tracking_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    await db.commit()
+
+
+async def list_eval_tasks(db, experiment_id):
+    """List eval tasks for experiment."""
+    async with db.execute(
+        "SELECT * FROM eval_tasks WHERE experiment_id = ? ORDER BY id",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        if d.get("blinding_order"):
+            try:
+                d["blinding_order"] = json.loads(d["blinding_order"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        result.append(d)
+    return result
+
+
+async def create_eval_rating(db, eval_task_id, rater_id, ratings_data):
+    """Insert eval_rating row."""
+    cur = await db.execute(
+        """INSERT INTO eval_ratings
+           (eval_task_id, rater_id, response_id, position_label, rank, reasoning, completion_time_s, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            eval_task_id,
+            rater_id,
+            ratings_data["response_id"],
+            ratings_data["position_label"],
+            ratings_data.get("rank"),
+            ratings_data.get("reasoning"),
+            ratings_data.get("completion_time_s"),
+            ratings_data.get("completed_at"),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_eval_ratings(db, experiment_id):
+    """List eval ratings joined with tasks."""
+    async with db.execute(
+        """SELECT er.*, et.batch_id, et.prompt_id, et.target_model_id, et.tracking_id
+           FROM eval_ratings er
+           JOIN eval_tasks et ON et.id = er.eval_task_id
+           WHERE et.experiment_id = ?
+           ORDER BY er.id""",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Analysis CRUD ---
+
+async def save_analysis_result(db, experiment_id, analysis_type, results, scope="full", model_id=None, parameters=None):
+    """Save analysis result."""
+    cur = await db.execute(
+        """INSERT INTO analysis_results
+           (experiment_id, analysis_type, scope, model_id, parameters, results)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            experiment_id,
+            analysis_type,
+            scope,
+            model_id,
+            json.dumps(parameters or {}),
+            json.dumps(results) if not isinstance(results, str) else results,
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_analysis_results(db, experiment_id):
+    """List analysis results for experiment."""
+    async with db.execute(
+        "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC",
+        (experiment_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        for field in ("parameters", "results"):
+            if d.get(field):
+                try:
+                    d[field] = json.loads(d[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        result.append(d)
+    return result

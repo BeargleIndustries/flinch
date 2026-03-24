@@ -2466,7 +2466,7 @@ async def create_publication_export(req: PublicationExportRequest):
             _conn, req.name, req.format, req.template, req.filters, content,
         )
 
-        return {"export_id": export_id, "content": content}
+        return {"export_id": export_id, "preview": content}
     except HTTPException:
         raise
     except Exception as e:

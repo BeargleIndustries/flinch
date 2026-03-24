@@ -19,6 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pdf = ["weasyprint>=60.0"]
 multi-model = ["openai", "google-genai"]
 experiment = [
     "textstat>=0.7.3",

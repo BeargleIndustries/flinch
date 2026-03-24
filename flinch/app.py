@@ -3,6 +3,7 @@ import asyncio
 import os
 import json
 import csv
+import html as html_mod
 import io
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -22,6 +23,7 @@ from flinch.models import (
     CreateExperimentRequest, StartExperimentRequest, RunAIRatersRequest,
     GenerateProlificExportRequest, BulkPromptImportRequest, RunAnalysisRequest,
     GenerateReportRequest, ConditionCreate, ExperimentPromptCreate,
+    ThemeSummary,
 )
 from flinch.db import (
     get_async_db, create_experiment, get_experiment, list_experiments,
@@ -744,7 +746,7 @@ async def get_consistency(session_id: int):
 @app.get("/api/sessions/{session_id}/export")
 async def export_session(session_id: int, format: str = "json", include_turns: bool = False,
                           include_annotations: bool = False, include_policy: bool = False,
-                          include_variants: bool = False):
+                          include_variants: bool = False, theme: str = "beargle-dark"):
     session = db.get_session(_conn, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -1035,6 +1037,56 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
             content=md_content,
             media_type="text/markdown",
             headers={"Content-Disposition": f'attachment; filename="flinch-report-{safe_name}-{date_str}.md"'}
+        )
+
+    # --- HTML / PDF format ---
+    if format in ("html", "pdf"):
+        from flinch.themes import get_theme, render_theme_css, html_to_pdf
+        enriched = db.export_session_enriched(_conn, session_id, include_turns=include_turns,
+                                               include_annotations=True, include_policy=True,
+                                               include_variants=True)
+        runs = enriched.get("runs", [])
+        summary = enriched.get("summary", {})
+        findings = enriched.get("findings", [])
+        theme_obj = get_theme(theme)
+        css = render_theme_css(theme_obj)
+        _esc = html_mod.escape
+        rows_html = ""
+        for run in runs:
+            rows_html += (
+                f"<tr><td>{_esc(str(run.get('probe_name','')))}</td>"
+                f"<td>{_esc(str(run.get('probe_domain','')))}</td>"
+                f"<td>{_esc(str(run.get('initial_classification','')))}</td>"
+                f"<td>{_esc(str(run.get('final_classification','')))}</td></tr>\n"
+            )
+        _title = _esc(session['name'])
+        _model = _esc(session['target_model'])
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>{_title}</title>
+<style>{css}</style></head>
+<body>
+<h1>{_title}</h1>
+<p>Model: {_model} &nbsp;|&nbsp; Exported: {date_str}</p>
+<h2>Summary</h2>
+<p>Total runs: {summary.get('total_runs', len(runs))} &nbsp;|&nbsp; Findings: {len(findings)}</p>
+<h2>Runs</h2>
+<table>
+<thead><tr><th>Probe</th><th>Domain</th><th>Initial</th><th>Final</th></tr></thead>
+<tbody>{rows_html}</tbody>
+</table>
+</body></html>"""
+        if format == "pdf":
+            pdf_bytes = html_to_pdf(html_content)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="flinch-{safe_name}-{date_str}.pdf"'},
+            )
+        return Response(
+            content=html_content,
+            media_type="text/html",
+            headers={"Content-Disposition": f'attachment; filename="flinch-{safe_name}-{date_str}.html"'},
         )
 
     # --- CSV format ---
@@ -2196,7 +2248,7 @@ async def dashboard_sequences():
 
 
 @app.get("/api/sequences/{sequence_id}/export")
-async def export_sequence(sequence_id: int, format: str = "json"):
+async def export_sequence(sequence_id: int, format: str = "json", theme: str = "beargle-dark"):
     """Export a single sequence with all turns."""
     data = db.export_sequence_data(_conn, sequence_id)
     if not data:
@@ -2219,6 +2271,45 @@ async def export_sequence(sequence_id: int, format: str = "json"):
             content=output.getvalue(),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="flinch-sequence-{sequence_id}-{date_str}.csv"'}
+        )
+
+    if format in ("html", "pdf"):
+        from flinch.themes import get_theme, render_theme_css, html_to_pdf
+        theme_obj = get_theme(theme)
+        css = render_theme_css(theme_obj)
+        _esc = html_mod.escape
+        rows_html = ""
+        for turn in data.get("turns", []):
+            rows_html += (
+                f"<tr><td>{_esc(str(turn.get('turn_index','')))}</td>"
+                f"<td>{_esc(str(turn.get('role','')))}</td>"
+                f"<td style='white-space:pre-wrap'>{_esc(str(turn.get('content','')))}</td>"
+                f"<td>{_esc(str(turn.get('classification','')))}</td></tr>\n"
+            )
+        seq_name = _esc(data.get("probe_name", f"sequence-{sequence_id}"))
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Sequence: {seq_name}</title>
+<style>{css}</style></head>
+<body>
+<h1>Sequence: {seq_name}</h1>
+<p>Exported: {date_str}</p>
+<table>
+<thead><tr><th>#</th><th>Role</th><th>Content</th><th>Classification</th></tr></thead>
+<tbody>{rows_html}</tbody>
+</table>
+</body></html>"""
+        if format == "pdf":
+            pdf_bytes = html_to_pdf(html_content)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="flinch-sequence-{sequence_id}-{date_str}.pdf"'},
+            )
+        return Response(
+            content=html_content,
+            media_type="text/html",
+            headers={"Content-Disposition": f'attachment; filename="flinch-sequence-{sequence_id}-{date_str}.html"'},
         )
 
     export_obj = {
@@ -2369,7 +2460,7 @@ async def create_publication_export(req: PublicationExportRequest):
         if not generator:
             raise HTTPException(400, f"Unknown template: {req.template}")
 
-        content = generator(_conn, req.filters, req.format)
+        content = generator(_conn, req.filters, req.format, req.theme)
 
         export_id = db.save_publication_export(
             _conn, req.name, req.format, req.template, req.filters, content,
@@ -2408,19 +2499,68 @@ async def download_publication_export(export_id: int):
         "markdown": "text/markdown",
         "html": "text/html",
         "csv": "text/csv",
+        "pdf": "application/pdf",
     }
-    extensions = {"markdown": "md", "html": "html", "csv": "csv"}
+    extensions = {"markdown": "md", "html": "html", "csv": "csv", "pdf": "pdf"}
 
     fmt = exp.get("format", "markdown")
     ct = content_types.get(fmt, "text/plain")
     ext = extensions.get(fmt, "txt")
     filename = f"{exp['name'].replace(' ', '_')}.{ext}"
 
+    if fmt == "pdf":
+        from flinch.themes import html_to_pdf
+        pdf_bytes = html_to_pdf(exp["content"])
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     return Response(
         content=exp["content"],
         media_type=ct,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ─── Theme API ────────────────────────────────────────────────────────────────
+
+@app.get("/api/themes")
+async def list_themes():
+    """List available export themes."""
+    from flinch.themes import load_themes
+    themes = load_themes()
+    return [
+        ThemeSummary(
+            name=t.name,
+            display_name=t.display_name,
+            description=t.description,
+            is_builtin=t.is_builtin,
+        )
+        for t in themes.values()
+    ]
+
+
+@app.get("/api/themes/{name}")
+async def get_theme_detail(name: str):
+    """Get full theme properties for preview."""
+    from flinch.themes import load_themes
+    themes = load_themes()
+    if name not in themes:
+        raise HTTPException(status_code=404, detail=f"Theme '{name}' not found")
+    theme = themes[name]
+    # Exclude source_file (filesystem path) from API response
+    return theme.model_dump(exclude={"source_file"})
+
+
+@app.get("/api/themes/{name}/preview-css")
+async def get_theme_css(name: str):
+    """Get raw CSS for client-side preview rendering."""
+    from flinch.themes import get_theme, render_theme_css
+    theme = get_theme(name)
+    css = render_theme_css(theme)
+    return Response(content=css, media_type="text/css")
 
 
 # ============================================================

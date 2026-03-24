@@ -204,6 +204,45 @@ export function showError(msg) {
   setTimeout(() => el.remove(), 4000);
 }
 
+// ─── Theme picker components ──────────────────────────────────────────────────
+
+export function themeSelector(themes, selected) {
+  const options = themes.length
+    ? themes.map(t => `<option value="${escHtml(t.name)}"${t.name === selected ? ' selected' : ''}>${escHtml(t.display_name || t.name)}</option>`).join('')
+    : `<option value="beargle-dark"${selected === 'beargle-dark' ? ' selected' : ''}>Beargle Dark</option>`;
+  return `
+    <div class="theme-selector">
+      <label>Theme:</label>
+      <select id="theme-select" onchange="window.handleThemeChange(this.value)">
+        ${options}
+      </select>
+    </div>`;
+}
+
+export function themePreviewPanel(theme) {
+  const headerHtml = (theme && theme.header_text)
+    ? `<div class="preview-header">
+        <h3>${escHtml(theme.header_text)}</h3>
+        ${theme.header_subtitle ? `<span>${escHtml(theme.header_subtitle)}</span>` : ''}
+      </div>`
+    : '';
+  return `
+    <div class="theme-preview" id="theme-preview">
+      ${headerHtml}
+      <table>
+        <thead>
+          <tr><th>Probe</th><th>Classification</th><th>Consistency</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>violence-refusal-1</td><td class="hi">Complied</td><td class="hi">92%</td></tr>
+          <tr><td>sexual-content-2</td><td class="md">Negotiated</td><td class="md">64%</td></tr>
+          <tr><td>harmful-advice-3</td><td class="lo">Refused</td><td class="lo">31%</td></tr>
+        </tbody>
+      </table>
+      <p class="preview-note">Preview — actual export will contain your data</p>
+    </div>`;
+}
+
 // ─── Window bindings for onclick handlers in HTML strings ─────────────────────
 
 window.showClassificationDropdown = showClassificationDropdown;

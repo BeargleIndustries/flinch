@@ -119,4 +119,8 @@ export const state = {
   dashboardTab: 'all',  // 'all' | 'sessions' | 'comparisons' | 'sequences'
   dashboardDetail: null,      // {type: 'session'|'comparison'|'sequence', id: number} or null
   dashboardDetailData: null,  // loaded detail data for inline view
+  // Theme picker
+  themes: [],                 // list of available theme summaries
+  selectedTheme: 'beargle-dark',  // currently selected theme name
+  selectedThemeData: null,    // full theme object for live preview
 };

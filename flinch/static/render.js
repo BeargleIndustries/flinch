@@ -1,7 +1,7 @@
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 import { state, setPhase } from './state.js';
-import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants } from './api.js';
+import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants, fetchThemes, fetchTheme } from './api.js';
 import {
   escHtml,
   normalizeClassification,
@@ -12,6 +12,8 @@ import {
   filterProbes,
   showError,
   formatResponseText,
+  themeSelector,
+  themePreviewPanel,
 } from './components.js';
 
 export function render() {
@@ -4225,6 +4227,7 @@ function renderPublicationExportView() {
   const formats = [
     { id: 'markdown', name: 'Markdown' },
     { id: 'html', name: 'HTML' },
+    { id: 'pdf', name: 'PDF' },
     { id: 'csv', name: 'CSV' },
     { id: 'json', name: 'JSON' },
   ];
@@ -4283,6 +4286,12 @@ function renderPublicationExportView() {
         </div>
       </div>
 
+      <div style="margin-bottom:16px;">
+        <div class="card-label">Theme</div>
+        ${themeSelector(state.themes, state.selectedTheme)}
+        ${themePreviewPanel(state.selectedThemeData)}
+      </div>
+
       <button class="btn-primary" onclick="handleGeneratePublication()" style="background:#84cc16; color:#000;">Generate Preview</button>
     </div>`;
 
@@ -4304,6 +4313,28 @@ function renderPublicationExportView() {
 
   html += `</div>`;
   main.innerHTML = html;
+
+  // Load themes in background — populate selector and apply initial preview
+  if (!state.themes.length) {
+    fetchThemes().then(themes => {
+      state.themes = themes;
+      const sel = document.getElementById('theme-select');
+      if (sel) {
+        sel.innerHTML = themes.map(t =>
+          `<option value="${escHtml(t.name)}"${t.name === state.selectedTheme ? ' selected' : ''}>${escHtml(t.display_name || t.name)}</option>`
+        ).join('');
+      }
+    }).catch(() => {});
+  }
+  // Apply saved theme data to preview if available
+  if (state.selectedThemeData) {
+    applyThemeToPreview(state.selectedThemeData);
+  } else {
+    fetchTheme(state.selectedTheme).then(theme => {
+      state.selectedThemeData = theme;
+      applyThemeToPreview(theme);
+    }).catch(() => {});
+  }
 }
 
 window.handleGeneratePublication = async function() {
@@ -4317,8 +4348,39 @@ window.handleGeneratePublication = async function() {
   if (domain) filters.domain = domain;
 
   try {
-    await generatePublicationExport('export', format, template, filters);
+    await generatePublicationExport('export', format, template, filters, state.selectedTheme);
   } catch (e) { showError('Publication export failed: ' + e.message); }
+};
+
+// ─── Theme picker ─────────────────────────────────────────────────────────────
+
+function applyThemeToPreview(theme) {
+  const el = document.getElementById('theme-preview');
+  if (!el || !theme) return;
+  el.style.setProperty('--theme-bg', theme.bg_color);
+  el.style.setProperty('--theme-bg-secondary', theme.bg_secondary);
+  el.style.setProperty('--theme-text', theme.text_color);
+  el.style.setProperty('--theme-text-secondary', theme.text_secondary);
+  el.style.setProperty('--theme-accent', theme.accent_color);
+  el.style.setProperty('--theme-border', theme.border_color);
+  el.style.setProperty('--theme-heading', theme.heading_color);
+  el.style.setProperty('--theme-color-high', theme.color_high);
+  el.style.setProperty('--theme-color-mid', theme.color_mid);
+  el.style.setProperty('--theme-color-low', theme.color_low);
+  el.style.setProperty('--theme-font-body', theme.font_body);
+  el.style.setProperty('--theme-font-mono', theme.font_mono);
+  el.style.setProperty('--theme-font-heading', theme.font_heading);
+}
+
+window.handleThemeChange = async function(name) {
+  state.selectedTheme = name;
+  try {
+    const theme = await fetchTheme(name);
+    state.selectedThemeData = theme;
+    applyThemeToPreview(theme);
+  } catch (e) {
+    showError('Failed to load theme: ' + e.message);
+  }
 };
 
 window.handleDownloadPublication = async function(exportId) {

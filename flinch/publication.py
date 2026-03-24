@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timezone
 from html import escape as html_escape
 
+from flinch.themes import get_theme, render_theme_css, render_theme_header
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -15,21 +17,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _CLASSIFICATIONS = ("refused", "collapsed", "negotiated", "complied")
-
-_HTML_STYLE = """
-<style>
-  body { background:#111; color:#e0e0e0; font-family:monospace; padding:2rem; }
-  h1,h2,h3 { color:#ccc; }
-  table { border-collapse:collapse; width:100%; margin-bottom:2rem; }
-  th { background:#222; color:#aaa; text-align:left; padding:6px 12px; border:1px solid #333; }
-  td { padding:5px 12px; border:1px solid #2a2a2a; vertical-align:top; }
-  tr:nth-child(even) td { background:#161616; }
-  .hi { color:#6ef; }
-  .lo { color:#f86; }
-  .md { color:#fa6; }
-  p.meta { color:#666; font-size:0.85em; }
-</style>
-"""
 
 
 def _pct(numerator: int, denominator: int) -> str:
@@ -199,6 +186,7 @@ def generate_comparison_table(
     conn,
     filters: dict | None = None,
     format: str = "markdown",
+    theme: str = "beargle-dark",
 ) -> str:
     """Per-model comparison table.
 
@@ -259,6 +247,7 @@ def generate_consistency_matrix(
     conn,
     filters: dict | None = None,
     format: str = "markdown",
+    theme: str = "beargle-dark",
 ) -> str:
     """Probe × Model matrix of consistency rates from stat runs.
 
@@ -330,6 +319,7 @@ def generate_pushback_summary(
     conn,
     filters: dict | None = None,
     format: str = "markdown",
+    theme: str = "beargle-dark",
 ) -> str:
     """Pushback effectiveness summary from coach_examples.
 
@@ -410,7 +400,8 @@ def generate_full_report(
     conn,
     filters: dict | None = None,
     format: str = "markdown",
-) -> str:
+    theme: str = "beargle-dark",
+) -> str | bytes:
     """Full research report combining all sections with summary statistics.
 
     Sections:
@@ -423,10 +414,11 @@ def generate_full_report(
     stats = _summary_stats(conn, filters)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    # Build section bodies
-    comparison = generate_comparison_table(conn, filters, format)
-    matrix = generate_consistency_matrix(conn, filters, format)
-    pushback = generate_pushback_summary(conn, filters, format)
+    # Build section bodies (csv/markdown format; html/pdf branch regenerates as html below)
+    _section_fmt = format if format not in ("html", "pdf") else "html"
+    comparison = generate_comparison_table(conn, filters, _section_fmt, theme)
+    matrix = generate_consistency_matrix(conn, filters, _section_fmt, theme)
+    pushback = generate_pushback_summary(conn, filters, _section_fmt, theme)
 
     if format == "csv":
         # CSV: concatenate sections with blank rows between them
@@ -450,7 +442,10 @@ def generate_full_report(
         ]
         return "\n".join(parts)
 
-    if format == "html":
+    if format in ("html", "pdf"):
+        theme_obj = get_theme(theme)
+        theme_css = render_theme_css(theme_obj)
+        theme_header = render_theme_header(theme_obj)
         refusal_rate = _pct(stats.get("refused") or 0, stats.get("total_runs") or 0)
         meta_block = (
             "<h1>Flinch Research Export</h1>\n"
@@ -461,15 +456,21 @@ def generate_full_report(
             f'Date range: {stats.get("date_start", "—")} → {stats.get("date_end", "—")} &nbsp;|&nbsp; '
             f'Overall refusal rate: {refusal_rate}</p>\n'
         )
-        return (
+        html_doc = (
             f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
-            f"<title>Flinch Export</title>{_HTML_STYLE}</head><body>\n"
-            + meta_block
+            f"<title>Flinch Export</title>{theme_css}</head><body>\n"
+            + theme_header
+            + "\n" + meta_block
             + "\n" + comparison
             + "\n" + matrix
             + "\n" + pushback
             + "\n</body></html>"
         )
+        if format == "html":
+            return html_doc
+        # PDF: convert HTML to bytes via WeasyPrint — returns bytes, not str
+        from flinch.themes import html_to_pdf  # noqa: PLC0415
+        return html_to_pdf(html_doc)
 
     # Markdown
     refusal_rate = _pct(stats.get("refused") or 0, stats.get("total_runs") or 0)

@@ -1617,11 +1617,13 @@ export async function listScorecards() {
 
 // ─── Publication Export ──────────────────────────────────────────────────────
 
-export async function generatePublicationExport(name, format, template, filters) {
+export async function generatePublicationExport(name, format, template, filters, theme) {
   try {
+    const body = { name, format, template, filters };
+    if (theme) body.theme = theme;
     const result = await api('/api/publication/export', {
       method: 'POST',
-      body: { name, format, template, filters },
+      body,
     });
     state.publicationExport = result;
     render();
@@ -1649,4 +1651,18 @@ export async function downloadPublicationExport(exportId) {
     showError('Download failed: ' + e.message);
     throw e;
   }
+}
+
+// ─── Theme API ────────────────────────────────────────────────────────────────
+
+export async function fetchThemes() {
+  const resp = await fetch('/api/themes');
+  if (!resp.ok) throw new Error('Failed to fetch themes');
+  return resp.json();
+}
+
+export async function fetchTheme(name) {
+  const resp = await fetch(`/api/themes/${encodeURIComponent(name)}`);
+  if (!resp.ok) throw new Error(`Failed to fetch theme: ${name}`);
+  return resp.json();
 }

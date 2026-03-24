@@ -147,6 +147,55 @@ class PublicationExportRequest(BaseModel):
     format: str = "markdown"  # markdown, html, csv
     template: str = "full_report"  # comparison_table, consistency_matrix, pushback_summary, full_report
     filters: dict | None = None
+    theme: str = "beargle-dark"
+
+
+class ExportTheme(BaseModel):
+    """Theme definition for export rendering."""
+    name: str                          # "beargle-dark"
+    display_name: str                  # "Beargle Dark"
+    description: str = ""
+
+    # Colors
+    bg_color: str = "#0a0a0a"          # Page/body background
+    bg_secondary: str = "#161616"      # Alternating row / card background
+    text_color: str = "#e0e0e0"        # Primary text
+    text_secondary: str = "#aaaaaa"    # Muted text (metadata, footnotes)
+    accent_color: str = "#4a9eff"      # Links, highlights, primary accent
+    border_color: str = "#2a2a2a"      # Table borders, dividers
+    heading_color: str = "#cccccc"     # h1/h2/h3
+
+    # Classification colors (used in tables/badges)
+    color_high: str = "#6ef"           # High consistency / complied
+    color_mid: str = "#fa6"            # Medium / negotiated
+    color_low: str = "#f86"            # Low / refused-collapsed
+
+    # Typography
+    font_body: str = "system-ui, -apple-system, sans-serif"
+    font_mono: str = "'JetBrains Mono', 'Fira Code', monospace"
+    font_heading: str = "Poppins, system-ui, sans-serif"
+    font_size_base: str = "14px"
+
+    # Header/branding (OFF by default)
+    show_logo: bool = False
+    logo_url: str = ""                 # Path or URL to logo image
+    header_text: str = ""              # e.g. "Beargle Industries"
+    header_subtitle: str = ""          # e.g. "Flinch Research Report"
+
+    # Layout
+    max_width: str = "1200px"
+    padding: str = "2rem"
+
+    # Meta
+    is_builtin: bool = False
+    source_file: str = ""
+
+
+class ThemeSummary(BaseModel):
+    name: str
+    display_name: str
+    description: str
+    is_builtin: bool
 
 
 # ============================================================

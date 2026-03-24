@@ -981,6 +981,89 @@
     .feature-description strong {
       color: var(--text-secondary);
     }
+
+    /* ─── Theme preview panel ───────────────────────────────────────────────── */
+
+    .theme-preview {
+      background: var(--theme-bg, #0a0a0a);
+      color: var(--theme-text, #e0e0e0);
+      font-family: var(--theme-font-body, var(--font-system));
+      padding: 1.5rem;
+      border-radius: 8px;
+      border: 1px solid var(--theme-border, #2a2a2a);
+      margin: 12px 0;
+      transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    }
+    .theme-preview .preview-header {
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--theme-border, #2a2a2a);
+    }
+    .theme-preview .preview-header h3 {
+      font-family: var(--theme-font-heading, var(--font-system));
+      color: var(--theme-heading, #cccccc);
+      margin: 0 0 4px 0;
+      font-size: 1.1rem;
+    }
+    .theme-preview .preview-header span {
+      color: var(--theme-text-secondary, #aaa);
+      font-size: 0.85rem;
+    }
+    .theme-preview table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--theme-font-mono, var(--font-mono));
+      font-size: 0.85rem;
+    }
+    .theme-preview th {
+      background: var(--theme-bg-secondary, #161616);
+      color: var(--theme-text-secondary, #aaa);
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--theme-border, #2a2a2a);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .theme-preview td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--theme-border, #2a2a2a);
+    }
+    .theme-preview tr:nth-child(even) td {
+      background: var(--theme-bg-secondary, #161616);
+    }
+    .theme-preview .hi { color: var(--theme-color-high, #6ef); }
+    .theme-preview .md { color: var(--theme-color-mid, #fa6); }
+    .theme-preview .lo { color: var(--theme-color-low, #f86); }
+    .theme-preview .preview-note {
+      color: var(--theme-text-secondary, #aaa);
+      font-size: 0.75rem;
+      font-style: italic;
+      margin-top: 12px;
+      text-align: center;
+    }
+
+    .theme-selector {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+    }
+    .theme-selector label {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      white-space: nowrap;
+      width: auto;
+    }
+    .theme-selector select {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-light);
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      width: auto;
+    }
+    .theme-selector select:focus { border-color: var(--accent); }
   </style>
 </head>
 <body class="h-full flex overflow-hidden" style="height:100vh;">

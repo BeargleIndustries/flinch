@@ -14,7 +14,7 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 
 ## Status
 
-**v0.3.0 — Research Preview.** Actively used for research. The core workflow is solid — probe, classify, coach, pushback, compare. Dashboard for browsing all your data. Narrative momentum for multi-turn testing. Multi-provider support for cross-model comparison. Rough edges remain; bug reports welcome.
+**v0.7.0 — Research Preview.** Actively used for research. Core workflow solid — probe, classify, coach, pushback, compare. Statistical analysis, publication-ready exports with configurable themes, PDF generation, RLHF experiment framework. Bug reports welcome.
 
 ## Features
 
@@ -28,15 +28,29 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 
 ### Comparison & Analysis
 - **Multi-model comparison** — run the same probes across models, see agreement/disagreement side-by-side with persistent results
-- **Variant groups** — test semantically equivalent probes with different framing to detect inconsistency
+- **Statistical analysis** — run probes repeatedly (up to 100x) per model to get refusal rate distributions and consistency scores
+- **Framing variants** — test semantically equivalent probes with different framing to detect inconsistency, with AI-generated variant groups
 - **Narrative momentum** — multi-turn conversation sequences with configurable warmup strategies that build context before the test probe, tracking at which turn compliance occurs
+- **Policy scorecards** — cross-model policy enforcement comparison with per-domain breakdowns
+
+### Publication & Export
+- **Themed exports** — configurable theme system for HTML and PDF exports with live preview
+- **Built-in themes** — Beargle Dark, Clean Light, and Neutral Dark presets; create custom themes via markdown files
+- **PDF export** — generate publication-ready PDF reports (requires optional `weasyprint` dependency)
+- **Publication templates** — comparison tables, consistency matrices, pushback summaries, and full research reports
+- **Data export** — per-session export (JSON, CSV, HTML, PDF) plus bulk "Export All" for complete data download
 
 ### Dashboard & Data
 - **Dashboard** — unified data browser with aggregate stats, classification distribution, and inline detail views for all sessions, comparisons, and sequences
 - **Inline data viewing** — click any session to see runs with full probe text, responses, and pushback conversations; click comparisons for side-by-side model results; click sequences for turn-by-turn flow
-- **Data export** — per-item export (JSON, CSV) plus bulk "Export All" for complete data download
 - **Clear all data** — two-step confirmation to reset the database while preserving probes and strategies
 - **Dark theme web UI** — runs locally in your browser
+
+### Experiment Framework
+- **RLHF experiment design** — structured experiment creation with conditions, prompts, and model matrices
+- **AI rater pipeline** — automated evaluation using multiple rater models with blinding and position randomization
+- **Statistical analysis** — win rates, effect sizes, confidence intervals, inter-rater agreement (Krippendorff's alpha)
+- **Report generation** — publication-ready experiment reports in markdown, HTML, or LaTeX
 
 ## Supported Models
 
@@ -68,9 +82,16 @@ python -m flinch.app
 # Open http://127.0.0.1:8000
 ```
 
-For multi-model testing, install optional dependencies:
+Optional dependencies:
 ```bash
+# Multi-model testing (OpenAI, Google)
 pip install -e ".[multi-model]"
+
+# PDF export (requires system libraries — cairo, pango)
+pip install -e ".[pdf]"
+
+# RLHF experiment framework (stats, charts, inter-rater agreement)
+pip install -e ".[experiment]"
 ```
 
 ## How It Works
@@ -99,6 +120,31 @@ The actual prompt text sent to the target model.
 ```
 
 Load probes into Flinch using the "Load Defaults" button in the sidebar, or create them directly in the UI.
+
+## Custom Themes
+
+Export themes are markdown files in `flinch/themes/`. Create a new `.md` file following the same format as `presets.md`:
+
+```markdown
+## my-theme
+- display_name: My Theme
+- description: A custom theme for exports
+- bg_color: #1e1e2e
+- text_color: #cdd6f4
+- accent_color: #89b4fa
+- border_color: #313244
+- heading_color: #cba6f7
+- color_high: #a6e3a1
+- color_mid: #f9e2af
+- color_low: #f38ba8
+- font_body: system-ui, sans-serif
+- font_mono: monospace
+- font_heading: system-ui, sans-serif
+- font_size_base: 14px
+- max_width: 1100px
+```
+
+Custom themes appear in the theme picker after restarting the server.
 
 ## Research Background
 

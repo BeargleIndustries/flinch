@@ -419,7 +419,6 @@ function renderIdleState() {
           Test if models respond consistently to the same request framed differently.
         </div>
       </div>
-      <div style="margin-top:16px;">${renderExportDropdown()}</div>
       `}
     </div>
   `;

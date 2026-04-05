@@ -621,52 +621,59 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
             return
 
         # --- Stream runner events, writing into experiment tables as we go ---
+        # Reuse one async DB connection for all experiment writes
         try:
-            async for event in _runner.run_batch_conditions(
-                session_id, req.probe_ids, conditions, req.delay_ms
-            ):
-                event_type = event["event"]
-                event_data = event["data"]
+            async with await get_async_db() as exp_db:
+                async for event in _runner.run_batch_conditions(
+                    session_id, req.probe_ids, conditions, req.delay_ms
+                ):
+                    event_type = event["event"]
+                    event_data = event["data"]
 
-                if event_type == "progress" and experiment_id is not None:
-                    try:
-                        cond_label = event_data.get("condition", "")
-                        probe_id = event_data.get("probe_id")
-                        resp_text = event_data.get("response_text", "")
-                        classification = event_data.get("classification", "")
+                    if event_type == "progress" and experiment_id is not None:
+                        try:
+                            cond_label = event_data.get("condition", "")
+                            probe_id = event_data.get("probe_id")
+                            resp_text = event_data.get("response_text", "")
+                            classification = event_data.get("classification", "")
 
-                        cond_id = condition_label_to_id.get(cond_label)
-                        prompt_id = probe_id_to_prompt_id.get(probe_id)
+                            cond_id = condition_label_to_id.get(cond_label)
+                            prompt_id = probe_id_to_prompt_id.get(probe_id)
 
-                        if cond_id is not None and prompt_id is not None:
-                            async with await get_async_db() as db_conn:
+                            if cond_id is not None and prompt_id is not None:
                                 row = await find_experiment_response(
-                                    db_conn, experiment_id, cond_id, prompt_id, target_model
+                                    exp_db, experiment_id, cond_id, prompt_id, target_model
                                 )
                                 if row:
-                                    from datetime import datetime, timezone as _tz2
                                     await update_experiment_response(
-                                        db_conn,
+                                        exp_db,
                                         row["id"],
                                         response_text=resp_text,
                                         classification=classification,
                                         status="completed",
-                                        completed_at=datetime.now(_tz2.utc).isoformat(),
+                                        completed_at=datetime.now(_tz.utc).isoformat(),
                                     )
-                    except Exception:
-                        pass  # Don't let experiment writes break the stream
+                        except Exception as write_err:
+                            logging.getLogger("flinch").warning("Experiment write failed for probe %s condition %s: %s",
+                                           event_data.get("probe_id"), event_data.get("condition"), write_err)
 
-                elif event_type == "complete":
-                    if experiment_id is not None:
-                        try:
-                            async with await get_async_db() as db_conn:
-                                await update_experiment(db_conn, experiment_id, status="completed")
-                        except Exception:
-                            pass
-                    event_data = dict(event_data, experiment_id=experiment_id)
+                    elif event_type == "complete":
+                        if experiment_id is not None:
+                            try:
+                                await update_experiment(exp_db, experiment_id, status="completed")
+                            except Exception as complete_err:
+                                logging.getLogger("flinch").warning("Failed to mark experiment %s completed: %s", experiment_id, complete_err)
+                        event_data = dict(event_data, experiment_id=experiment_id)
 
-                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
+            # Mark experiment as failed if stream crashes
+            if experiment_id is not None:
+                try:
+                    async with await get_async_db() as fail_db:
+                        await update_experiment(fail_db, experiment_id, status="failed")
+                except Exception:
+                    pass
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(

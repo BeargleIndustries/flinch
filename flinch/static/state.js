@@ -126,4 +126,7 @@ export const state = {
   // Bulk probe select mode
   probeSelectMode: false,
   selectedProbeIds: new Set(),
+  // Condition comparison dashboard
+  conditionExperimentId: null,     // experiment_id from batch-conditions complete event
+  conditionComparisonData: null,   // cached GET /condition-comparison response
 };

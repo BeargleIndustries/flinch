@@ -371,6 +371,7 @@ CREATE TABLE IF NOT EXISTS experiment_responses (
     attempt_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
+    classification TEXT,
     UNIQUE(experiment_id, condition_id, prompt_id, model_id)
 );
 
@@ -523,6 +524,14 @@ def _migrate_response_metrics_table(conn):
     conn.commit()
 
 
+def _migrate_experiment_responses_table(conn):
+    """Add classification column to experiment_responses if missing."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(experiment_responses)").fetchall()}
+    if "classification" not in cols:
+        conn.execute("ALTER TABLE experiment_responses ADD COLUMN classification TEXT")
+    conn.commit()
+
+
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -533,6 +542,7 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     _migrate_sessions_table(conn)
     _migrate_response_metrics_table(conn)
+    _migrate_experiment_responses_table(conn)
     # Migrations: add columns that may not exist in older DBs
     try:
         conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT DEFAULT ''")
@@ -3389,10 +3399,21 @@ async def get_experiment_response(db, response_id):
     return dict(row) if row else None
 
 
+async def find_experiment_response(db, experiment_id, condition_id, prompt_id, model_id):
+    """Find a specific response cell by its unique key."""
+    async with db.execute(
+        """SELECT * FROM experiment_responses
+           WHERE experiment_id = ? AND condition_id = ? AND prompt_id = ? AND model_id = ?""",
+        (experiment_id, condition_id, prompt_id, model_id),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
 ALLOWED_RESPONSE_FIELDS = {
     "response_text", "raw_response", "latency_ms", "token_count_input",
     "token_count_output", "finish_reason", "status", "error_message",
-    "attempt_count", "completed_at",
+    "attempt_count", "completed_at", "classification",
 }
 
 
@@ -3716,3 +3737,92 @@ async def list_analysis_results(db, experiment_id):
                     pass
         result.append(d)
     return result
+
+
+async def get_condition_comparison(db, experiment_id):
+    """Aggregate per-condition stats from experiment_responses + response_metrics + analysis_results."""
+    import statistics
+
+    # All conditions for this experiment
+    async with db.execute(
+        "SELECT * FROM experiment_conditions WHERE experiment_id = ? ORDER BY sort_order, id",
+        (experiment_id,),
+    ) as cur:
+        condition_rows = await cur.fetchall()
+
+    conditions = []
+    has_metrics = False
+
+    metric_cols = [
+        "word_count", "sentence_count", "flesch_kincaid_grade", "flesch_reading_ease",
+        "gunning_fog", "mtld", "ttr", "honore_statistic",
+        "hedging_ratio", "confidence_ratio", "evasion_ratio", "subjectivity", "polarity",
+    ]
+
+    for cond_row in condition_rows:
+        cond = dict(cond_row)
+        cond_id = cond["id"]
+
+        # Response counts + classification distribution
+        async with db.execute(
+            "SELECT classification FROM experiment_responses WHERE experiment_id = ? AND condition_id = ? AND status = 'completed'",
+            (experiment_id, cond_id),
+        ) as cur:
+            resp_rows = await cur.fetchall()
+
+        total = len(resp_rows)
+        classifications: dict[str, int] = {}
+        for r in resp_rows:
+            cls = r[0] or "unknown"
+            classifications[cls] = classifications.get(cls, 0) + 1
+
+        complied = classifications.get("complied", 0)
+        negotiated = classifications.get("negotiated", 0)
+        compliance_rate = (complied + negotiated) / total if total > 0 else None
+
+        # Metric aggregation via JOIN
+        select_cols = ", ".join(f"rm.{c}" for c in metric_cols)
+        async with db.execute(
+            f"""SELECT {select_cols}
+                FROM response_metrics rm
+                JOIN experiment_responses er ON rm.response_id = er.id
+                WHERE er.experiment_id = ? AND er.condition_id = ? AND er.status = 'completed'""",
+            (experiment_id, cond_id),
+        ) as cur:
+            metric_rows = await cur.fetchall()
+
+        metrics: dict[str, dict] = {}
+        if metric_rows:
+            has_metrics = True
+            for i, col in enumerate(metric_cols):
+                vals = [r[i] for r in metric_rows if r[i] is not None]
+                if vals:
+                    metrics[col] = {
+                        "mean": statistics.mean(vals),
+                        "sd": statistics.stdev(vals) if len(vals) > 1 else 0.0,
+                        "n": len(vals),
+                    }
+
+        conditions.append({
+            "id": cond_id,
+            "label": cond["label"],
+            "system_prompt": cond["system_prompt"],
+            "description": cond.get("description", ""),
+            "response_count": total,
+            "classifications": classifications,
+            "compliance_rate": compliance_rate,
+            "metrics": metrics,
+        })
+
+    # Analysis results (may not exist)
+    analysis_list = await list_analysis_results(db, experiment_id)
+    has_analysis = len(analysis_list) > 0
+    analysis_results = analysis_list[0] if analysis_list else None
+
+    return {
+        "experiment_id": experiment_id,
+        "conditions": conditions,
+        "has_metrics": has_metrics,
+        "has_analysis": has_analysis,
+        "analysis_results": analysis_results,
+    }

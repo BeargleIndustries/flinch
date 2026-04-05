@@ -1799,6 +1799,26 @@ function renderVariantResultsTab(data) {
     return html;
   }
 
+  // Condition experiment available — show prominent entry point
+  if (state.conditionExperimentId) {
+    html += `
+      <div class="card" style="margin-bottom:16px; border-color:#1e3a5f; background:linear-gradient(135deg, #0a1628 0%, #0f0f0f 100%);">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <div>
+            <div style="font-size:13px; font-weight:600; color:#93c5fd; font-family:'JetBrains Mono',monospace; margin-bottom:4px;">Condition Experiment #${state.conditionExperimentId}</div>
+            <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Results available — view compliance rates, metrics, and response browser</div>
+          </div>
+          <button onclick="window.openConditionDashboard(${state.conditionExperimentId})"
+            style="padding:8px 18px; font-size:12px; font-family:'JetBrains Mono',monospace; background:#1e3a5f; border:1px solid #3b82f6; color:#93c5fd; border-radius:6px; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseenter="this.style.background='#2563eb'; this.style.color='#fff'"
+            onmouseleave="this.style.background='#1e3a5f'; this.style.color='#93c5fd'">
+            View Results
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
   if (!data) {
     html += `<div style="color:#4b5563; padding:20px; font-family:'JetBrains Mono',monospace; font-size:13px;">Failed to load consistency data.</div>`;
     return html;
@@ -1867,6 +1887,283 @@ function renderVariantResultsTab(data) {
   }
 
   return html;
+}
+
+// ─── Condition Comparison Dashboard ──────────────────────────────────────────
+
+export async function renderConditionComparisonDashboard(experimentId) {
+  const main = document.getElementById('main');
+
+  main.innerHTML = `
+    <div style="display:flex; align-items:center; gap:8px; padding:20px 0;">
+      <span class="spinner"></span>
+      <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Loading condition comparison...</span>
+    </div>
+  `;
+
+  let data;
+  try {
+    const { getConditionComparison } = await import('./api.js');
+    data = await getConditionComparison(experimentId);
+    state.conditionComparisonData = data;
+  } catch (e) {
+    main.innerHTML = `<div style="color:#ef4444; padding:20px; font-family:'JetBrains Mono',monospace; font-size:13px;">Failed to load comparison: ${escHtml(e.message)}</div>`;
+    return;
+  }
+
+  _renderConditionDashboardHTML(experimentId, data);
+}
+
+function _renderConditionDashboardHTML(experimentId, data) {
+  const main = document.getElementById('main');
+  const conditions = data.conditions || [];
+  const hasMetrics = data.has_metrics || false;
+  const hasAnalysis = data.has_analysis || false;
+  const analysisResults = data.analysis_results || null;
+
+  // Classification color map
+  const CLS_COLORS = {
+    refused:    { bg: 'rgba(239,68,68,0.15)',   border: 'rgba(239,68,68,0.4)',   text: '#ef4444',  label: 'Refused' },
+    collapsed:  { bg: 'rgba(245,158,11,0.15)',  border: 'rgba(245,158,11,0.4)',  text: '#f59e0b',  label: 'Collapsed' },
+    negotiated: { bg: 'rgba(59,130,246,0.15)',  border: 'rgba(59,130,246,0.4)',  text: '#3b82f6',  label: 'Negotiated' },
+    complied:   { bg: 'rgba(52,211,153,0.15)',  border: 'rgba(52,211,153,0.4)',  text: '#34d399',  label: 'Complied' },
+    unknown:    { bg: 'rgba(100,116,139,0.15)', border: 'rgba(100,116,139,0.4)', text: '#64748b',  label: 'Unknown' },
+  };
+
+  const CLS_ORDER = ['refused', 'collapsed', 'negotiated', 'complied', 'unknown'];
+
+  function clsBar(classifications, total) {
+    if (!total) return `<div style="height:6px; background:#1a1a1a; border-radius:3px;"></div>`;
+    const segs = CLS_ORDER
+      .filter(k => classifications[k])
+      .map(k => {
+        const pct = ((classifications[k] / total) * 100).toFixed(1);
+        const c = CLS_COLORS[k] || CLS_COLORS.unknown;
+        return `<div style="flex:${classifications[k]}; background:${c.text}; height:100%;" title="${c.label}: ${classifications[k]} (${pct}%)"></div>`;
+      }).join('');
+    return `<div style="display:flex; height:6px; border-radius:3px; overflow:hidden; background:#1a1a1a; margin-bottom:6px;">${segs}</div>`;
+  }
+
+  function clsLegend(classifications, total) {
+    return CLS_ORDER
+      .filter(k => classifications[k])
+      .map(k => {
+        const c = CLS_COLORS[k] || CLS_COLORS.unknown;
+        const pct = total ? ((classifications[k] / total) * 100).toFixed(0) : 0;
+        return `<span style="font-size:10px; font-family:'JetBrains Mono',monospace; color:${c.text};">${c.label.substring(0,3).toUpperCase()} ${pct}%</span>`;
+      }).join('<span style="color:#252a35; margin:0 4px;">·</span>');
+  }
+
+  // ── Header ──
+  let html = `<div class="fade-in" style="max-width:1040px;">`;
+  html += `
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <div>
+        <div style="font-size:18px; font-weight:600; color:#f1f5f9; margin-bottom:2px;">Condition Comparison</div>
+        <div style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Experiment #${experimentId} — ${conditions.length} condition(s)</div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        ${!hasMetrics ? `
+          <button id="btn-compute-metrics"
+            onclick="window._conditionComputeMetrics(${experimentId})"
+            style="padding:7px 14px; font-size:12px; font-family:'JetBrains Mono',monospace; background:rgba(59,130,246,0.1); border:1px solid rgba(59,130,246,0.35); color:#3b82f6; border-radius:6px; cursor:pointer; transition:all 0.15s;"
+            onmouseenter="this.style.background='rgba(59,130,246,0.2)'"
+            onmouseleave="this.style.background='rgba(59,130,246,0.1)'">
+            Compute Metrics
+          </button>
+        ` : `
+          <span style="font-size:11px; color:#34d399; font-family:'JetBrains Mono',monospace; padding:7px 12px; background:rgba(52,211,153,0.08); border:1px solid rgba(52,211,153,0.2); border-radius:6px;">metrics computed</span>
+        `}
+        ${hasMetrics && !hasAnalysis ? `
+          <button id="btn-run-analysis"
+            onclick="window._conditionRunAnalysis(${experimentId})"
+            style="padding:7px 14px; font-size:12px; font-family:'JetBrains Mono',monospace; background:rgba(168,85,247,0.1); border:1px solid rgba(168,85,247,0.35); color:#a855f7; border-radius:6px; cursor:pointer; transition:all 0.15s;"
+            onmouseenter="this.style.background='rgba(168,85,247,0.2)'"
+            onmouseleave="this.style.background='rgba(168,85,247,0.1)'">
+            Run Analysis
+          </button>
+        ` : hasAnalysis ? `
+          <span style="font-size:11px; color:#a855f7; font-family:'JetBrains Mono',monospace; padding:7px 12px; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:6px;">analysis done</span>
+        ` : ''}
+        <button onclick="window.exportConditionCSV(${experimentId})"
+          style="padding:7px 14px; font-size:12px; font-family:'JetBrains Mono',monospace; background:rgba(52,211,153,0.08); border:1px solid rgba(52,211,153,0.2); color:#34d399; border-radius:6px; cursor:pointer; transition:all 0.15s;"
+          onmouseenter="this.style.background='rgba(52,211,153,0.15)'"
+          onmouseleave="this.style.background='rgba(52,211,153,0.08)'">
+          Export CSV
+        </button>
+        <button onclick="renderConsistencyView()"
+          style="padding:7px 14px; font-size:12px; font-family:'JetBrains Mono',monospace; background:#1a1a1a; border:1px solid #252a35; color:#94a3b8; border-radius:6px; cursor:pointer; transition:all 0.15s;"
+          onmouseenter="this.style.background='#252a35'"
+          onmouseleave="this.style.background='#1a1a1a'">
+          Back
+        </button>
+      </div>
+    </div>
+  `;
+
+  // ── Progress bar placeholder (shown during metric computation) ──
+  html += `<div id="condition-progress-bar" style="display:none; margin-bottom:16px;"></div>`;
+
+  // ── Condition cards ──
+  html += `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; margin-bottom:24px;">`;
+  for (const cond of conditions) {
+    const total = cond.response_count || 0;
+    const cls = cond.classifications || {};
+    const rate = cond.compliance_rate !== null && cond.compliance_rate !== undefined
+      ? Math.round(cond.compliance_rate * 100) + '%'
+      : '—';
+    const rateColor = cond.compliance_rate === null ? '#4b5563'
+      : cond.compliance_rate >= 0.7 ? '#34d399'
+      : cond.compliance_rate >= 0.4 ? '#f59e0b'
+      : '#ef4444';
+
+    html += `
+      <div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; padding:16px;">
+        <div style="font-size:13px; font-weight:600; color:#e2e8f0; font-family:'JetBrains Mono',monospace; margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(cond.label)}</div>
+        <div style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace; margin-bottom:10px;">${total} response${total !== 1 ? 's' : ''}</div>
+        ${clsBar(cls, total)}
+        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px;">${clsLegend(cls, total)}</div>
+        <div style="display:flex; align-items:baseline; gap:6px;">
+          <span style="font-size:22px; font-weight:700; color:${rateColor}; font-family:'JetBrains Mono',monospace; letter-spacing:-0.02em;">${rate}</span>
+          <span style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace;">compliance</span>
+        </div>
+        ${cond.description ? `<div style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace; margin-top:8px; line-height:1.4;">${escHtml(cond.description)}</div>` : ''}
+      </div>
+    `;
+  }
+  html += `</div>`;
+
+  // ── Metric comparison table ──
+  if (hasMetrics && conditions.length > 0) {
+    const METRIC_LABELS = {
+      mtld:               'MTLD',
+      honore_statistic:   'Honoré',
+      hedging_ratio:      'Hedging',
+      confidence_ratio:   'Confidence',
+      evasion_ratio:      'Evasion',
+      flesch_kincaid_grade: 'F-K Grade',
+      word_count:         'Words',
+      ttr:                'TTR',
+      subjectivity:       'Subjectivity',
+      polarity:           'Polarity',
+    };
+
+    // Get significance data keyed by metric if analysis exists
+    const sigMap = {};
+    if (hasAnalysis && analysisResults) {
+      const raw = analysisResults.results || analysisResults;
+      if (raw && typeof raw === 'object') {
+        for (const [metric, info] of Object.entries(raw)) {
+          if (info && info.p_value !== undefined) {
+            sigMap[metric] = info.p_value;
+          }
+        }
+      }
+    }
+
+    function sigStars(pval) {
+      if (pval === undefined || pval === null) return '';
+      if (pval < 0.001) return '<span style="color:#f59e0b; font-weight:700;">***</span>';
+      if (pval < 0.01)  return '<span style="color:#f59e0b; font-weight:700;">**</span>';
+      if (pval < 0.05)  return '<span style="color:#f59e0b;">*</span>';
+      return '';
+    }
+
+    function fmtStat(val, sd) {
+      if (val === undefined || val === null) return '<span style="color:#374151;">—</span>';
+      const v = typeof val === 'number' ? (Math.abs(val) >= 100 ? val.toFixed(0) : val.toFixed(2)) : val;
+      const s = sd !== undefined && sd !== null ? (Math.abs(sd) >= 100 ? sd.toFixed(0) : sd.toFixed(2)) : null;
+      return s !== null
+        ? `<span style="color:#e2e8f0;">${v}</span><span style="color:#374151; font-size:10px;">±${s}</span>`
+        : `<span style="color:#e2e8f0;">${v}</span>`;
+    }
+
+    html += `
+      <div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; padding:16px; margin-bottom:24px; overflow-x:auto;">
+        <div style="font-size:11px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#374151; font-family:'JetBrains Mono',monospace; margin-bottom:12px;">Metric Comparison</div>
+        <table style="width:100%; border-collapse:collapse; font-family:'JetBrains Mono',monospace; font-size:12px;">
+          <thead>
+            <tr>
+              <th style="text-align:left; padding:6px 12px 6px 0; color:#4b5563; font-weight:600; border-bottom:1px solid #1a1a1a; white-space:nowrap;">Metric</th>
+              ${conditions.map(c => `<th style="text-align:right; padding:6px 12px; color:#64748b; font-weight:600; border-bottom:1px solid #1a1a1a; white-space:nowrap;">${escHtml(c.label)}</th>`).join('')}
+              ${hasAnalysis ? `<th style="text-align:center; padding:6px 8px; color:#4b5563; font-weight:600; border-bottom:1px solid #1a1a1a;">Sig</th>` : ''}
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    for (const [metricKey, metricLabel] of Object.entries(METRIC_LABELS)) {
+      const hasAnyData = conditions.some(c => c.metrics && c.metrics[metricKey]);
+      if (!hasAnyData) continue;
+
+      html += `<tr>
+        <td style="padding:7px 12px 7px 0; color:#64748b; border-bottom:1px solid #111; white-space:nowrap;">${metricLabel}</td>
+        ${conditions.map(c => {
+          const m = c.metrics && c.metrics[metricKey];
+          return `<td style="text-align:right; padding:7px 12px; border-bottom:1px solid #111;">${fmtStat(m ? m.mean : null, m ? m.sd : null)}</td>`;
+        }).join('')}
+        ${hasAnalysis ? `<td style="text-align:center; padding:7px 8px; border-bottom:1px solid #111;">${sigStars(sigMap[metricKey])}</td>` : ''}
+      </tr>`;
+    }
+
+    html += `
+          </tbody>
+        </table>
+        ${hasAnalysis ? `<div style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace; margin-top:8px;">* p&lt;.05 &nbsp; ** p&lt;.01 &nbsp; *** p&lt;.001</div>` : ''}
+      </div>
+    `;
+  }
+
+  // ── Response browser ──
+  if (conditions.length > 0) {
+    // Build probe list from the first condition's responses — we'll load via API
+    const condIds = conditions.map(c => c.id);
+
+    html += `
+      <div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; padding:16px; margin-bottom:24px;">
+        <div style="font-size:11px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#374151; font-family:'JetBrains Mono',monospace; margin-bottom:12px;">Response Browser</div>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <label style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Probe:</label>
+          <select id="condition-probe-picker"
+            onchange="window._loadConditionResponses(${experimentId}, this.value)"
+            style="background:#0a0a0a; border:1px solid #1a1a1a; color:#e2e8f0; font-family:'JetBrains Mono',monospace; font-size:12px; padding:5px 10px; border-radius:5px; min-width:240px; cursor:pointer;">
+            <option value="">— select a probe —</option>
+          </select>
+        </div>
+        <div id="condition-responses-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px;">
+          <div style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace; padding:16px; grid-column:1/-1;">Select a probe to compare responses across conditions.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  html += `</div>`;
+  main.innerHTML = html;
+
+  // Async: populate probe picker
+  if (conditions.length > 0) {
+    _populateConditionProbePicker(experimentId);
+  }
+}
+
+async function _populateConditionProbePicker(experimentId) {
+  try {
+    const resp = await fetch(`/api/experiments/${experimentId}/prompts`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const prompts = data.prompts || [];
+    const picker = document.getElementById('condition-probe-picker');
+    if (!picker) return;
+    picker.innerHTML = '<option value="">— select a probe —</option>';
+    for (const p of prompts) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.probe_name || p.custom_prompt_text?.substring(0, 60) || `Prompt #${p.id}`;
+      picker.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load prompts for picker:', e);
+  }
 }
 
 function renderVariantRow(index) {
@@ -2539,6 +2836,154 @@ window.exitCompareMode = exitCompareMode;
 window.showCompareModal = showCompareModal;
 window.renderCompareView = renderCompareView;
 window.renderConsistencyView = renderConsistencyView;
+window.renderConditionComparisonDashboard = renderConditionComparisonDashboard;
+
+window.openConditionDashboard = async function(experimentId) {
+  await renderConditionComparisonDashboard(experimentId);
+};
+
+window._conditionComputeMetrics = async function(experimentId) {
+  const btn = document.getElementById('btn-compute-metrics');
+  const progressEl = document.getElementById('condition-progress-bar');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Computing...';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  }
+  if (progressEl) {
+    progressEl.style.display = 'block';
+    progressEl.innerHTML = `
+      <div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:6px; padding:10px 14px; display:flex; align-items:center; gap:10px;">
+        <span class="spinner"></span>
+        <span id="condition-progress-text" style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Starting metric computation...</span>
+      </div>
+    `;
+  }
+
+  try {
+    const { triggerComputeMetrics } = await import('./api.js');
+    await triggerComputeMetrics(experimentId, (evt) => {
+      const textEl = document.getElementById('condition-progress-text');
+      if (textEl && evt) {
+        const msg = evt.message || evt.status || JSON.stringify(evt);
+        textEl.textContent = msg;
+      }
+    });
+    // Refresh dashboard with new data
+    state.conditionComparisonData = null;
+    await renderConditionComparisonDashboard(experimentId);
+  } catch (e) {
+    if (progressEl) {
+      progressEl.innerHTML = `<div style="color:#ef4444; font-family:'JetBrains Mono',monospace; font-size:12px; padding:8px 0;">Metric computation failed: ${escHtml(e.message)}</div>`;
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Compute Metrics';
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+    }
+  }
+};
+
+window._conditionRunAnalysis = async function(experimentId) {
+  const btn = document.getElementById('btn-run-analysis');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  }
+  try {
+    const { triggerRunAnalysis } = await import('./api.js');
+    await triggerRunAnalysis(experimentId);
+    // Refresh dashboard
+    state.conditionComparisonData = null;
+    await renderConditionComparisonDashboard(experimentId);
+  } catch (e) {
+    showError('Analysis failed: ' + e.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Run Analysis';
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+    }
+  }
+};
+
+window._loadConditionResponses = async function(experimentId, promptId) {
+  const grid = document.getElementById('condition-responses-grid');
+  if (!grid) return;
+  if (!promptId) {
+    grid.innerHTML = `<div style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace; padding:16px; grid-column:1/-1;">Select a probe to compare responses across conditions.</div>`;
+    return;
+  }
+
+  grid.innerHTML = `
+    <div style="grid-column:1/-1; display:flex; align-items:center; gap:8px; padding:12px 0;">
+      <span class="spinner"></span>
+      <span style="font-size:12px; color:#4b5563; font-family:'JetBrains Mono',monospace;">Loading responses...</span>
+    </div>
+  `;
+
+  try {
+    const resp = await fetch(`/api/experiments/${experimentId}/responses?prompt_id=${promptId}`);
+    if (!resp.ok) throw new Error('Failed to load responses');
+    const data = await resp.json();
+    const responses = data.responses || [];
+
+    const data2 = state.conditionComparisonData;
+    const conditions = data2 ? data2.conditions : [];
+
+    if (responses.length === 0) {
+      grid.innerHTML = `<div style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace; padding:16px; grid-column:1/-1;">No responses for this probe yet.</div>`;
+      return;
+    }
+
+    // Group by condition_id
+    const byCondition = {};
+    for (const r of responses) {
+      if (!byCondition[r.condition_id]) byCondition[r.condition_id] = [];
+      byCondition[r.condition_id].push(r);
+    }
+
+    const CLS_COLORS = {
+      refused:    '#ef4444',
+      collapsed:  '#f59e0b',
+      negotiated: '#3b82f6',
+      complied:   '#34d399',
+      unknown:    '#64748b',
+    };
+
+    let html = '';
+    const orderedConds = conditions.length > 0 ? conditions : Object.keys(byCondition).map(id => ({ id: parseInt(id), label: `Condition ${id}` }));
+
+    for (const cond of orderedConds) {
+      const condResponses = byCondition[cond.id] || [];
+      const r = condResponses[0]; // show first response for this prompt×condition
+      const cls = r ? (r.classification || 'unknown') : null;
+      const clsColor = cls ? (CLS_COLORS[cls] || CLS_COLORS.unknown) : '#374151';
+      const text = r ? (r.response_text || '') : null;
+
+      html += `
+        <div style="background:#0a0a0a; border:1px solid #1a1a1a; border-radius:6px; padding:12px; display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div style="font-size:11px; font-weight:600; color:#64748b; font-family:'JetBrains Mono',monospace; letter-spacing:0.05em; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(cond.label)}</div>
+            ${cls ? `<span style="font-size:10px; font-weight:600; color:${clsColor}; font-family:'JetBrains Mono',monospace; white-space:nowrap;">${cls.toUpperCase()}</span>` : ''}
+          </div>
+          ${text
+            ? `<div style="font-size:11px; color:#94a3b8; line-height:1.6; white-space:pre-wrap; max-height:200px; overflow-y:auto; word-break:break-word;">${escHtml(text.substring(0, 800))}${text.length > 800 ? '<span style="color:#374151;">…</span>' : ''}</div>`
+            : `<div style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace; font-style:italic;">No response recorded</div>`
+          }
+        </div>
+      `;
+    }
+
+    grid.innerHTML = html;
+  } catch (e) {
+    grid.innerHTML = `<div style="color:#ef4444; font-family:'JetBrains Mono',monospace; font-size:12px; grid-column:1/-1;">Failed to load responses: ${escHtml(e.message)}</div>`;
+  }
+};
 
 window.reviewComparison = async function(comparisonId) {
   try {

@@ -359,6 +359,7 @@ class Runner:
                             "probe_name": probe["name"],
                             "run_id": run_id,
                             "condition": cond_label,
+                            "response_text": response_text,
                             "classification": classification.value,
                             "completed": completed,
                             "total": total,

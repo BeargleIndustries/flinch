@@ -32,6 +32,7 @@ from flinch.db import (
     add_experiment_prompts, bulk_import_prompts, list_experiment_prompts,
     create_experiment_responses, get_experiment_progress, get_pending_responses,
     list_ai_ratings, list_eval_tasks, list_analysis_results, get_response_metrics,
+    find_experiment_response, update_experiment_response, get_condition_comparison,
 )
 from flinch.runner import Runner
 from flinch.seed import seed_default_profile, seed_examples
@@ -566,6 +567,8 @@ async def run_batch(session_id: int, req: BatchRequest):
 
 @app.post("/api/sessions/{session_id}/batch-conditions")
 async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
+    from datetime import datetime, timezone as _tz
+
     session = db.get_session(_conn, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -577,13 +580,92 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
     conditions = [c.model_dump() for c in req.conditions]
 
     async def event_generator():
+        # --- Setup experiment tables before streaming ---
+        experiment_id = None
+        condition_label_to_id: dict[str, int] = {}
+        probe_id_to_prompt_id: dict[int, int] = {}
+        target_model = session.get("target_model", "unknown")
+
+        try:
+            async with await get_async_db() as db_conn:
+                ts = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                experiment_id = await create_experiment(
+                    db_conn,
+                    name=f"Condition run: {session_id} @ {ts}",
+                    description=f"Auto-created from batch-conditions run for session {session_id}",
+                    model_ids=[target_model],
+                )
+
+                for i, cond in enumerate(conditions):
+                    cid = await create_condition(
+                        db_conn,
+                        experiment_id,
+                        label=cond["label"],
+                        system_prompt=cond.get("system_prompt", ""),
+                        sort_order=i,
+                    )
+                    condition_label_to_id[cond["label"]] = cid
+
+                prompt_entries = [{"probe_id": pid, "sort_order": i} for i, pid in enumerate(req.probe_ids)]
+                await add_experiment_prompts(db_conn, experiment_id, prompt_entries)
+
+                exp_prompts = await list_experiment_prompts(db_conn, experiment_id)
+                for ep in exp_prompts:
+                    if ep.get("probe_id") is not None:
+                        probe_id_to_prompt_id[ep["probe_id"]] = ep["id"]
+
+                await create_experiment_responses(db_conn, experiment_id)
+                await update_experiment(db_conn, experiment_id, status="running")
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': f'experiment setup failed: {e}'})}\n\n"
+            return
+
+        # --- Stream runner events, writing into experiment tables as we go ---
         try:
             async for event in _runner.run_batch_conditions(
                 session_id, req.probe_ids, conditions, req.delay_ms
             ):
                 event_type = event["event"]
-                event_data = json.dumps(event["data"])
-                yield f"event: {event_type}\ndata: {event_data}\n\n"
+                event_data = event["data"]
+
+                if event_type == "progress" and experiment_id is not None:
+                    try:
+                        cond_label = event_data.get("condition", "")
+                        probe_id = event_data.get("probe_id")
+                        resp_text = event_data.get("response_text", "")
+                        classification = event_data.get("classification", "")
+
+                        cond_id = condition_label_to_id.get(cond_label)
+                        prompt_id = probe_id_to_prompt_id.get(probe_id)
+
+                        if cond_id is not None and prompt_id is not None:
+                            async with await get_async_db() as db_conn:
+                                row = await find_experiment_response(
+                                    db_conn, experiment_id, cond_id, prompt_id, target_model
+                                )
+                                if row:
+                                    from datetime import datetime, timezone as _tz2
+                                    await update_experiment_response(
+                                        db_conn,
+                                        row["id"],
+                                        response_text=resp_text,
+                                        classification=classification,
+                                        status="completed",
+                                        completed_at=datetime.now(_tz2.utc).isoformat(),
+                                    )
+                    except Exception:
+                        pass  # Don't let experiment writes break the stream
+
+                elif event_type == "complete":
+                    if experiment_id is not None:
+                        try:
+                            async with await get_async_db() as db_conn:
+                                await update_experiment(db_conn, experiment_id, status="completed")
+                        except Exception:
+                            pass
+                    event_data = dict(event_data, experiment_id=experiment_id)
+
+                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
@@ -2946,7 +3028,7 @@ async def api_generate_report(experiment_id: int, req: GenerateReportRequest = G
 
 
 @app.get("/api/experiments/{experiment_id}/responses")
-async def api_list_responses(experiment_id: int, model_id: str = None, condition_id: int = None, status: str = None):
+async def api_list_responses(experiment_id: int, model_id: str = None, condition_id: int = None, prompt_id: int = None, status: str = None):
     """List experiment responses with optional filters."""
     async with await get_async_db() as db_conn:
         query = "SELECT * FROM experiment_responses WHERE experiment_id = ?"
@@ -2957,6 +3039,9 @@ async def api_list_responses(experiment_id: int, model_id: str = None, condition
         if condition_id:
             query += " AND condition_id = ?"
             params.append(condition_id)
+        if prompt_id:
+            query += " AND prompt_id = ?"
+            params.append(prompt_id)
         if status:
             query += " AND status = ?"
             params.append(status)
@@ -3017,6 +3102,67 @@ async def api_preregistration(experiment_id: int):
         reporter = ExperimentReporter(db_conn)
         doc = await reporter.generate_preregistration(experiment_id)
     return {"preregistration": doc}
+
+
+@app.get("/api/experiments/{experiment_id}/condition-comparison")
+async def api_condition_comparison(experiment_id: int):
+    """Return per-condition compliance rates and metric distributions."""
+    async with await get_async_db() as db_conn:
+        result = await get_condition_comparison(db_conn, experiment_id)
+    return result
+
+
+@app.get("/api/experiments/{experiment_id}/condition-export")
+async def api_condition_export_csv(experiment_id: int):
+    """Export all responses with metrics as CSV — one row per response."""
+    async with await get_async_db() as db_conn:
+        async with db_conn.execute(
+            """SELECT
+                p.name        AS probe_name,
+                COALESCE(ep.custom_prompt_text, p.prompt_text) AS probe_text,
+                COALESCE(ep.domain, p.domain, '') AS domain,
+                ec.label      AS condition_label,
+                ec.system_prompt,
+                er.classification,
+                er.response_text,
+                rm.word_count,
+                rm.sentence_count,
+                rm.flesch_kincaid_grade,
+                rm.flesch_reading_ease,
+                rm.gunning_fog,
+                rm.mtld,
+                rm.ttr,
+                rm.honore_statistic,
+                rm.hedging_ratio,
+                rm.confidence_ratio,
+                rm.evasion_ratio,
+                rm.subjectivity,
+                rm.polarity
+            FROM experiment_responses er
+            JOIN experiment_prompts ep ON er.prompt_id = ep.id
+            LEFT JOIN probes p ON ep.probe_id = p.id
+            JOIN experiment_conditions ec ON er.condition_id = ec.id
+            LEFT JOIN response_metrics rm ON rm.response_id = er.id
+            WHERE er.experiment_id = ?
+              AND er.status = 'completed'
+            ORDER BY ec.sort_order, ec.id, ep.sort_order, ep.id""",
+            (experiment_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            col_names = [d[0] for d in cur.description]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(col_names)
+    for row in rows:
+        writer.writerow(list(row))
+
+    content = buf.getvalue()
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=\"experiment_{experiment_id}_conditions.csv\""},
+    )
 
 
 def main():

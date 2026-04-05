@@ -138,6 +138,10 @@ export async function startBatchConditions(sessionId, probeIds, conditions, dela
         } else if (event === 'complete') {
           state.batchRunning = false;
           state.batchComplete = true;
+          if (data && data.experiment_id) {
+            state.conditionExperimentId = data.experiment_id;
+            state.conditionComparisonData = null; // invalidate cache
+          }
           loadStats();
           render();
         }
@@ -1753,3 +1757,49 @@ export async function fetchTheme(name) {
   if (!resp.ok) throw new Error(`Failed to fetch theme: ${name}`);
   return resp.json();
 }
+
+// ─── Condition Comparison ─────────────────────────────────────────────────────
+
+export async function getConditionComparison(experimentId) {
+  return api(`/api/experiments/${experimentId}/condition-comparison`);
+}
+
+export async function triggerComputeMetrics(experimentId, onProgress) {
+  const res = await fetch(`/api/experiments/${experimentId}/metrics`, { method: 'POST' });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Metrics failed: ${text}`);
+  }
+  // metrics endpoint is SSE — drain it
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (onProgress) onProgress(data);
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+export async function triggerRunAnalysis(experimentId) {
+  return api(`/api/experiments/${experimentId}/analyze`, { method: 'POST' });
+}
+
+export function exportConditionCSV(experimentId) {
+  triggerDownload(`/api/experiments/${experimentId}/condition-export`);
+}
+
+window.getConditionComparison = getConditionComparison;
+window.triggerComputeMetrics = triggerComputeMetrics;
+window.triggerRunAnalysis = triggerRunAnalysis;
+window.exportConditionCSV = exportConditionCSV;

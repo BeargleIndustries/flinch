@@ -1202,6 +1202,24 @@
           <div class="card-label">System Prompt (optional)</div>
           <textarea id="modal-session-system" placeholder="e.g. You are a creative fiction writing assistant..." rows="3" style="resize:vertical;"></textarea>
         </div>
+        <div>
+          <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none; padding:6px 0;"
+               onclick="toggleProbePickerSection()">
+            <div class="card-label" style="margin-bottom:0;">Probes</div>
+            <span id="modal-probe-picker-summary" style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace;">All probes</span>
+          </div>
+          <div id="modal-probe-picker" style="display:none; margin-top:6px;">
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+              <input id="modal-probe-search" type="text" placeholder="Search probes..."
+                     oninput="filterModalProbes(this.value)"
+                     style="flex:1; height:28px; padding:0 8px; font-size:12px; font-family:'JetBrains Mono',monospace; background:#0d0f16; border:1px solid #252a35; border-radius:4px; color:#e2e8f0; outline:none;"
+                     onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='#252a35'" />
+              <button onclick="modalProbeSelectAll()" style="font-size:11px; color:#4b5563; background:none; border:1px solid #252a35; border-radius:3px; cursor:pointer; padding:2px 8px; font-family:'JetBrains Mono',monospace; white-space:nowrap;">All</button>
+              <button onclick="modalProbeSelectNone()" style="font-size:11px; color:#4b5563; background:none; border:1px solid #252a35; border-radius:3px; cursor:pointer; padding:2px 8px; font-family:'JetBrains Mono',monospace; white-space:nowrap;">None</button>
+            </div>
+            <div id="modal-probe-list" style="max-height:240px; overflow-y:auto; border:1px solid #1a1a1a; border-radius:6px; background:#080808; padding:4px 0;"></div>
+          </div>
+        </div>
         <div style="display:flex; gap:8px; margin-top:8px;">
           <button class="btn-primary" onclick="submitNewSession()" style="flex:1;">Create Session</button>
           <button class="btn-ghost" onclick="closeNewSessionModal()">Cancel</button>

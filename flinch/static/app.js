@@ -24,6 +24,10 @@ async function showNewSessionModal() {
       if (modelSel) modelSel.value = defaults.model;
     }
   } catch (_) {}
+  // Populate probe picker with all probes, all selected by default
+  _modalProbeSearch = '';
+  _modalSelectedProbeIds = null; // null = all selected (default)
+  renderModalProbeList();
   setTimeout(() => document.getElementById('modal-session-name').focus(), 50);
 }
 
@@ -36,6 +40,15 @@ function closeNewSessionModal() {
   if (backendSel) backendSel.value = 'anthropic';
   const localSection = document.getElementById('modal-coach-local-section');
   if (localSection) localSection.style.display = 'none';
+  // Reset probe picker
+  _modalProbeSearch = '';
+  _modalSelectedProbeIds = null;
+  const picker = document.getElementById('modal-probe-picker');
+  if (picker) picker.style.display = 'none';
+  const summary = document.getElementById('modal-probe-picker-summary');
+  if (summary) summary.textContent = 'All probes';
+  const searchEl = document.getElementById('modal-probe-search');
+  if (searchEl) searchEl.value = '';
 }
 
 function handleCoachBackendChange(value) {
@@ -65,13 +78,153 @@ async function submitNewSession() {
     showError('Select a local model for the coach, or switch to Claude.');
     return;
   }
+  // Collect probe_ids — null means "all", otherwise pass the selected set
+  const probeIds = _modalSelectedProbeIds === null ? null : [..._modalSelectedProbeIds];
   try {
-    await createSession(name, model, coach, systemPrompt, coachBackend, coachModel);
+    await createSession(name, model, coach, systemPrompt, coachBackend, coachModel, probeIds);
     closeNewSessionModal();
   } catch (e) {
     showError('Failed to create session: ' + e.message);
   }
 }
+
+// ─── Probe picker state & helpers ────────────────────────────────────────────
+
+let _modalProbeSearch = '';
+let _modalSelectedProbeIds = null; // null = all probes; Set<int> = explicit selection
+
+function _getModalFilteredProbes() {
+  const q = _modalProbeSearch.toLowerCase();
+  return state.probes.filter(p => {
+    if (!q) return true;
+    return (p.name || '').toLowerCase().includes(q) ||
+           (p.prompt_text || '').toLowerCase().includes(q) ||
+           (p.domain || '').toLowerCase().includes(q);
+  });
+}
+
+function _updateModalProbeSummary() {
+  const summary = document.getElementById('modal-probe-picker-summary');
+  if (!summary) return;
+  if (_modalSelectedProbeIds === null) {
+    summary.textContent = 'All probes';
+    summary.style.color = '#4b5563';
+  } else {
+    const count = _modalSelectedProbeIds.size;
+    const total = state.probes.filter(p => p.id !== 'custom').length;
+    if (count === 0) {
+      summary.textContent = 'No probes selected';
+      summary.style.color = '#f87171';
+    } else if (count === total) {
+      summary.textContent = 'All probes';
+      summary.style.color = '#4b5563';
+    } else {
+      summary.textContent = `${count} / ${total} selected`;
+      summary.style.color = '#3b82f6';
+    }
+  }
+}
+
+function renderModalProbeList() {
+  const container = document.getElementById('modal-probe-list');
+  if (!container) return;
+
+  const probes = _getModalFilteredProbes().filter(p => p.id !== 'custom');
+  if (!probes.length) {
+    container.innerHTML = '<div style="padding:12px 10px; font-size:11px; color:#4b5563; font-family:\'JetBrains Mono\',monospace;">No probes match.</div>';
+    _updateModalProbeSummary();
+    return;
+  }
+
+  // Group by domain
+  const groups = {};
+  for (const p of probes) {
+    const d = p.domain || 'uncategorized';
+    if (!groups[d]) groups[d] = [];
+    groups[d].push(p);
+  }
+
+  const allRealIds = state.probes.filter(p => p.id !== 'custom').map(p => p.id);
+
+  let html = '';
+  for (const domain of Object.keys(groups).sort()) {
+    const domainProbes = groups[domain];
+    const domainIds = domainProbes.map(p => p.id);
+    const allChecked = _modalSelectedProbeIds === null
+      ? true
+      : domainIds.every(id => _modalSelectedProbeIds.has(id));
+
+    html += `<div style="padding:4px 8px 2px 8px; font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#4b5563; font-family:'JetBrains Mono',monospace; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;"
+      onclick="modalProbeToggleDomain(${JSON.stringify(domainIds)})">
+      <input type="checkbox" ${allChecked ? 'checked' : ''} onclick="event.stopPropagation(); modalProbeToggleDomain(${JSON.stringify(domainIds)})" style="cursor:pointer;" />
+      ${domain}
+    </div>`;
+
+    for (const p of domainProbes) {
+      const checked = _modalSelectedProbeIds === null || _modalSelectedProbeIds.has(p.id);
+      html += `<label style="display:flex; align-items:flex-start; gap:7px; padding:3px 8px 3px 22px; cursor:pointer; font-size:12px; font-family:'JetBrains Mono',monospace; color:#9ca3af; line-height:1.4;"
+        onmouseenter="this.style.background='#111'" onmouseleave="this.style.background=''"
+        onclick="event.preventDefault(); modalProbeToggle(${p.id})">
+        <input type="checkbox" ${checked ? 'checked' : ''} style="margin-top:2px; cursor:pointer; flex-shrink:0;" />
+        <span>${p.name}</span>
+      </label>`;
+    }
+  }
+
+  container.innerHTML = html;
+  _updateModalProbeSummary();
+}
+
+window.toggleProbePickerSection = function() {
+  const picker = document.getElementById('modal-probe-picker');
+  if (!picker) return;
+  const open = picker.style.display !== 'none';
+  picker.style.display = open ? 'none' : 'block';
+  if (!open) renderModalProbeList();
+};
+
+window.filterModalProbes = function(value) {
+  _modalProbeSearch = value;
+  renderModalProbeList();
+};
+
+window.modalProbeToggle = function(probeId) {
+  // Initialize from "all" if needed
+  if (_modalSelectedProbeIds === null) {
+    _modalSelectedProbeIds = new Set(state.probes.filter(p => p.id !== 'custom').map(p => p.id));
+  }
+  if (_modalSelectedProbeIds.has(probeId)) {
+    _modalSelectedProbeIds.delete(probeId);
+  } else {
+    _modalSelectedProbeIds.add(probeId);
+  }
+  renderModalProbeList();
+};
+
+window.modalProbeToggleDomain = function(domainIds) {
+  if (_modalSelectedProbeIds === null) {
+    _modalSelectedProbeIds = new Set(state.probes.filter(p => p.id !== 'custom').map(p => p.id));
+  }
+  const allChecked = domainIds.every(id => _modalSelectedProbeIds.has(id));
+  if (allChecked) {
+    domainIds.forEach(id => _modalSelectedProbeIds.delete(id));
+  } else {
+    domainIds.forEach(id => _modalSelectedProbeIds.add(id));
+  }
+  renderModalProbeList();
+};
+
+window.modalProbeSelectAll = function() {
+  _modalSelectedProbeIds = null; // null = all
+  const searchEl = document.getElementById('modal-probe-search');
+  if (searchEl) { searchEl.value = ''; _modalProbeSearch = ''; }
+  renderModalProbeList();
+};
+
+window.modalProbeSelectNone = function() {
+  _modalSelectedProbeIds = new Set();
+  renderModalProbeList();
+};
 
 function toggleAddProbeForm() {
   const form = document.getElementById('add-probe-form');

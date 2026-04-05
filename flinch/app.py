@@ -146,6 +146,7 @@ class CreateSessionRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=10000)
     coach_backend: str = "anthropic"
     coach_model: str | None = None
+    probe_ids: list[int] | None = None
 
 class SendProbeRequest(BaseModel):
     probe_id: int | None = None
@@ -239,7 +240,11 @@ async def get_version():
 
 # Probes
 @app.get("/api/probes")
-async def list_probes():
+async def list_probes(session_id: int | None = None):
+    if session_id is not None:
+        session = db.get_session(_conn, session_id)
+        if session and session.get("probe_ids"):
+            return db.list_probes(_conn, probe_ids=session["probe_ids"])
     return db.list_probes(_conn)
 
 @app.delete("/api/probes/{probe_id}")
@@ -302,6 +307,7 @@ async def create_session(req: CreateSessionRequest):
         _conn, req.name, req.target_model, req.coach_profile, req.notes, req.system_prompt,
         coach_backend=req.coach_backend,
         coach_model=req.coach_model,
+        probe_ids=req.probe_ids if req.probe_ids else None,
     )
     return db.get_session(_conn, session_id)
 
@@ -491,7 +497,9 @@ async def run_batch(session_id: int, req: BatchRequest):
 
     probe_ids = req.probe_ids
     if not probe_ids:
-        probes = db.list_probes(_conn)
+        # Default to session's probe selection if set, otherwise all probes
+        session_probe_ids = session.get("probe_ids")
+        probes = db.list_probes(_conn, probe_ids=session_probe_ids if session_probe_ids else None)
         probe_ids = [p["id"] for p in probes]
 
     if not probe_ids:

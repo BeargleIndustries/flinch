@@ -65,12 +65,18 @@ export function renderProbeListOnly() {
     return;
   }
 
-  const total = state.probes.length;
-  const filtered = filterProbes(state.probes, state.probeSearch, state.probeDomainFilter);
+  // Filter to session's probe selection if set
+  const sessionProbeIds = state.currentSession?.probe_ids;
+  const sessionProbes = (sessionProbeIds && sessionProbeIds.length > 0)
+    ? state.probes.filter(p => sessionProbeIds.includes(p.id))
+    : state.probes;
+
+  const total = sessionProbes.length;
+  const filtered = filterProbes(sessionProbes, state.probeSearch, state.probeDomainFilter);
   const visible = filtered.length;
 
-  // Build unique domain list for dropdown (from full probe list, sorted)
-  const allDomains = [...new Set(state.probes.map(p => p.domain || 'uncategorized'))].sort();
+  // Build unique domain list for dropdown (from session-scoped probe list, sorted)
+  const allDomains = [...new Set(sessionProbes.map(p => p.domain || 'uncategorized'))].sort();
 
   const clearBtn = state.probeSearch
     ? `<span onclick="window.clearProbeSearch()" title="Clear search"
@@ -2815,7 +2821,11 @@ window.toggleProbeSelection = function(probeId) {
 };
 
 window.probeSelectAll = function() {
-  const filtered = filterProbes(state.probes, state.probeSearch, state.probeDomainFilter);
+  const sessionProbeIds = state.currentSession?.probe_ids;
+  const sessionProbes = (sessionProbeIds && sessionProbeIds.length > 0)
+    ? state.probes.filter(p => sessionProbeIds.includes(p.id))
+    : state.probes;
+  const filtered = filterProbes(sessionProbes, state.probeSearch, state.probeDomainFilter);
   const allVisibleIds = filtered.filter(p => p.id !== 'custom').map(p => p.id);
   const allSelected = allVisibleIds.every(id => state.selectedProbeIds.has(id));
   if (allSelected) {

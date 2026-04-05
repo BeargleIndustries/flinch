@@ -550,6 +550,12 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
             conn.commit()
         except Exception:
             pass
+    # Migration: probe_ids column on sessions
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN probe_ids TEXT DEFAULT NULL")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
     # Migration: comparisons table for existing DBs
     try:
         conn.execute("SELECT 1 FROM comparisons LIMIT 1")
@@ -603,8 +609,14 @@ def delete_all_probes(conn) -> None:
     conn.commit()
 
 
-def list_probes(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM probes ORDER BY id").fetchall()
+def list_probes(conn, probe_ids: list[int] | None = None) -> list[dict]:
+    if probe_ids is not None:
+        if not probe_ids:
+            return []
+        placeholders = ",".join("?" * len(probe_ids))
+        rows = conn.execute(f"SELECT * FROM probes WHERE id IN ({placeholders}) ORDER BY id", probe_ids).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM probes ORDER BY id").fetchall()
     result = []
     for row in rows:
         d = _row_to_dict(row)
@@ -624,23 +636,34 @@ def get_probe(conn, probe_id: int) -> dict | None:
 
 # --- Session CRUD ---
 
-def create_session(conn, name, target_model="claude-sonnet-4-20250514", coach_profile="standard", notes="", system_prompt="", coach_backend="anthropic", coach_model=None) -> int:
+def create_session(conn, name, target_model="claude-sonnet-4-20250514", coach_profile="standard", notes="", system_prompt="", coach_backend="anthropic", coach_model=None, probe_ids=None) -> int:
+    probe_ids_json = json.dumps(probe_ids) if probe_ids is not None else None
     cur = conn.execute(
-        "INSERT INTO sessions (name, target_model, coach_profile, notes, system_prompt, coach_backend, coach_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, target_model, coach_profile, notes, system_prompt, coach_backend, coach_model),
+        "INSERT INTO sessions (name, target_model, coach_profile, notes, system_prompt, coach_backend, coach_model, probe_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, target_model, coach_profile, notes, system_prompt, coach_backend, coach_model, probe_ids_json),
     )
     conn.commit()
     return cur.lastrowid
 
 
+def _parse_session(row) -> dict | None:
+    d = _row_to_dict(row)
+    if d and d.get("probe_ids"):
+        try:
+            d["probe_ids"] = json.loads(d["probe_ids"])
+        except Exception:
+            d["probe_ids"] = None
+    return d
+
+
 def get_session(conn, session_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    return _row_to_dict(row)
+    return _parse_session(row)
 
 
 def list_sessions(conn) -> list[dict]:
     rows = conn.execute("SELECT * FROM sessions ORDER BY id").fetchall()
-    return [_row_to_dict(r) for r in rows]
+    return [_parse_session(r) for r in rows]
 
 
 def complete_session(conn, session_id: int):

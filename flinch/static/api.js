@@ -150,10 +150,11 @@ export async function loadTurns(runId) {
 
 // ─── Session actions ──────────────────────────────────────────────────────────
 
-export async function createSession(name, targetModel, coachProfile, systemPrompt, coachBackend, coachModel) {
+export async function createSession(name, targetModel, coachProfile, systemPrompt, coachBackend, coachModel, probeIds) {
   const body = { name, target_model: targetModel, coach_profile: coachProfile || 'standard', system_prompt: systemPrompt || '' };
   if (coachBackend) body.coach_backend = coachBackend;
   if (coachModel) body.coach_model = coachModel;
+  if (probeIds && probeIds.length > 0) body.probe_ids = probeIds;
   const session = await api('/api/sessions', {
     method: 'POST',
     body,
@@ -165,6 +166,7 @@ export async function createSession(name, targetModel, coachProfile, systemPromp
   state.phase = 'idle';
   state.stats = null;
   renderSessionSelect();
+  await loadProbes();
   await loadStats();
   render();
 }

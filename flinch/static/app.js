@@ -60,7 +60,6 @@ function closeModalOnOverlay(e) {
   if (e.target === document.getElementById('new-session-modal')) {
     closeNewSessionModal();
   }
-  }
 }
 
 async function submitNewSession() {

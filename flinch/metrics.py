@@ -1,131 +1,118 @@
 """Automated NLP metrics pipeline for experiment responses.
 
-Computes readability, hedging frequency, confidence markers, and lexical diversity.
-No sentiment analysis — intentionally excluded per proposal scope.
+Delegates core computation to LexicalAnalyzer (lexical.py).
+ResponseMetricsAnalyzer is a thin wrapper that adds experiment-specific
+orchestration: SSE streaming, DB persistence, force-recompute support.
 
-Requires: pip install -e ".[experiment]" (textstat)
+Requires: pip install -e ".[experiment]" (textstat, textblob, lexical-diversity)
 """
 from __future__ import annotations
 
 import logging
-import re
 from typing import AsyncGenerator
 
+from flinch.lexical import LexicalAnalyzer
+
 logger = logging.getLogger(__name__)
-
-# Graceful import for optional dependency
-try:
-    import textstat
-except ImportError:
-    textstat = None
-
-# --- Marker Lists ---
-
-HEDGING_MARKERS = [
-    "might", "perhaps", "possibly", "could be", "it seems",
-    "arguably", "in some cases", "it depends", "not necessarily",
-    "to some extent", "in a way", "sort of", "kind of",
-    "generally speaking", "tends to", "may or may not",
-    "it's worth noting", "on the other hand", "however",
-    "it is possible", "there is a chance", "it could be argued",
-    "some might say", "it appears", "seemingly",
-]
-
-CONFIDENCE_MARKERS = [
-    "certainly", "definitely", "absolutely", "clearly",
-    "obviously", "undoubtedly", "without question",
-    "there's no doubt", "it's clear that", "the fact is",
-    "in fact", "indeed", "surely", "of course",
-    "without a doubt", "unquestionably", "there is no question",
-    "it is certain", "plainly", "evidently",
-]
-
-
-def _count_sentences(text: str) -> int:
-    """Count sentences using simple regex."""
-    sentences = re.split(r'[.!?]+', text.strip())
-    return len([s for s in sentences if s.strip()])
-
-
-def _count_markers(text: str, markers: list[str]) -> int:
-    """Count occurrences of marker phrases in text (case-insensitive)."""
-    text_lower = text.lower()
-    count = 0
-    for marker in markers:
-        # Use word boundaries for single words, substring match for phrases
-        if " " in marker:
-            count += text_lower.count(marker)
-        else:
-            count += len(re.findall(rf'\b{re.escape(marker)}\b', text_lower))
-    return count
-
-
-def _lexical_diversity(text: str) -> float:
-    """Type-token ratio (unique words / total words)."""
-    words = re.findall(r'\b\w+\b', text.lower())
-    if not words:
-        return 0.0
-    return len(set(words)) / len(words)
 
 
 class ResponseMetricsAnalyzer:
     """Compute NLP metrics on response text."""
 
     def __init__(self):
-        if textstat is None:
-            logger.warning(
-                "textstat not installed. Install with: pip install -e '.[experiment]' "
-                "Readability metrics will be unavailable."
-            )
+        self._lexical = LexicalAnalyzer()
 
     def analyze(self, response_text: str) -> dict:
         """Compute all metrics for a single response. Returns dict matching response_metrics columns."""
         if not response_text or not response_text.strip():
             return self._empty_metrics()
 
-        words = re.findall(r'\b\w+\b', response_text)
-        word_count = len(words)
-        sentence_count = _count_sentences(response_text)
-        hedging_count = _count_markers(response_text, HEDGING_MARKERS)
-        confidence_count = _count_markers(response_text, CONFIDENCE_MARKERS)
+        # Delegate all computation to the lexical engine
+        metrics = self._lexical.analyze(response_text)
 
-        return {
-            "word_count": word_count,
-            "sentence_count": sentence_count,
-            "flesch_kincaid_grade": textstat.flesch_kincaid_grade(response_text) if textstat else None,
-            "flesch_reading_ease": textstat.flesch_reading_ease(response_text) if textstat else None,
-            "hedging_count": hedging_count,
-            "hedging_ratio": round(hedging_count / max(sentence_count, 1), 4),
-            "confidence_marker_count": confidence_count,
-            "confidence_ratio": round(confidence_count / max(sentence_count, 1), 4),
-            "avg_sentence_length": round(word_count / max(sentence_count, 1), 2),
-            "lexical_diversity": round(_lexical_diversity(response_text), 4),
-        }
+        # Backward-compatible alias: some DB columns may still use avg_sentence_length
+        if "avg_sentence_length" not in metrics and metrics.get("words_per_sentence") is not None:
+            metrics["avg_sentence_length"] = metrics["words_per_sentence"]
+
+        # Backward-compatible alias: lexical_diversity -> ttr
+        if "lexical_diversity" not in metrics and metrics.get("ttr") is not None:
+            metrics["lexical_diversity"] = metrics["ttr"]
+
+        return metrics
 
     def _empty_metrics(self) -> dict:
+        """Return all-None/zero metrics for empty input. Matches all LexicalAnalyzer keys."""
         return {
-            "word_count": 0, "sentence_count": 0,
-            "flesch_kincaid_grade": None, "flesch_reading_ease": None,
-            "hedging_count": 0, "hedging_ratio": 0.0,
-            "confidence_marker_count": 0, "confidence_ratio": 0.0,
-            "avg_sentence_length": 0.0, "lexical_diversity": 0.0,
+            # Structure
+            "word_count": None,
+            "sentence_count": None,
+            "words_per_sentence": None,
+            "avg_sentence_length": None,  # backward-compat alias
+            # Readability
+            "flesch_kincaid_grade": None,
+            "flesch_reading_ease": None,
+            "gunning_fog": None,
+            # Lexical diversity
+            "mtld": None,
+            "ttr": None,
+            "lexical_diversity": None,  # backward-compat alias
+            "honore_statistic": None,
+            # Word frequency
+            "avg_word_freq_rank": None,
+            "median_word_freq_rank": None,
+            "oov_rate": None,
+            # POS rates
+            "modal_rate": None,
+            "adjective_rate": None,
+            "adverb_rate": None,
+            "subordination_rate": None,
+            # Sentiment
+            "subjectivity": None,
+            "polarity": None,
+            # Marker counts
+            "hedging_count": None,
+            "hedging_ratio": None,
+            "confidence_marker_count": None,
+            "confidence_ratio": None,
+            "evasion_count": None,
+            "evasion_ratio": None,
+            # Formatting
+            "bold_count": None,
+            "has_list": None,
         }
 
-    async def analyze_experiment(self, async_db, experiment_id: int) -> AsyncGenerator[dict, None]:
+    async def analyze_experiment(
+        self,
+        async_db,
+        experiment_id: int,
+        force: bool = False,
+    ) -> AsyncGenerator[dict, None]:
         """Compute metrics for all completed responses in an experiment.
-        Skips responses that already have metrics (idempotent).
+
+        When force=False (default): skips responses that already have metrics (idempotent).
+        When force=True: recomputes metrics even if they already exist.
+
         Yields SSE progress events.
         """
         from flinch.db import save_response_metrics
 
-        # Get completed responses without metrics
-        cursor = await async_db.execute("""
-            SELECT er.id, er.response_text
-            FROM experiment_responses er
-            LEFT JOIN response_metrics rm ON rm.response_id = er.id
-            WHERE er.experiment_id = ? AND er.status = 'completed' AND rm.id IS NULL
-        """, (experiment_id,))
-        rows = await cursor.fetchall()
+        if force:
+            # Recompute all completed responses regardless of existing metrics
+            async with async_db.execute("""
+                SELECT er.id, er.response_text
+                FROM experiment_responses er
+                WHERE er.experiment_id = ? AND er.status = 'completed'
+            """, (experiment_id,)) as cursor:
+                rows = await cursor.fetchall()
+        else:
+            # Skip responses that already have metrics
+            async with async_db.execute("""
+                SELECT er.id, er.response_text
+                FROM experiment_responses er
+                LEFT JOIN response_metrics rm ON rm.response_id = er.id
+                WHERE er.experiment_id = ? AND er.status = 'completed' AND rm.id IS NULL
+            """, (experiment_id,)) as cursor:
+                rows = await cursor.fetchall()
 
         total = len(rows)
         if total == 0:
@@ -135,8 +122,8 @@ class ResponseMetricsAnalyzer:
         yield {"type": "started", "total": total}
 
         for i, row in enumerate(rows):
-            response_id = row[0]  # or row["id"]
-            response_text = row[1]  # or row["response_text"]
+            response_id = row[0]
+            response_text = row[1]
 
             metrics = self.analyze(response_text or "")
             await save_response_metrics(async_db, response_id, metrics)

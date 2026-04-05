@@ -2,7 +2,7 @@
 
 ## Project Context
 AI content restriction consistency research tool. Human-in-the-loop instrument for testing whether AI models enforce content restrictions consistently, built on empirical research ("Rules Are Rules, Until They Aren't").
-Vault overview: `D:\BeargleVault\projects\flinch\flinch.md`
+Vault overview: `C:\Users\Brad\Documents\Dropbox\Claude\Vault\projects\flinch\flinch.md`
 
 ## Tech Stack
 - Python 3.11+

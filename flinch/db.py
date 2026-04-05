@@ -395,6 +395,24 @@ CREATE TABLE IF NOT EXISTS response_metrics (
     refusal_classification TEXT,
     avg_sentence_length REAL,
     lexical_diversity REAL,
+    gunning_fog REAL,
+    mtld REAL,
+    ttr REAL,
+    honore_statistic REAL,
+    avg_word_freq_rank REAL,
+    median_word_freq_rank REAL,
+    oov_rate REAL,
+    modal_rate REAL,
+    adjective_rate REAL,
+    adverb_rate REAL,
+    subordination_rate REAL,
+    subjectivity REAL,
+    polarity REAL,
+    words_per_sentence REAL,
+    bold_count INTEGER,
+    has_list INTEGER,
+    evasion_count INTEGER,
+    evasion_ratio REAL,
     computed_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -475,6 +493,36 @@ def _migrate_sessions_table(conn):
     conn.commit()
 
 
+def _migrate_response_metrics_table(conn):
+    """Add new metric columns to response_metrics table."""
+    new_columns = [
+        ("gunning_fog", "REAL"),
+        ("mtld", "REAL"),
+        ("ttr", "REAL"),
+        ("honore_statistic", "REAL"),
+        ("avg_word_freq_rank", "REAL"),
+        ("median_word_freq_rank", "REAL"),
+        ("oov_rate", "REAL"),
+        ("modal_rate", "REAL"),
+        ("adjective_rate", "REAL"),
+        ("adverb_rate", "REAL"),
+        ("subordination_rate", "REAL"),
+        ("subjectivity", "REAL"),
+        ("polarity", "REAL"),
+        ("words_per_sentence", "REAL"),
+        ("bold_count", "INTEGER"),
+        ("has_list", "INTEGER"),
+        ("evasion_count", "INTEGER"),
+        ("evasion_ratio", "REAL"),
+    ]
+    for col_name, col_type in new_columns:
+        try:
+            conn.execute(f"ALTER TABLE response_metrics ADD COLUMN {col_name} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    conn.commit()
+
+
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -484,6 +532,7 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     _migrate_sessions_table(conn)
+    _migrate_response_metrics_table(conn)
     # Migrations: add columns that may not exist in older DBs
     try:
         conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT DEFAULT ''")
@@ -3400,13 +3449,21 @@ ALLOWED_METRIC_COLS = {
     "word_count", "sentence_count", "flesch_kincaid_grade", "flesch_reading_ease",
     "hedging_count", "hedging_ratio", "confidence_marker_count", "confidence_ratio",
     "refusal_classification", "avg_sentence_length", "lexical_diversity",
+    "gunning_fog", "mtld", "ttr", "honore_statistic",
+    "avg_word_freq_rank", "median_word_freq_rank", "oov_rate",
+    "modal_rate", "adjective_rate", "adverb_rate", "subordination_rate",
+    "subjectivity", "polarity", "words_per_sentence",
+    "bold_count", "has_list", "evasion_count", "evasion_ratio",
 }
 
 
 async def save_response_metrics(db, response_id, metrics_dict):
     """Insert or replace response_metrics row."""
+    from datetime import datetime, timezone
     # Filter to allowed columns only
     metrics_dict = {k: v for k, v in metrics_dict.items() if k in ALLOWED_METRIC_COLS}
+    # Always set computed_at timestamp
+    metrics_dict["computed_at"] = datetime.now(timezone.utc).isoformat()
     cols = list(metrics_dict.keys())
     placeholders = ", ".join("?" for _ in cols)
     col_list = ", ".join(cols)

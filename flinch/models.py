@@ -305,6 +305,24 @@ class ResponseMetrics(BaseModel):
     refusal_classification: str | None = None
     avg_sentence_length: float | None = None
     lexical_diversity: float | None = None
+    gunning_fog: float | None = None
+    mtld: float | None = None
+    ttr: float | None = None
+    honore_statistic: float | None = None
+    avg_word_freq_rank: float | None = None
+    median_word_freq_rank: float | None = None
+    oov_rate: float | None = None
+    modal_rate: float | None = None
+    adjective_rate: float | None = None
+    adverb_rate: float | None = None
+    subordination_rate: float | None = None
+    subjectivity: float | None = None
+    polarity: float | None = None
+    words_per_sentence: float | None = None
+    bold_count: int | None = None
+    has_list: int | None = None
+    evasion_count: int | None = None
+    evasion_ratio: float | None = None
     computed_at: str | None = None
 
 
@@ -370,7 +388,7 @@ class AnalysisResult(BaseModel):
 class StartExperimentRequest(BaseModel):
     """Request to start experiment execution."""
     concurrency_per_provider: dict[str, int] = Field(
-        default_factory=lambda: {"anthropic": 5, "openai": 5, "google": 3, "together": 3}
+        default_factory=lambda: {"anthropic": 5, "openai": 5, "google": 3, "together": 3, "ollama": 3}
     )
 
 
@@ -393,6 +411,26 @@ class BulkPromptImportRequest(BaseModel):
     """Request for bulk prompt import."""
     source: str = "csv"  # 'csv' or 'anthropic_hh'
     csv_text: str | None = None
+
+
+class HHImportRequest(BaseModel):
+    """Request to import prompts from Anthropic HH-RLHF dataset."""
+    _VALID_SUBSETS = {
+        "harmless-base", "helpful-base", "helpful-online", "helpful-rejection-sampled",
+    }
+
+    target_count: int = 800
+    subsets: list[str] | None = None
+    stratification: dict[str, float] | None = None
+    seed: int = 42
+
+    @model_validator(mode="after")
+    def validate_subsets(self):
+        if self.subsets:
+            for s in self.subsets:
+                if s not in self._VALID_SUBSETS:
+                    raise ValueError(f"Invalid subset '{s}'. Valid: {self._VALID_SUBSETS}")
+        return self
 
 
 class RunAnalysisRequest(BaseModel):

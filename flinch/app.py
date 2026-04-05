@@ -23,8 +23,9 @@ from flinch.models import (
     CreateExperimentRequest, StartExperimentRequest, RunAIRatersRequest,
     GenerateProlificExportRequest, BulkPromptImportRequest, RunAnalysisRequest,
     GenerateReportRequest, ConditionCreate, ExperimentPromptCreate,
-    ThemeSummary,
+    ThemeSummary, HHImportRequest,
 )
+from flinch.hh_import import HHRLHFImporter
 from flinch.db import (
     get_async_db, create_experiment, get_experiment, list_experiments,
     update_experiment, create_condition, list_conditions,
@@ -2650,6 +2651,30 @@ async def api_bulk_import_prompts(experiment_id: int, req: BulkPromptImportReque
     return {"imported": count}
 
 
+@app.post("/api/experiments/{experiment_id}/prompts/import-hh")
+async def api_import_hh_prompts(experiment_id: int, req: HHImportRequest):
+    """Import stratified sample from Anthropic HH-RLHF dataset."""
+    import json as json_mod
+
+    async def event_stream():
+        try:
+            importer = HHRLHFImporter()
+            async with await get_async_db() as db_conn:
+                result = await importer.import_to_experiment(
+                    db_conn=db_conn,
+                    experiment_id=experiment_id,
+                    target_count=req.target_count,
+                    subsets=req.subsets,
+                    stratification=req.stratification,
+                    seed=req.seed,
+                )
+            yield f"data: {json_mod.dumps({'event': 'complete', **result})}\n\n"
+        except Exception as e:
+            yield f"data: {json_mod.dumps({'event': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.get("/api/experiments/{experiment_id}/prompts")
 async def api_list_prompts(experiment_id: int):
     async with await get_async_db() as db_conn:
@@ -2724,7 +2749,7 @@ async def api_experiment_progress(experiment_id: int):
 
 
 @app.post("/api/experiments/{experiment_id}/metrics")
-async def api_compute_metrics(experiment_id: int):
+async def api_compute_metrics(experiment_id: int, force: bool = False):
     """Compute NLP metrics for all responses. SSE stream."""
     import json as json_mod
 
@@ -2732,7 +2757,7 @@ async def api_compute_metrics(experiment_id: int):
         from flinch.metrics import ResponseMetricsAnalyzer
         async with await get_async_db() as db_conn:
             analyzer = ResponseMetricsAnalyzer()
-            async for event in analyzer.analyze_experiment(db_conn, experiment_id):
+            async for event in analyzer.analyze_experiment(db_conn, experiment_id, force=force):
                 yield f"data: {json_mod.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -2795,6 +2820,20 @@ async def api_run_analysis(experiment_id: int, req: RunAnalysisRequest = RunAnal
         analyzer = ExperimentAnalyzer(db_conn)
         results = await analyzer.full_analysis(experiment_id)
     return {"analysis": results}
+
+
+@app.get("/api/experiments/{experiment_id}/analysis/export")
+async def api_export_analysis(experiment_id: int):
+    """Export analysis results as CSV."""
+    from flinch.stats import ExperimentAnalyzer
+    async with await get_async_db() as db_conn:
+        analyzer = ExperimentAnalyzer(db_conn)
+        csv_text = await analyzer.export_analysis_csv(experiment_id)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=experiment_{experiment_id}_analysis.csv"},
+    )
 
 
 @app.post("/api/experiments/{experiment_id}/report")

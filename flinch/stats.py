@@ -22,8 +22,11 @@ except ImportError:
 
 try:
     from scipy import stats as scipy_stats
+    from scipy.stats import mannwhitneyu, wilcoxon
 except ImportError:
     scipy_stats = None
+    mannwhitneyu = None
+    wilcoxon = None
 
 try:
     import krippendorff as krippendorff_lib
@@ -41,6 +44,14 @@ def _check_deps():
         missing.append("krippendorff")
     if missing:
         raise ImportError(f"Missing experiment dependencies: {', '.join(missing)}. Install with: pip install -e '.[experiment]'")
+
+
+def rank_biserial(U: float, n1: int, n2: int) -> float:
+    """Rank-biserial correlation (effect size for Mann-Whitney U).
+    r = 1 - (2U)/(n1*n2). Ranges -1 to 1."""
+    if n1 * n2 == 0:
+        return 0.0
+    return 1 - (2 * U) / (n1 * n2)
 
 
 def cohens_d(group1: list[float], group2: list[float]) -> float:
@@ -193,15 +204,23 @@ class ExperimentAnalyzer:
         conditions = await list_conditions(self.db, experiment_id)
         cond_map = {c["id"]: c["label"] for c in conditions}
 
-        metrics_cols = ["word_count", "flesch_kincaid_grade", "flesch_reading_ease",
-                        "hedging_ratio", "confidence_ratio", "avg_sentence_length", "lexical_diversity"]
+        metrics_cols = [
+            "word_count", "sentence_count", "words_per_sentence",
+            "flesch_kincaid_grade", "flesch_reading_ease", "gunning_fog",
+            "mtld", "ttr", "honore_statistic",
+            "avg_word_freq_rank", "median_word_freq_rank", "oov_rate",
+            "modal_rate", "adjective_rate", "adverb_rate", "subordination_rate",
+            "subjectivity", "polarity",
+            "hedging_ratio", "confidence_ratio", "evasion_ratio",
+            "avg_sentence_length", "lexical_diversity",
+        ]
 
         # Get metrics grouped by condition
         cond_metrics = {}
         for cond in conditions:
-            cursor = await self.db.execute("""
-                SELECT rm.word_count, rm.flesch_kincaid_grade, rm.flesch_reading_ease,
-                       rm.hedging_ratio, rm.confidence_ratio, rm.avg_sentence_length, rm.lexical_diversity
+            cols_sql = ", ".join(f"rm.{c}" for c in metrics_cols)
+            cursor = await self.db.execute(f"""
+                SELECT {cols_sql}
                 FROM response_metrics rm
                 JOIN experiment_responses er ON er.id = rm.response_id
                 WHERE er.experiment_id = ? AND er.condition_id = ?
@@ -372,6 +391,284 @@ class ExperimentAnalyzer:
             "sufficient": n_per_group >= required_n,
         }
 
+    def _metrics_cols(self) -> list[str]:
+        from flinch.db import ALLOWED_METRIC_COLS
+        cols = [
+            "word_count", "sentence_count", "words_per_sentence",
+            "flesch_kincaid_grade", "flesch_reading_ease", "gunning_fog",
+            "mtld", "ttr", "honore_statistic",
+            "avg_word_freq_rank", "median_word_freq_rank", "oov_rate",
+            "modal_rate", "adjective_rate", "adverb_rate", "subordination_rate",
+            "subjectivity", "polarity",
+            "hedging_ratio", "confidence_ratio", "evasion_ratio",
+            "avg_sentence_length", "lexical_diversity",
+        ]
+        # Validate against allowed columns to prevent SQL injection
+        return [c for c in cols if c in ALLOWED_METRIC_COLS]
+
+    async def compute_nonparametric_tests(self, experiment_id: int) -> dict:
+        """Mann-Whitney U test for all metrics between conditions.
+        Returns per-metric: U statistic, p-value, rank-biserial correlation.
+        """
+        _check_deps()
+        from flinch.db import list_conditions
+
+        conditions = await list_conditions(self.db, experiment_id)
+        metrics_cols = self._metrics_cols()
+
+        cond_metrics: dict[str, dict[str, list[float]]] = {}
+        for cond in conditions:
+            cols_sql = ", ".join(f"rm.{c}" for c in metrics_cols)
+            async with self.db.execute(f"""
+                SELECT {cols_sql}
+                FROM response_metrics rm
+                JOIN experiment_responses er ON er.id = rm.response_id
+                WHERE er.experiment_id = ? AND er.condition_id = ?
+            """, (experiment_id, cond["id"])) as cursor:
+                rows = await cursor.fetchall()
+            cond_metrics[cond["label"]] = {
+                col: [float(r[i]) for r in rows if r[i] is not None]
+                for i, col in enumerate(metrics_cols)
+            }
+
+        labels = list(cond_metrics.keys())
+        results: dict[str, dict] = {}
+        for i in range(len(labels)):
+            for j in range(i + 1, len(labels)):
+                pair_key = f"{labels[i]}_vs_{labels[j]}"
+                pair_results: dict[str, dict] = {}
+                for col in metrics_cols:
+                    g1 = cond_metrics[labels[i]].get(col, [])
+                    g2 = cond_metrics[labels[j]].get(col, [])
+                    if len(g1) >= 2 and len(g2) >= 2:
+                        try:
+                            stat, p = mannwhitneyu(g1, g2, alternative="two-sided")
+                            r = rank_biserial(float(stat), len(g1), len(g2))
+                            pair_results[col] = {
+                                "U": round(float(stat), 4),
+                                "p_value": round(float(p), 6),
+                                "n1": len(g1),
+                                "n2": len(g2),
+                                "rank_biserial": round(r, 4),
+                            }
+                        except Exception as e:
+                            pair_results[col] = {"error": str(e)}
+                results[pair_key] = pair_results
+
+        return results
+
+    async def compute_paired_analysis(self, experiment_id: int) -> dict:
+        """Wilcoxon signed-rank test — responses paired by prompt_id.
+        This is the PRIMARY analysis since responses are naturally paired.
+        Fetches all metrics in one query per condition pair, then filters in Python.
+        """
+        _check_deps()
+        from flinch.db import list_conditions
+
+        conditions = await list_conditions(self.db, experiment_id)
+        metrics_cols = self._metrics_cols()
+        col_select = ", ".join(f"rm.{c}" for c in metrics_cols)
+
+        labels = [c["label"] for c in conditions]
+        cond_ids = {c["label"]: c["id"] for c in conditions}
+
+        results: dict[str, dict] = {}
+        for i in range(len(labels)):
+            for j in range(i + 1, len(labels)):
+                pair_key = f"{labels[i]}_vs_{labels[j]}"
+                cid1 = cond_ids[labels[i]]
+                cid2 = cond_ids[labels[j]]
+
+                # Single query: fetch all metrics for both conditions, joined on prompt_id
+                async with self.db.execute(f"""
+                    SELECT a.prompt_id, {', '.join(f'a.{c}' for c in metrics_cols)},
+                           {', '.join(f'b.{c}' for c in metrics_cols)}
+                    FROM (
+                        SELECT er.prompt_id, {col_select}
+                        FROM response_metrics rm
+                        JOIN experiment_responses er ON er.id = rm.response_id
+                        WHERE er.experiment_id = ? AND er.condition_id = ?
+                    ) a
+                    JOIN (
+                        SELECT er.prompt_id, {col_select}
+                        FROM response_metrics rm
+                        JOIN experiment_responses er ON er.id = rm.response_id
+                        WHERE er.experiment_id = ? AND er.condition_id = ?
+                    ) b ON a.prompt_id = b.prompt_id
+                """, (experiment_id, cid1, experiment_id, cid2)) as cursor:
+                    rows = await cursor.fetchall()
+
+                if len(rows) < 2:
+                    results[pair_key] = {}
+                    continue
+
+                # Process each metric from the single result set
+                n_cols = len(metrics_cols)
+                pair_results: dict[str, dict] = {}
+                for col_idx, col in enumerate(metrics_cols):
+                    # Column offsets: 0=prompt_id, 1..n_cols=cond1 metrics, n_cols+1..2*n_cols=cond2 metrics
+                    pairs = []
+                    for row in rows:
+                        v1 = row[1 + col_idx]
+                        v2 = row[1 + n_cols + col_idx]
+                        if v1 is not None and v2 is not None:
+                            pairs.append((float(v1), float(v2)))
+
+                    if len(pairs) < 2:
+                        continue
+
+                    diffs = [a - b for a, b in pairs]
+                    if all(d == 0 for d in diffs):
+                        continue
+
+                    try:
+                        stat, p = wilcoxon(diffs, alternative="two-sided")
+                        median_diff = float(np.median(diffs))
+                        pair_results[col] = {
+                            "W": round(float(stat), 4),
+                            "p_value": round(float(p), 6),
+                            "n_pairs": len(pairs),
+                            "median_diff": round(median_diff, 6),
+                        }
+                    except Exception as e:
+                        pair_results[col] = {"error": str(e)}
+
+                results[pair_key] = pair_results
+
+        return results
+
+    async def compute_corrected_pvalues(self, raw_results: dict) -> dict:
+        """Apply Bonferroni and Benjamini-Hochberg FDR corrections.
+        Takes dict of {metric: {pair: {p_value: float}}} from any test.
+        Returns dict with corrected p-values and significance flags.
+        """
+        # Flatten to (metric, pair, p_value) triples
+        entries: list[tuple[str, str, float]] = []
+        for pair_key, pair_data in raw_results.items():
+            if not isinstance(pair_data, dict):
+                continue
+            for metric, mdata in pair_data.items():
+                if isinstance(mdata, dict) and "p_value" in mdata:
+                    entries.append((pair_key, metric, float(mdata["p_value"])))
+
+        if not entries:
+            return {}
+
+        n = len(entries)
+        pvals = [e[2] for e in entries]
+
+        # Bonferroni
+        bonferroni = [min(p * n, 1.0) for p in pvals]
+
+        # Benjamini-Hochberg FDR
+        sorted_pvals = sorted(enumerate(pvals), key=lambda x: x[1])
+        fdr_by_rank = [0.0] * n
+        for rank, (orig_idx, p) in enumerate(sorted_pvals, 1):
+            fdr_by_rank[rank - 1] = min(p * n / rank, 1.0)
+        # Enforce monotonicity in sorted-rank order (step-up from largest)
+        for i in range(n - 2, -1, -1):
+            fdr_by_rank[i] = min(fdr_by_rank[i], fdr_by_rank[i + 1])
+        # Map back to original indices
+        fdr_corrected = [0.0] * n
+        for rank, (orig_idx, _) in enumerate(sorted_pvals):
+            fdr_corrected[orig_idx] = fdr_by_rank[rank]
+
+        alpha = 0.05
+        output: dict[str, dict] = {}
+        for idx, (pair_key, metric, p_raw) in enumerate(entries):
+            if pair_key not in output:
+                output[pair_key] = {}
+            output[pair_key][metric] = {
+                "p_raw": round(p_raw, 6),
+                "p_bonferroni": round(bonferroni[idx], 6),
+                "p_fdr": round(fdr_corrected[idx], 6),
+                "sig_bonferroni": bonferroni[idx] < alpha,
+                "sig_fdr": fdr_corrected[idx] < alpha,
+            }
+
+        return output
+
+    async def export_analysis_csv(self, experiment_id: int) -> str:
+        """Export all analysis results as CSV text.
+        One row per metric per condition-pair.
+        Columns: metric, cond_1, cond_2, n_1, n_2, mean_1, sd_1, mean_2, sd_2,
+        cohens_d, ci_lower, ci_upper, mann_whitney_U, wilcoxon_W,
+        p_raw, p_bonferroni, p_fdr, rank_biserial, sig_bonf, sig_fdr
+        """
+        import csv
+        import io
+
+        # Pull stored analysis results
+        cursor = await self.db.execute("""
+            SELECT analysis_type, result_json
+            FROM analysis_results
+            WHERE experiment_id = ?
+        """, (experiment_id,))
+        rows = await cursor.fetchall()
+
+        stored: dict[str, dict] = {}
+        for row in rows:
+            try:
+                stored[row[0]] = json.loads(row[1])
+            except Exception:
+                pass
+
+        effect_sizes = stored.get("effect_sizes", {})
+        nonparametric = stored.get("nonparametric", {})
+        paired = stored.get("paired", {})
+        corrections = stored.get("corrections", {})
+
+        # Collect all pair/metric combinations
+        all_pairs: set[str] = set(effect_sizes) | set(nonparametric) | set(paired)
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "metric", "cond_1", "cond_2",
+            "n_1", "n_2", "mean_1", "sd_1", "mean_2", "sd_2",
+            "cohens_d", "ci_lower", "ci_upper",
+            "mann_whitney_U", "wilcoxon_W",
+            "p_raw", "p_bonferroni", "p_fdr",
+            "rank_biserial", "sig_bonf", "sig_fdr",
+        ])
+
+        for pair_key in sorted(all_pairs):
+            parts = pair_key.split("_vs_", 1)
+            cond_1 = parts[0] if len(parts) > 0 else ""
+            cond_2 = parts[1] if len(parts) > 1 else ""
+
+            # Collect all metrics across sources for this pair
+            all_metrics: set[str] = set()
+            for src in (effect_sizes, nonparametric, paired):
+                if pair_key in src and isinstance(src[pair_key], dict):
+                    all_metrics.update(src[pair_key].keys())
+
+            for metric in sorted(all_metrics):
+                es = effect_sizes.get(pair_key, {}).get(metric, {})
+                np_data = nonparametric.get(pair_key, {}).get(metric, {})
+                pa_data = paired.get(pair_key, {}).get(metric, {})
+                corr = corrections.get(pair_key, {}).get(metric, {})
+
+                writer.writerow([
+                    metric, cond_1, cond_2,
+                    es.get("n1", ""), es.get("n2", ""),
+                    "", "",  # mean_1, sd_1 — not stored; compute separately if needed
+                    "", "",  # mean_2, sd_2
+                    es.get("cohens_d", ""),
+                    es.get("ci_lower", ""),
+                    es.get("ci_upper", ""),
+                    np_data.get("U", ""),
+                    pa_data.get("W", ""),
+                    corr.get("p_raw", es.get("p_value", np_data.get("p_value", ""))),
+                    corr.get("p_bonferroni", ""),
+                    corr.get("p_fdr", ""),
+                    np_data.get("rank_biserial", ""),
+                    corr.get("sig_bonferroni", ""),
+                    corr.get("sig_fdr", ""),
+                ])
+
+        return output.getvalue()
+
     async def full_analysis(self, experiment_id: int) -> dict:
         """Run all analyses, store results, return summary."""
         from flinch.db import save_analysis_result
@@ -413,5 +710,32 @@ class ExperimentAnalyzer:
         power = self.power_analysis(n_per_group=total_responses // 3)  # rough per-condition
         await save_analysis_result(self.db, experiment_id, "power_analysis", json.dumps(power))
         all_results["power_analysis"] = power
+
+        # Nonparametric tests (Mann-Whitney U)
+        try:
+            nonparametric = await self.compute_nonparametric_tests(experiment_id)
+            await save_analysis_result(self.db, experiment_id, "nonparametric", json.dumps(nonparametric))
+            all_results["nonparametric"] = nonparametric
+        except ImportError as e:
+            all_results["nonparametric"] = {"error": str(e)}
+            nonparametric = {}
+
+        # Paired analysis (Wilcoxon signed-rank)
+        try:
+            paired = await self.compute_paired_analysis(experiment_id)
+            await save_analysis_result(self.db, experiment_id, "paired", json.dumps(paired))
+            all_results["paired"] = paired
+        except ImportError as e:
+            all_results["paired"] = {"error": str(e)}
+            paired = {}
+
+        # Multiple comparison corrections — gather p-values from nonparametric tests
+        # (primary source; paired analysis p-values are independent)
+        try:
+            corrections = await self.compute_corrected_pvalues(nonparametric)
+            await save_analysis_result(self.db, experiment_id, "corrections", json.dumps(corrections))
+            all_results["corrections"] = corrections
+        except Exception as e:
+            all_results["corrections"] = {"error": str(e)}
 
         return all_results

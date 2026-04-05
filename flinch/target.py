@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import anthropic
+import httpx
 
 
 @dataclass
@@ -274,3 +275,72 @@ class BaseModelTarget(OpenAITarget):
         else:
             full_prompt = prompt
         return await super().send(full_prompt)
+
+
+class OllamaTarget(OpenAITarget):
+    """Target for local models via Ollama (or any OpenAI-compatible local server).
+    Works with Ollama, LM Studio, vLLM, text-generation-webui, etc.
+
+    Model IDs are expected in the form "ollama:<model_name>" (e.g. "ollama:llama3.2").
+    The prefix is stripped before sending to the server.
+    """
+
+    DEFAULT_BASE_URL = "http://localhost:11434/v1"
+
+    def __init__(self, model: str, system_prompt: str = "",
+                 base_url: str | None = None, **kwargs):
+        url = base_url or os.environ.get("LOCAL_MODEL_URL", self.DEFAULT_BASE_URL)
+        # Strip "ollama:" prefix if present — the server just wants the bare model name
+        bare_model = model.removeprefix("ollama:")
+        # OpenAI client requires an api_key; local servers don't need one
+        super().__init__(
+            model=bare_model,
+            system_prompt=system_prompt,
+            base_url=url,
+            api_key="ollama",  # dummy key for local server
+            **kwargs,
+        )
+
+    @classmethod
+    async def list_available_models(cls, base_url: str | None = None) -> list[str]:
+        """Query Ollama for available models.
+
+        Tries Ollama-native API first (GET /api/tags), falls back to
+        OpenAI-compatible /v1/models.  Returns bare model name strings.
+        Returns empty list if server is unreachable.
+        """
+        url = base_url or os.environ.get("LOCAL_MODEL_URL", cls.DEFAULT_BASE_URL)
+        ollama_base = url.rstrip("/").removesuffix("/v1")
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Try Ollama native API first
+            try:
+                resp = await client.get(f"{ollama_base}/api/tags")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return [m["name"] for m in data.get("models", [])]
+            except Exception:
+                pass
+
+            # Fall back to OpenAI-compatible endpoint
+            try:
+                resp = await client.get(f"{url}/models")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return [m["id"] for m in data.get("data", [])]
+            except Exception:
+                pass
+
+        return []
+
+    @classmethod
+    async def is_available(cls, base_url: str | None = None) -> bool:
+        """Check if the local model server is reachable."""
+        url = base_url or os.environ.get("LOCAL_MODEL_URL", cls.DEFAULT_BASE_URL)
+        ollama_base = url.rstrip("/").removesuffix("/v1")
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(ollama_base)
+                return resp.status_code == 200
+        except Exception:
+            return False

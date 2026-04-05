@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 from flinch import db
 from flinch.llm import LLMBackend
 from flinch.models import Classification, PushbackSource, CoachSuggestion, PushbackMove
-from flinch.target import TargetModel, ClaudeTarget, OpenAITarget, GeminiTarget
+from flinch.target import TargetModel, ClaudeTarget, OpenAITarget, GeminiTarget, OllamaTarget
 from flinch.classifier import classify
 from flinch.coach import Coach, NarrativeCoach, NARRATIVE_ENGINE_SYSTEM_PROMPT
 from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
@@ -59,14 +59,10 @@ class Runner:
                 base_url="https://api.together.xyz/v1",
             )
         elif model_name.startswith("ollama:"):
-            # Ollama local models via OpenAI-compatible API
-            ollama_model = model_name.removeprefix("ollama:")
-            ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-            return OpenAITarget(
-                ollama_model,
+            # Ollama local models
+            return OllamaTarget(
+                model=model_name,
                 system_prompt=system_prompt,
-                api_key="ollama",  # dummy key required by openai SDK
-                base_url=f"{ollama_url}/v1",
             )
         else:
             raise ValueError(
@@ -322,6 +318,8 @@ class ExperimentRunner:
 
     def _get_provider(self, model_id: str) -> str:
         """Determine provider from model ID."""
+        if model_id.startswith("ollama:"):
+            return "ollama"
         model_lower = model_id.lower()
         if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
             return "anthropic"
@@ -463,13 +461,15 @@ class ExperimentRunner:
 
     def _create_target(self, model_id: str, system_prompt: str):
         """Create appropriate TargetModel instance."""
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, BaseModelTarget
+        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, BaseModelTarget, OllamaTarget
 
         provider = self._get_provider(model_id)
         # Check if it's a known base model
         if model_id in BaseModelTarget.BASE_MODELS:
             return BaseModelTarget(model=model_id, system_prompt=system_prompt)
-        if provider == "anthropic":
+        if provider == "ollama":
+            return OllamaTarget(model=model_id, system_prompt=system_prompt)
+        elif provider == "anthropic":
             return ClaudeTarget(model=model_id, system_prompt=system_prompt)
         elif provider in ("openai", "xai", "together"):
             base_url = None

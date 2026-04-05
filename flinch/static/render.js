@@ -1550,12 +1550,16 @@ function renderVariantEditTab() {
 
     html += `<div style="margin-bottom:20px;">`;
     for (const f of files) {
-      const probeIds = f.probe_ids || (f.variants ? f.variants.map(v => v.probe_id) : []);
+      const isConditions = f.variant_type === 'conditions';
+      const probeIds = isConditions ? [] : (f.probe_ids || (f.variants ? f.variants.map(v => v.probe_id) : []));
+      const runLabel = isConditions
+        ? `Run (${f.labels.length} conditions × ${(state.probes || []).length} probes)`
+        : `Run (${probeIds.length})`;
       html += `
         <div class="card" style="margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div>
-              <div style="font-size:14px; font-weight:600; color:#e2e8f0; margin-bottom:4px;">${escHtml(f.title || f.group_id)}</div>
+              <div style="font-size:14px; font-weight:600; color:#e2e8f0; margin-bottom:4px;">${escHtml(f.title || f.group_id)}${isConditions ? ' <span style="font-size:10px; color:#34d399; font-weight:400;">[conditions]</span>' : ''}</div>
               ${f.description ? `<div style="font-size:11px; color:#64748b; margin-bottom:8px;">${escHtml(f.description)}</div>` : ''}
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
                 ${f.labels.map(l => `<span style="display:inline-block; padding:2px 8px; background:#1e293b; border:1px solid #334155; border-radius:4px; font-size:10px; color:#94a3b8; font-family:'JetBrains Mono',monospace;">${escHtml(l)}</span>`).join('')}
@@ -1563,7 +1567,7 @@ function renderVariantEditTab() {
               ${f.domain ? `<div style="font-size:10px; color:#4b5563; margin-top:6px; font-family:'JetBrains Mono',monospace;">domain: ${escHtml(f.domain)}</div>` : ''}
             </div>
             <div style="display:flex; gap:6px; flex-shrink:0;">
-              <button class="btn-primary" onclick="window._runVariantGroup('${escHtml(f.group_id)}', ${JSON.stringify(probeIds)})" style="font-size:11px; padding:4px 10px;">Run (${probeIds.length})</button>
+              <button class="btn-primary" onclick="window._runVariantGroup('${escHtml(f.group_id)}', ${JSON.stringify(probeIds)})" style="font-size:11px; padding:4px 10px;">${runLabel}</button>
               <button class="btn-secondary" onclick="window._viewVariantGroup('${escHtml(f.group_id)}')" style="font-size:11px; padding:4px 10px;">View</button>
               <button onclick="window._deleteVariantFile('${escHtml(f.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:4px 8px;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button>
             </div>
@@ -3098,7 +3102,14 @@ window._runVariantGroup = async function(groupName, probeIds) {
       `Run ${runProbeIds.length} probe(s) × ${conditions.length} condition(s) = ${total} runs from "${groupName}" in the current session?`
     );
     if (!confirmed) return;
-    await startBatchConditions(state.currentSession.id, runProbeIds, conditions);
+    const sessionId = state.currentSession.id || state.currentSession;
+    try {
+      console.log('Starting batch-conditions:', { sessionId, probeCount: runProbeIds.length, conditionCount: conditions.length, conditions });
+      await startBatchConditions(sessionId, runProbeIds, conditions);
+    } catch (e) {
+      console.error('Batch conditions failed:', e);
+      showError('Batch conditions failed: ' + e.message);
+    }
     return;
   }
 

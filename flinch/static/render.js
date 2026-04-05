@@ -1533,8 +1533,24 @@ function renderVariantEditTab() {
 
   // Existing variant groups from files
   if (files.length > 0) {
+    // Run All Variant Groups button
+    const allProbeIds = [];
+    for (const f of files) {
+      if (f.probe_ids) for (const id of f.probe_ids) { if (!allProbeIds.includes(id)) allProbeIds.push(id); }
+    }
+    // Also collect from DB groups
+    for (const g of (state.variantGroups || [])) {
+      if (g.variants) for (const v of g.variants) { if (!allProbeIds.includes(v.probe_id)) allProbeIds.push(v.probe_id); }
+    }
+    html += `
+      <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+        <button class="btn-primary" onclick="window._runAllVariantGroups()" style="font-size:11px; padding:5px 12px;">Run All Variant Groups (${allProbeIds.length} probes)</button>
+      </div>
+    `;
+
     html += `<div style="margin-bottom:20px;">`;
     for (const f of files) {
+      const probeIds = f.probe_ids || (f.variants ? f.variants.map(v => v.probe_id) : []);
       html += `
         <div class="card" style="margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
@@ -1547,6 +1563,7 @@ function renderVariantEditTab() {
               ${f.domain ? `<div style="font-size:10px; color:#4b5563; margin-top:6px; font-family:'JetBrains Mono',monospace;">domain: ${escHtml(f.domain)}</div>` : ''}
             </div>
             <div style="display:flex; gap:6px; flex-shrink:0;">
+              <button class="btn-primary" onclick="window._runVariantGroup('${escHtml(f.group_id)}', ${JSON.stringify(probeIds)})" style="font-size:11px; padding:4px 10px;">Run (${probeIds.length})</button>
               <button class="btn-secondary" onclick="window._viewVariantGroup('${escHtml(f.group_id)}')" style="font-size:11px; padding:4px 10px;">View</button>
               <button onclick="window._deleteVariantFile('${escHtml(f.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:4px 8px;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button>
             </div>
@@ -1564,6 +1581,7 @@ function renderVariantEditTab() {
   if (dbGroups.length > 0) {
     html += `<div style="font-size:10px; color:#4b5563; font-family:'JetBrains Mono',monospace; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.08em;">Legacy groups (DB only)</div>`;
     for (const g of dbGroups) {
+      const dbProbeIds = (g.variants || []).map(v => v.probe_id);
       html += `
         <div class="card" style="margin-bottom:8px; opacity:0.7;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1571,7 +1589,10 @@ function renderVariantEditTab() {
               <span style="font-size:12px; color:#94a3b8; font-family:'JetBrains Mono',monospace;">${escHtml(g.group_id)}</span>
               <span style="font-size:10px; color:#4b5563; margin-left:8px;">${g.variants.length} variants</span>
             </div>
-            <button onclick="deleteVariantGroup('${escHtml(g.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button class="btn-primary" onclick="window._runVariantGroup('${escHtml(g.group_id)}', ${JSON.stringify(dbProbeIds)})" style="font-size:10px; padding:3px 8px;">Run (${dbProbeIds.length})</button>
+              <button onclick="deleteVariantGroup('${escHtml(g.group_id)}')" style="font-size:10px; color:#7f1d1d; background:none; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace;" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#7f1d1d'">delete</button>
+            </div>
           </div>
         </div>
       `;
@@ -2595,6 +2616,43 @@ window._viewVariantGroup = async function(groupId) {
     state.variantEditData = data;
     renderConsistencyView();
   }
+};
+
+window._runVariantGroup = async function(groupName, probeIds) {
+  if (!state.currentSession) {
+    showError('Select a session before running a variant group.');
+    return;
+  }
+  if (!probeIds || probeIds.length === 0) {
+    showError('No probes found in this variant group.');
+    return;
+  }
+  const confirmed = confirm(`Run ${probeIds.length} probe(s) from "${groupName}" in the current session?`);
+  if (!confirmed) return;
+  await startBatch(state.currentSession, probeIds);
+};
+
+window._runAllVariantGroups = async function() {
+  if (!state.currentSession) {
+    showError('Select a session before running variant groups.');
+    return;
+  }
+  const allProbeIds = [];
+  for (const f of (state.variantFiles || [])) {
+    const ids = f.probe_ids || (f.variants ? f.variants.map(v => v.probe_id) : []);
+    for (const id of ids) { if (!allProbeIds.includes(id)) allProbeIds.push(id); }
+  }
+  for (const g of (state.variantGroups || [])) {
+    const ids = (g.variants || []).map(v => v.probe_id);
+    for (const id of ids) { if (!allProbeIds.includes(id)) allProbeIds.push(id); }
+  }
+  if (allProbeIds.length === 0) {
+    showError('No probes found across all variant groups.');
+    return;
+  }
+  const confirmed = confirm(`Run all ${allProbeIds.length} probes from all variant groups in the current session?`);
+  if (!confirmed) return;
+  await startBatch(state.currentSession, allProbeIds);
 };
 
 window._deleteVariantFile = async function(groupId) {

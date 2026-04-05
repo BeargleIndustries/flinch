@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""One-time download script: extract 800 deception-viable prompts from Anthropic HH-RLHF.
+"""One-time download script: extract prompts from Anthropic HH-RLHF dataset.
 
-Run once, save to flinch/probes/hh-rlhf-800.md in standard Flinch probe format.
-After that, import via the existing "Load Defaults" UI or import_probes_from_markdown().
+Downloads the full dataset via HuggingFace `datasets` library (no rate limits),
+extracts first human turns, filters for deception-viable prompts, saves full
+library as JSON and a stratified sample as Flinch probe markdown.
 
 Usage:
     python scripts/download_hh_prompts.py
     python scripts/download_hh_prompts.py --target 1000 --seed 42 --output flinch/probes/hh-rlhf-1000.md
 """
 import argparse
-import asyncio
+import json
 import re
 import sys
 from collections import Counter
@@ -48,7 +49,6 @@ def to_markdown(prompts: list[dict]) -> str:
     seen_slugs: dict[str, int] = {}
     for p in prompts:
         slug = slugify(p["prompt"])
-        # Deduplicate slugs
         if slug in seen_slugs:
             seen_slugs[slug] += 1
             slug = f"{slug}-{seen_slugs[slug]}"
@@ -57,7 +57,7 @@ def to_markdown(prompts: list[dict]) -> str:
 
         lines.append(f"## {slug}")
         lines.append(f"- domain: {p['domain']}")
-        lines.append(f"- tags: hh-rlhf, {p['domain']}, {p['subset']}")
+        lines.append(f"- tags: hh-rlhf, {p['domain']}")
         lines.append("")
         lines.append(p["prompt"].strip())
         lines.append("")
@@ -65,31 +65,48 @@ def to_markdown(prompts: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def main(target: int, seed: int, output: Path) -> None:
+def main(target: int, seed: int, output: Path) -> None:
     if output.exists():
         answer = input(f"{output} already exists. Overwrite? [y/N] ").strip().lower()
         if answer != "y":
             print("Aborted.")
             return
 
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print("ERROR: 'datasets' library required. Install with: pip install datasets")
+        sys.exit(1)
+
     importer = HHRLHFImporter()
 
-    def on_progress(offset, extracted, msg=None):
-        if msg:
-            print(f"\n  [{msg}]", flush=True)
-        else:
-            print(f"\r  Fetched {offset:,} rows, extracted {extracted:,} prompts...", end="", flush=True)
+    print("Downloading HH-RLHF dataset via HuggingFace datasets library...")
+    print("  (first run downloads ~80MB, cached after that)")
+    ds = load_dataset("Anthropic/hh-rlhf", split="train")
+    print(f"  Loaded {len(ds)} rows")
 
-    print("Downloading HH-RLHF dataset from HuggingFace (merged default config)...")
-    print("  (169K rows, ~30 min with rate limit backoff)")
-    all_prompts = await importer.fetch_rows(progress_callback=on_progress)
-    print(f"\n\nTotal downloaded: {len(all_prompts)} usable prompts")
+    # Extract first human turns
+    print("Extracting first human turns...")
+    all_prompts: list[dict] = []
+    skipped = 0
+    for i, row in enumerate(ds):
+        chosen = row.get("chosen", "")
+        text = importer.extract_first_human_turn(chosen)
+        if not text:
+            skipped += 1
+            continue
+        domain = importer.categorize_prompt(text)
+        all_prompts.append({"prompt": text, "subset": "default", "domain": domain})
+        if (i + 1) % 10000 == 0:
+            print(f"  Processed {i+1:,} / {len(ds):,} rows...")
+
+    print(f"  Extracted {len(all_prompts):,} prompts ({skipped:,} skipped)")
 
     # Filter deception-viable
     raw_count = len(all_prompts)
     all_prompts = [p for p in all_prompts if importer.filter_deception_viable(p["prompt"])]
     filtered_out = raw_count - len(all_prompts)
-    print(f"After deception-viability filter: {len(all_prompts)} kept, {filtered_out} removed")
+    print(f"After deception-viability filter: {len(all_prompts):,} kept, {filtered_out:,} removed")
 
     # Deduplicate
     seen: set[str] = set()
@@ -101,18 +118,17 @@ async def main(target: int, seed: int, output: Path) -> None:
             deduped.append(p)
     dedup_removed = len(all_prompts) - len(deduped)
     if dedup_removed:
-        print(f"Deduplication removed {dedup_removed} duplicates")
+        print(f"Deduplication removed {dedup_removed:,} duplicates")
     all_prompts = deduped
-    print(f"After dedup: {len(all_prompts)} unique prompts")
+    print(f"After dedup: {len(all_prompts):,} unique prompts")
 
-    # Domain breakdown before sampling
+    # Domain breakdown
     domain_totals = Counter(p["domain"] for p in all_prompts)
-    print("\nDomain breakdown (pre-sample):")
+    print("\nDomain breakdown (full library):")
     for domain, count in sorted(domain_totals.items()):
-        print(f"  {domain}: {count}")
+        print(f"  {domain}: {count:,}")
 
-    # Save the FULL library as JSON (all viable prompts, not just the sample)
-    import json
+    # Save the FULL library as JSON
     library_path = output.parent / "hh-rlhf-library.json"
     library_records = [
         {"prompt_text": p["prompt"], "domain": p["domain"]}
@@ -120,7 +136,7 @@ async def main(target: int, seed: int, output: Path) -> None:
     ]
     library_path.parent.mkdir(parents=True, exist_ok=True)
     library_path.write_text(json.dumps(library_records, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nFull library saved: {library_path} ({len(library_records)} prompts)")
+    print(f"\nFull library saved: {library_path} ({len(library_records):,} prompts)")
 
     # Stratified sample
     print(f"\nSampling {target} prompts (stratified)...")
@@ -135,9 +151,10 @@ async def main(target: int, seed: int, output: Path) -> None:
     final_domain = Counter(p["domain"] for p in sampled)
 
     print(f"\n--- Summary ---")
-    print(f"Total extracted:         {len(all_prompts)}")
-    print(f"After filtering + dedup: {len(deduped)}")
-    print(f"Full library:            {len(library_records)} prompts -> {library_path}")
+    print(f"Dataset rows:            {len(ds):,}")
+    print(f"Extracted prompts:       {raw_count:,}")
+    print(f"After filtering + dedup: {len(all_prompts):,}")
+    print(f"Full library:            {len(library_records):,} prompts -> {library_path}")
     print(f"Sampled probe set:       {len(sampled)} prompts -> {output}")
     print(f"Per-domain counts (sample):")
     for domain, count in sorted(final_domain.items()):
@@ -157,4 +174,4 @@ if __name__ == "__main__":
         help="Output markdown file path (default: flinch/probes/hh-rlhf-800.md)",
     )
     args = parser.parse_args()
-    asyncio.run(main(target=args.target, seed=args.seed, output=args.output))
+    main(target=args.target, seed=args.seed, output=args.output)

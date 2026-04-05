@@ -19,6 +19,7 @@ data/*.db-wal
 # Probe content — publish tool + example format, not research probes
 flinch/probes/*.yaml
 flinch/probes/*.md
+flinch/probes/*.json
 !flinch/probes/.gitkeep
 !flinch/probes/example-probes.md
 

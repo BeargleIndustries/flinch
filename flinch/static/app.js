@@ -60,67 +60,8 @@ function closeModalOnOverlay(e) {
   if (e.target === document.getElementById('new-session-modal')) {
     closeNewSessionModal();
   }
-  if (e.target === document.getElementById('import-file-modal')) {
-    closeImportFileModal();
   }
 }
-
-async function showImportFileModal() {
-  const { listProbeFiles } = await import('./api.js');
-  const files = await listProbeFiles();
-
-  let modal = document.getElementById('import-file-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'import-file-modal';
-    modal.onclick = closeModalOnOverlay;
-    document.body.appendChild(modal);
-  }
-
-  const fileList = files.length === 0
-    ? '<div style="color:#6b7280; padding:12px;">No probe files found in flinch/probes/</div>'
-    : files.map(f => `
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #1a1a1a; cursor:pointer;"
-             onmouseover="this.style.background='#1a1a1a'" onmouseout="this.style.background='none'"
-             onclick="doImportFile('${f.name}')">
-          <span style="color:#e5e7eb; font-size:13px;">${f.name}</span>
-          <button style="font-size:11px; color:#34d399; background:none; border:1px solid #065f46; border-radius:3px; padding:2px 8px; cursor:pointer;">Import</button>
-        </div>`).join('');
-
-  modal.innerHTML = `
-    <div style="position:fixed; inset:0; background:rgba(0,0,0,0.7); display:flex; align-items:center; justify-content:center; z-index:1000;">
-      <div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; width:400px; max-height:500px; overflow:hidden; display:flex; flex-direction:column;">
-        <div style="padding:16px; border-bottom:1px solid #1a1a1a; display:flex; justify-content:space-between; align-items:center;">
-          <span style="color:#e5e7eb; font-weight:600;">Import Probes from File</span>
-          <button onclick="closeImportFileModal()" style="color:#6b7280; background:none; border:none; cursor:pointer; font-size:16px;">x</button>
-        </div>
-        <div style="overflow-y:auto; max-height:400px;">
-          ${fileList}
-        </div>
-      </div>
-    </div>`;
-  modal.style.display = 'block';
-}
-
-function closeImportFileModal() {
-  const modal = document.getElementById('import-file-modal');
-  if (modal) modal.style.display = 'none';
-}
-
-async function doImportFile(filename) {
-  const { importProbeFile } = await import('./api.js');
-  const result = await importProbeFile(filename);
-  closeImportFileModal();
-  if (result) {
-    const msg = `Imported ${result.loaded} probes from ${filename} (${result.total} total)`;
-    const el = document.getElementById('status-message');
-    if (el) { el.textContent = msg; el.style.color = '#34d399'; }
-  }
-}
-
-window.showImportFileModal = showImportFileModal;
-window.closeImportFileModal = closeImportFileModal;
-window.doImportFile = doImportFile;
 
 async function submitNewSession() {
   const { createSession } = await import('./api.js');

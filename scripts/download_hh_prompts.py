@@ -74,18 +74,16 @@ async def main(target: int, seed: int, output: Path) -> None:
 
     importer = HHRLHFImporter()
 
-    print(f"Downloading all {len(importer.SUBSETS)} HH-RLHF subsets from HuggingFace...")
-    all_prompts: list[dict] = []
-    subset_raw_counts: dict[str, int] = {}
+    def on_progress(offset, extracted, msg=None):
+        if msg:
+            print(f"\n  [{msg}]", flush=True)
+        else:
+            print(f"\r  Fetched {offset:,} rows, extracted {extracted:,} prompts...", end="", flush=True)
 
-    for subset in importer.SUBSETS:
-        print(f"  → {subset} ...", end="", flush=True)
-        rows = await importer.fetch_subset_rows(subset)
-        subset_raw_counts[subset] = len(rows)
-        all_prompts.extend(rows)
-        print(f" {len(rows)} rows")
-
-    print(f"\nTotal downloaded: {len(all_prompts)} rows")
+    print("Downloading HH-RLHF dataset from HuggingFace (merged default config)...")
+    print("  (169K rows, ~30 min with rate limit backoff)")
+    all_prompts = await importer.fetch_rows(progress_callback=on_progress)
+    print(f"\n\nTotal downloaded: {len(all_prompts)} usable prompts")
 
     # Filter deception-viable
     raw_count = len(all_prompts)
@@ -113,34 +111,39 @@ async def main(target: int, seed: int, output: Path) -> None:
     for domain, count in sorted(domain_totals.items()):
         print(f"  {domain}: {count}")
 
+    # Save the FULL library as JSON (all viable prompts, not just the sample)
+    import json
+    library_path = output.parent / "hh-rlhf-library.json"
+    library_records = [
+        {"prompt_text": p["prompt"], "domain": p["domain"]}
+        for p in all_prompts
+    ]
+    library_path.parent.mkdir(parents=True, exist_ok=True)
+    library_path.write_text(json.dumps(library_records, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\nFull library saved: {library_path} ({len(library_records)} prompts)")
+
     # Stratified sample
     print(f"\nSampling {target} prompts (stratified)...")
     sampled = importer.stratified_sample(all_prompts, target_count=target, seed=seed)
 
-    # Write markdown
+    # Write sample as probe markdown
     output.parent.mkdir(parents=True, exist_ok=True)
     md = to_markdown(sampled)
     output.write_text(md, encoding="utf-8")
 
     # Summary stats
     final_domain = Counter(p["domain"] for p in sampled)
-    final_subset = Counter(p["subset"] for p in sampled)
 
     print(f"\n--- Summary ---")
-    print(f"Total downloaded (raw):  {sum(subset_raw_counts.values())}")
-    print(f"Per-subset raw counts:")
-    for s, c in subset_raw_counts.items():
-        print(f"  {s}: {c}")
+    print(f"Total extracted:         {len(all_prompts)}")
     print(f"After filtering + dedup: {len(deduped)}")
-    print(f"Final sample size:       {len(sampled)}")
-    print(f"Per-domain counts:")
+    print(f"Full library:            {len(library_records)} prompts -> {library_path}")
+    print(f"Sampled probe set:       {len(sampled)} prompts -> {output}")
+    print(f"Per-domain counts (sample):")
     for domain, count in sorted(final_domain.items()):
         print(f"  {domain}: {count}")
-    print(f"Per-subset counts:")
-    for subset, count in sorted(final_subset.items()):
-        print(f"  {subset}: {count}")
-    print(f"\nSaved to: {output}")
-    print("Import in Flinch via 'Load Defaults' or import_probes_from_markdown()")
+    print(f"\nImport probe set in Flinch via 'Load Defaults' or import_probes_from_markdown()")
+    print(f"Re-sample from library anytime: change --target or --seed")
 
 
 if __name__ == "__main__":

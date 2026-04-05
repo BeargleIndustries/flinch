@@ -117,21 +117,21 @@ class HHRLHFImporter:
                 return False
         return True
 
-    async def fetch_subset_rows(
+    async def fetch_rows(
         self,
-        subset: str,
         split: str = "train",
-        max_rows: int = 50000,
+        max_rows: int = 170000,
         batch_size: int = 100,
+        progress_callback=None,
     ) -> list[dict]:
         """Fetch rows from HuggingFace Datasets Server API.
 
-        Uses: GET {HF_API_BASE}/rows?dataset=Anthropic/hh-rlhf&config={subset}&split={split}&offset={offset}&length={batch_size}
+        The HH-RLHF dataset has a single 'default' config with all subsets merged.
+        Uses: GET {HF_API_BASE}/rows?dataset=Anthropic/hh-rlhf&config=default&split={split}&offset={offset}&length={batch_size}
 
-        Returns list of {"prompt": str, "subset": str, "domain": str}.
+        Returns list of {"prompt": str, "subset": "default", "domain": str}.
         Extracts first human turn from each row's "chosen" field.
         Skips rows where extraction fails.
-        Logs progress every 1000 rows.
         """
         results: list[dict] = []
         offset = 0
@@ -142,24 +142,38 @@ class HHRLHFImporter:
                 url = (
                     f"{self.HF_API_BASE}/rows"
                     f"?dataset=Anthropic/hh-rlhf"
-                    f"&config={subset}"
+                    f"&config=default"
                     f"&split={split}"
                     f"&offset={offset}"
                     f"&length={length}"
                 )
-                try:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    data = resp.json()
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 416:
-                        # Offset beyond dataset size
+                data = None
+                for attempt in range(5):
+                    try:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        data = resp.json()
                         break
-                    logger.warning("HTTP error fetching %s offset %d: %s", subset, offset, e)
-                    break
-                except Exception as e:
-                    logger.warning("Error fetching %s offset %d: %s", subset, offset, e)
-                    break
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 416:
+                            # Offset beyond dataset size
+                            return results
+                        if e.response.status_code == 429:
+                            wait = min(2 ** (attempt + 1), 30)
+                            logger.info("Rate limited at offset %d, waiting %ds...", offset, wait)
+                            if progress_callback:
+                                progress_callback(offset, len(results), f"rate limited, retrying in {wait}s")
+                            await asyncio.sleep(wait)
+                            continue
+                        logger.warning("HTTP error at offset %d: %s", offset, e)
+                        return results
+                    except Exception as e:
+                        logger.warning("Error at offset %d: %s", offset, e)
+                        return results
+
+                if data is None:
+                    logger.warning("Failed after 5 retries at offset %d", offset)
+                    return results
 
                 rows = data.get("rows", [])
                 if not rows:
@@ -172,21 +186,30 @@ class HHRLHFImporter:
                     if not text:
                         continue
                     domain = self.categorize_prompt(text)
-                    results.append({"prompt": text, "subset": subset, "domain": domain})
+                    results.append({"prompt": text, "subset": "default", "domain": domain})
 
                 offset += len(rows)
-                if offset % 1000 < batch_size:
-                    logger.info("Fetched %d rows from %s (offset %d)", len(results), subset, offset)
+                if progress_callback and offset % 1000 < batch_size:
+                    progress_callback(offset, len(results))
 
-                # Polite rate-limit delay between batches
-                await asyncio.sleep(0.05)
+                # Polite delay — longer to avoid rate limits on large fetches
+                await asyncio.sleep(0.15)
 
                 if len(rows) < batch_size:
-                    # Reached end of dataset
                     break
 
-        logger.info("Finished fetching %s: %d usable rows", subset, len(results))
+        logger.info("Finished fetching: %d usable rows from %d total", len(results), offset)
         return results
+
+    async def fetch_subset_rows(
+        self,
+        subset: str,
+        split: str = "train",
+        max_rows: int = 50000,
+        batch_size: int = 100,
+    ) -> list[dict]:
+        """Backward-compatible wrapper — fetches from the merged default config."""
+        return await self.fetch_rows(split=split, max_rows=max_rows, batch_size=batch_size)
 
     def stratified_sample(
         self,

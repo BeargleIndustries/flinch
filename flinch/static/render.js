@@ -1,7 +1,7 @@
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 import { state, setPhase } from './state.js';
-import { api, bulkDeleteProbes, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants, fetchThemes, fetchTheme } from './api.js';
+import { api, bulkDeleteProbes, loadStats, loadTurns, startBatch, cancelBatch, startBatchConditions, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants, fetchThemes, fetchTheme } from './api.js';
 import {
   escHtml,
   normalizeClassification,
@@ -2623,13 +2623,48 @@ window._runVariantGroup = async function(groupName, probeIds) {
     showError('Select a session before running a variant group.');
     return;
   }
+
+  // Check if this is a conditions-type variant group
+  let fileData = null;
+  try {
+    fileData = await getVariantFile(groupName);
+  } catch (e) {
+    // Not a file-backed group — fall through to framing behavior
+  }
+
+  if (fileData && fileData.variant_type === 'conditions') {
+    // conditions type: run ALL probes × each condition (system prompt)
+    const allProbes = state.probes || [];
+    const runProbeIds = allProbes.map(p => p.id);
+    if (runProbeIds.length === 0) {
+      showError('No probes loaded in this session to run conditions against.');
+      return;
+    }
+    const conditions = (fileData.variants || []).map(v => ({
+      label: v.label,
+      system_prompt: v.prompt_text || '',
+    }));
+    if (conditions.length === 0) {
+      showError('No conditions defined in this variant group.');
+      return;
+    }
+    const total = runProbeIds.length * conditions.length;
+    const confirmed = confirm(
+      `Run ${runProbeIds.length} probe(s) × ${conditions.length} condition(s) = ${total} runs from "${groupName}" in the current session?`
+    );
+    if (!confirmed) return;
+    await startBatchConditions(state.currentSession.id, runProbeIds, conditions);
+    return;
+  }
+
+  // framings type (default): each variant is a different probe text
   if (!probeIds || probeIds.length === 0) {
     showError('No probes found in this variant group.');
     return;
   }
   const confirmed = confirm(`Run ${probeIds.length} probe(s) from "${groupName}" in the current session?`);
   if (!confirmed) return;
-  await startBatch(state.currentSession, probeIds);
+  await startBatch(state.currentSession.id || state.currentSession, probeIds);
 };
 
 window._runAllVariantGroups = async function() {

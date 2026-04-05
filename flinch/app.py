@@ -164,6 +164,15 @@ class BatchRequest(BaseModel):
     probe_ids: list[int] | None = None
     delay_ms: int = 2000
 
+class ConditionItem(BaseModel):
+    label: str = Field(max_length=200)
+    system_prompt: str = Field(default="", max_length=10000)
+
+class BatchConditionsRequest(BaseModel):
+    probe_ids: list[int]
+    conditions: list[ConditionItem]
+    delay_ms: int = 2000
+
 class AnnotationRequest(BaseModel):
     note_text: str | None = Field(default=None, max_length=2000)
     pattern_tags: list[str] | None = None
@@ -184,6 +193,7 @@ class SaveVariantFileRequest(BaseModel):
     description: str = Field(default="", max_length=2000)
     base_probe: str = ""
     domain: str = ""
+    variant_type: str = "framings"
     variants: list[VariantItem]
 
 class GenerateVariantsRequest(BaseModel):
@@ -554,6 +564,36 @@ async def run_batch(session_id: int, req: BatchRequest):
     )
 
 
+@app.post("/api/sessions/{session_id}/batch-conditions")
+async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
+    session = db.get_session(_conn, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if not req.probe_ids:
+        raise HTTPException(400, "probe_ids required")
+    if not req.conditions:
+        raise HTTPException(400, "conditions required")
+
+    conditions = [c.model_dump() for c in req.conditions]
+
+    async def event_generator():
+        try:
+            async for event in _runner.run_batch_conditions(
+                session_id, req.probe_ids, conditions, req.delay_ms
+            ):
+                event_type = event["event"]
+                event_data = json.dumps(event["data"])
+                yield f"event: {event_type}\ndata: {event_data}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/batch/{batch_id}/cancel")
 async def cancel_batch(batch_id: int):
     db.update_batch_run(_conn, batch_id, status="cancelled")
@@ -628,7 +668,8 @@ async def get_variant_file(group_id: str):
 async def save_variant_file_endpoint(req: SaveVariantFileRequest):
     db.save_variant_file(
         VARIANTS_DIR, req.group_id, req.title, req.description,
-        req.base_probe, req.domain, [v.model_dump() for v in req.variants]
+        req.base_probe, req.domain, [v.model_dump() for v in req.variants],
+        variant_type=req.variant_type,
     )
     result = db.sync_variant_file_to_db(_conn, VARIANTS_DIR, req.group_id)
     # Reload probes so new variant probes appear in the probe list

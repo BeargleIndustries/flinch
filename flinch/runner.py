@@ -284,6 +284,121 @@ class Runner:
             },
         }
 
+    async def run_batch_conditions(
+        self,
+        session_id: int,
+        probe_ids: list[int],
+        conditions: list[dict],
+        delay_ms: int = 2000,
+    ):
+        """Async generator yielding SSE events — runs each probe under each condition.
+
+        conditions: list of {"label": str, "system_prompt": str}
+        Produces N_probes × N_conditions runs total.
+        """
+        session = db.get_session(self._conn, session_id)
+        if not session:
+            raise ValueError("Session not found")
+
+        total = len(probe_ids) * len(conditions)
+        completed = 0
+        failed = 0
+
+        batch_id = db.create_batch_run(self._conn, session_id, total, delay_ms)
+
+        for condition in conditions:
+            cond_label = condition.get("label", "")
+            cond_system_prompt = condition.get("system_prompt", "")
+
+            # Build a fresh target for this condition's system prompt
+            target = self._make_target(session["target_model"], cond_system_prompt)
+
+            for probe_id in probe_ids:
+                probe = db.get_probe(self._conn, probe_id)
+                if not probe:
+                    failed += 1
+                    completed += 1
+                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+                    yield {
+                        "event": "error",
+                        "data": {
+                            "probe_id": probe_id,
+                            "condition": cond_label,
+                            "error": f"Probe {probe_id} not found",
+                            "completed": completed,
+                            "total": total,
+                        },
+                    }
+                    continue
+
+                try:
+                    target.reset()
+                    response_text = (await target.send(probe["prompt_text"])).text
+                    classification = classify(response_text)
+
+                    run_id = db.create_run(
+                        self._conn,
+                        probe_id,
+                        session_id,
+                        session["target_model"],
+                    )
+                    db.update_run(
+                        self._conn,
+                        run_id,
+                        initial_response=response_text,
+                        initial_classification=classification.value,
+                        notes=f"condition:{cond_label}",
+                    )
+                    completed += 1
+                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+                    yield {
+                        "event": "progress",
+                        "data": {
+                            "batch_id": batch_id,
+                            "probe_id": probe_id,
+                            "probe_name": probe["name"],
+                            "run_id": run_id,
+                            "condition": cond_label,
+                            "classification": classification.value,
+                            "completed": completed,
+                            "total": total,
+                        },
+                    }
+                except Exception as e:
+                    failed += 1
+                    completed += 1
+                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+                    yield {
+                        "event": "error",
+                        "data": {
+                            "probe_id": probe_id,
+                            "condition": cond_label,
+                            "error": str(e),
+                            "completed": completed,
+                            "total": total,
+                        },
+                    }
+
+                if completed < total:
+                    await asyncio.sleep(delay_ms / 1000)
+
+        db.update_batch_run(
+            self._conn,
+            batch_id,
+            status="complete",
+            probes_completed=completed,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        yield {
+            "event": "complete",
+            "data": {
+                "batch_id": batch_id,
+                "total": total,
+                "completed": completed,
+                "failed": failed,
+            },
+        }
+
     async def skip_pushback(self, run_id: int) -> dict:
         """Skip pushback for a run."""
         run = db.get_run(self._conn, run_id)

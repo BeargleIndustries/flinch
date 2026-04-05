@@ -108,6 +108,48 @@ export function cancelBatch() {
   render();
 }
 
+export async function startBatchConditions(sessionId, probeIds, conditions, delayMs) {
+  const total = probeIds.length * conditions.length;
+  state.batchRunning = true;
+  state.batchComplete = false;
+  state.batchProgress = {
+    completed: 0,
+    total,
+    failed: 0,
+    results: [],
+  };
+  render();
+
+  try {
+    await apiStream(
+      `/api/sessions/${sessionId}/batch-conditions`,
+      { probe_ids: probeIds, conditions, delay_ms: delayMs || 2000 },
+      (event, data) => {
+        if (event === 'progress') {
+          state.batchProgress.completed = data.completed;
+          state.batchProgress.total = data.total;
+          state.batchProgress.results.push(data);
+          loadStats();
+          render();
+        } else if (event === 'error') {
+          state.batchProgress.completed = data.completed;
+          state.batchProgress.failed = (state.batchProgress.failed || 0) + 1;
+          render();
+        } else if (event === 'complete') {
+          state.batchRunning = false;
+          state.batchComplete = true;
+          loadStats();
+          render();
+        }
+      }
+    );
+  } catch (e) {
+    state.batchRunning = false;
+    showError('Conditions batch failed: ' + e.message);
+    render();
+  }
+}
+
 // ─── Data loading ─────────────────────────────────────────────────────────────
 
 export async function loadSessions() {

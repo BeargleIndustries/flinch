@@ -1300,6 +1300,7 @@ def parse_variant_file(filepath: Path) -> dict | None:
     description = ""
     base_probe = ""
     domain = ""
+    variant_type = "framings"  # default for backward compat
 
     i = 0
     while i < len(lines):
@@ -1319,6 +1320,8 @@ def parse_variant_file(filepath: Path) -> dict | None:
             base_probe = line.split(":", 1)[1].strip()
         elif line.startswith("- domain:"):
             domain = line.split(":", 1)[1].strip()
+        elif line.startswith("- type:"):
+            variant_type = line.split(":", 1)[1].strip()
         elif line:
             desc_lines.append(line)
         i += 1
@@ -1331,9 +1334,11 @@ def parse_variant_file(filepath: Path) -> dict | None:
         line = lines[i]
         if line.startswith("## "):
             if current_label:
+                prompt_text = "\n".join(current_lines).strip()
                 variants.append({
                     "label": current_label,
-                    "prompt_text": "\n".join(current_lines).strip(),
+                    "prompt_text": prompt_text,
+                    "is_baseline": not prompt_text,  # empty = baseline (no framing)
                 })
             current_label = line[3:].strip()
             current_lines = []
@@ -1342,9 +1347,11 @@ def parse_variant_file(filepath: Path) -> dict | None:
                 current_lines.append(line)
         i += 1
     if current_label:
+        prompt_text = "\n".join(current_lines).strip()
         variants.append({
             "label": current_label,
-            "prompt_text": "\n".join(current_lines).strip(),
+            "prompt_text": prompt_text,
+            "is_baseline": not prompt_text,  # empty = baseline (no framing)
         })
 
     if not variants:
@@ -1356,6 +1363,7 @@ def parse_variant_file(filepath: Path) -> dict | None:
         "description": description,
         "base_probe": base_probe,
         "domain": domain,
+        "variant_type": variant_type,
         "variants": variants,
         "source_file": str(filepath),
     }
@@ -1374,6 +1382,7 @@ def list_variant_files(variants_dir: Path) -> list[dict]:
                 "title": data["title"],
                 "description": data["description"],
                 "domain": data["domain"],
+                "variant_type": data.get("variant_type", "framings"),
                 "variant_count": len(data["variants"]),
                 "labels": [v["label"] for v in data["variants"]],
             })
@@ -1382,7 +1391,7 @@ def list_variant_files(variants_dir: Path) -> list[dict]:
 
 def save_variant_file(variants_dir: Path, group_id: str, title: str,
                       description: str, base_probe: str, domain: str,
-                      variants: list[dict]) -> Path:
+                      variants: list[dict], variant_type: str = "framings") -> Path:
     """Save a variant group to a markdown file."""
     variants_dir.mkdir(parents=True, exist_ok=True)
     filepath = variants_dir / f"{group_id}.md"
@@ -1394,12 +1403,14 @@ def save_variant_file(variants_dir: Path, group_id: str, title: str,
         lines.append(f"- base_probe: {base_probe}")
     if domain:
         lines.append(f"- domain: {domain}")
+    if variant_type and variant_type != "framings":
+        lines.append(f"- type: {variant_type}")
     lines.append("")
     lines.append("---")
     lines.append("")
     for v in variants:
         lines.append(f"## {v['label']}")
-        lines.append(v["prompt_text"])
+        lines.append(v.get("prompt_text", ""))
         lines.append("")
     filepath.write_text("\n".join(lines), encoding="utf-8")
     return filepath
@@ -1416,7 +1427,12 @@ def sync_variant_file_to_db(conn, variants_dir: Path, group_id: str) -> dict | N
 
     probe_ids = []
     labels = []
+    is_conditions = data.get("variant_type") == "conditions"
     for v in data["variants"]:
+        # For conditions-type groups, variants are system prompts — don't create probes per condition
+        if is_conditions:
+            labels.append(v["label"])
+            continue
         probe_name = f"{group_id}--{_slugify(v['label'])}"
         existing = conn.execute(
             "SELECT id FROM probes WHERE name = ?", (probe_name,)
@@ -1437,6 +1453,13 @@ def sync_variant_file_to_db(conn, variants_dir: Path, group_id: str) -> dict | N
             )
             probe_ids.append(cur.lastrowid)
         labels.append(v["label"])
+
+    # For conditions-type groups, no probes to sync into probe_variants
+    if is_conditions:
+        conn.commit()
+        return {"group_id": group_id, "variant_type": "conditions", "variants": [
+            {"variant_label": lbl} for lbl in labels
+        ]}
 
     conn.execute("DELETE FROM probe_variants WHERE group_id = ?", (group_id,))
     for pid, label in zip(probe_ids, labels):

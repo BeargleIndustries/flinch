@@ -1,7 +1,7 @@
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 import { state, setPhase } from './state.js';
-import { api, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants, fetchThemes, fetchTheme } from './api.js';
+import { api, bulkDeleteProbes, loadStats, loadTurns, startBatch, cancelBatch, loadComparison, loadComparisons, getComparison, deleteComparison, exportComparisonById, showSaveSnapshotDialog, showSnapshotBrowser, loadSnapshotDiff, deleteSnapshot, hideSnapshotView, loadDashboardData, exportAllData, clearAllData, exportSequenceById, startStatRun, getSessionStatRuns, generateScorecard, listScorecards, generatePublicationExport, downloadPublicationExport, loadVariantFiles, getVariantFile, saveVariantFile, deleteVariantFile, generateVariants, fetchThemes, fetchTheme } from './api.js';
 import {
   escHtml,
   normalizeClassification,
@@ -80,11 +80,19 @@ export function renderProbeListOnly() {
 
   const countHtml = `<span style="font-size:10px; font-family:'JetBrains Mono',monospace; color:#4b5563; font-weight:400; letter-spacing:0; text-transform:none;">${visible} / ${total}</span>`;
 
+  const selectBtnLabel = state.probeSelectMode ? 'Done' : 'Select';
+  const selectBtnStyle = state.probeSelectMode
+    ? 'font-size:10px; font-family:\'JetBrains Mono\',monospace; color:#3b82f6; background:none; border:1px solid #1e3a8a; border-radius:3px; cursor:pointer; padding:2px 7px; line-height:1.6;'
+    : 'font-size:10px; font-family:\'JetBrains Mono\',monospace; color:#4b5563; background:none; border:1px solid #252a35; border-radius:3px; cursor:pointer; padding:2px 7px; line-height:1.6;';
+
   let html = `
     <div style="padding:0 8px 6px 8px;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
         <span style="font-size:10px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; font-family:'JetBrains Mono',monospace; color:#4b5563;">Probes</span>
-        ${countHtml}
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${countHtml}
+          <button onclick="window.toggleProbeSelectMode()" style="${selectBtnStyle}">${selectBtnLabel}</button>
+        </div>
       </div>
       <div style="position:relative; margin-bottom:5px;">
         <input
@@ -144,21 +152,60 @@ export function renderProbeListOnly() {
       const variantBadge = variantInfo
         ? `<span class="variant-badge" title="Group: ${escHtml(variantInfo.group_id)}">⊕ ${escHtml(variantInfo.label)}</span>`
         : '';
-      html += `
-        <div class="probe-item ${isActive ? 'active' : ''}"
-             style="padding:8px 12px; cursor:pointer; border-left:2px solid transparent; transition:all 0.1s; display:flex; align-items:flex-start; gap:6px;">
-          <div onclick="selectProbe('${probe.id}')" style="flex:1; min-width:0;">
-            <div style="font-size:13px; color:${isActive ? '#93c5fd' : '#cbd5e1'}; font-weight:500; margin-bottom:2px; display:flex; align-items:center; gap:5px; flex-wrap:wrap;">${escHtml(probe.name)}${variantBadge}${probe.narrative_opening ? '<span style="font-size:9px; color:#a855f7; border:1px solid #a855f740; border-radius:2px; padding:0 3px; font-family:\'JetBrains Mono\',monospace;">IF</span>' : ''}</div>
-            <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(probe.prompt_text || '').slice(0, 60)}...</div>
+      if (state.probeSelectMode) {
+        const isChecked = state.selectedProbeIds.has(probe.id);
+        html += `
+          <div class="probe-item"
+               onclick="window.toggleProbeSelection(${probe.id})"
+               style="padding:8px 12px; cursor:pointer; border-left:2px solid ${isChecked ? '#3b82f6' : 'transparent'}; transition:all 0.1s; display:flex; align-items:flex-start; gap:8px; background:${isChecked ? '#0f1929' : 'transparent'};">
+            <input type="checkbox" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation(); window.toggleProbeSelection(${probe.id})"
+                   style="margin-top:2px; flex-shrink:0; accent-color:#3b82f6; cursor:pointer;" />
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:13px; color:${isChecked ? '#93c5fd' : '#cbd5e1'}; font-weight:500; margin-bottom:2px; display:flex; align-items:center; gap:5px; flex-wrap:wrap;">${escHtml(probe.name)}${variantBadge}${probe.narrative_opening ? '<span style="font-size:9px; color:#a855f7; border:1px solid #a855f740; border-radius:2px; padding:0 3px; font-family:\'JetBrains Mono\',monospace;">IF</span>' : ''}</div>
+              <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(probe.prompt_text || '').slice(0, 60)}...</div>
+            </div>
           </div>
-          <span onclick="event.stopPropagation(); deleteProbe(${probe.id}, '${escHtml(probe.name)}')"
-                style="color:#7f1d1d; cursor:pointer; font-size:10px; padding:2px 4px; flex-shrink:0; opacity:0.5;"
-                onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='0.5'"
-                title="Delete probe">✕</span>
-        </div>
-      `;
+        `;
+      } else {
+        html += `
+          <div class="probe-item ${isActive ? 'active' : ''}"
+               style="padding:8px 12px; cursor:pointer; border-left:2px solid transparent; transition:all 0.1s; display:flex; align-items:flex-start; gap:6px;">
+            <div onclick="selectProbe('${probe.id}')" style="flex:1; min-width:0;">
+              <div style="font-size:13px; color:${isActive ? '#93c5fd' : '#cbd5e1'}; font-weight:500; margin-bottom:2px; display:flex; align-items:center; gap:5px; flex-wrap:wrap;">${escHtml(probe.name)}${variantBadge}${probe.narrative_opening ? '<span style="font-size:9px; color:#a855f7; border:1px solid #a855f740; border-radius:2px; padding:0 3px; font-family:\'JetBrains Mono\',monospace;">IF</span>' : ''}</div>
+              <div style="font-size:11px; color:#4b5563; font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(probe.prompt_text || '').slice(0, 60)}...</div>
+            </div>
+            <span onclick="event.stopPropagation(); deleteProbe(${probe.id}, '${escHtml(probe.name)}')"
+                  style="color:#7f1d1d; cursor:pointer; font-size:10px; padding:2px 4px; flex-shrink:0; opacity:0.5;"
+                  onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='0.5'"
+                  title="Delete probe">✕</span>
+          </div>
+        `;
+      }
     }
   }
+  if (state.probeSelectMode) {
+    const selCount = state.selectedProbeIds.size;
+    const allVisibleIds = filtered.filter(p => p.id !== 'custom').map(p => p.id);
+    const allSelected = allVisibleIds.length > 0 && allVisibleIds.every(id => state.selectedProbeIds.has(id));
+    html += `
+      <div style="position:sticky; bottom:0; background:#0f0f0f; border-top:1px solid #1a1a1a; padding:8px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; gap:6px;">
+          <button onclick="window.probeSelectAll()" style="flex:1; font-size:10px; font-family:'JetBrains Mono',monospace; color:#cbd5e1; background:#1a1a1a; border:1px solid #252a35; border-radius:3px; cursor:pointer; padding:4px 0;">
+            ${allSelected ? 'Deselect All' : 'Select All'}
+          </button>
+          <button onclick="window.toggleProbeSelectMode()" style="flex:1; font-size:10px; font-family:'JetBrains Mono',monospace; color:#6b7280; background:none; border:1px solid #252a35; border-radius:3px; cursor:pointer; padding:4px 0;">
+            Cancel
+          </button>
+        </div>
+        <button onclick="window.deleteSelectedProbes()"
+                ${selCount === 0 ? 'disabled' : ''}
+                style="font-size:11px; font-family:'JetBrains Mono',monospace; color:${selCount > 0 ? '#fca5a5' : '#4b5563'}; background:${selCount > 0 ? '#1c0a0a' : '#111'}; border:1px solid ${selCount > 0 ? '#7f1d1d' : '#252a35'}; border-radius:3px; cursor:${selCount > 0 ? 'pointer' : 'default'}; padding:5px 0; width:100%;">
+          Delete Selected (${selCount})
+        </button>
+      </div>
+    `;
+  }
+
   container.innerHTML = html;
 }
 
@@ -2748,6 +2795,55 @@ window.runMultiModelCompare = async function() {
 window.closeCompareModal = function() {
   const modal = document.getElementById('compare-modal');
   if (modal) modal.style.display = 'none';
+};
+
+window.toggleProbeSelectMode = function() {
+  state.probeSelectMode = !state.probeSelectMode;
+  if (!state.probeSelectMode) {
+    state.selectedProbeIds = new Set();
+  }
+  renderProbeListOnly();
+};
+
+window.toggleProbeSelection = function(probeId) {
+  if (state.selectedProbeIds.has(probeId)) {
+    state.selectedProbeIds.delete(probeId);
+  } else {
+    state.selectedProbeIds.add(probeId);
+  }
+  renderProbeListOnly();
+};
+
+window.probeSelectAll = function() {
+  const filtered = filterProbes(state.probes, state.probeSearch, state.probeDomainFilter);
+  const allVisibleIds = filtered.filter(p => p.id !== 'custom').map(p => p.id);
+  const allSelected = allVisibleIds.every(id => state.selectedProbeIds.has(id));
+  if (allSelected) {
+    allVisibleIds.forEach(id => state.selectedProbeIds.delete(id));
+  } else {
+    allVisibleIds.forEach(id => state.selectedProbeIds.add(id));
+  }
+  renderProbeListOnly();
+};
+
+window.deleteSelectedProbes = async function() {
+  const ids = [...state.selectedProbeIds];
+  if (ids.length === 0) return;
+  if (!confirm(`Delete ${ids.length} probe(s)? This cannot be undone.`)) return;
+  try {
+    await bulkDeleteProbes(ids);
+    state.probes = state.probes.filter(p => !state.selectedProbeIds.has(p.id));
+    if (state.currentProbe && state.selectedProbeIds.has(state.currentProbe.id)) {
+      state.currentProbe = null;
+      state.currentRun = null;
+      state.phase = 'idle';
+    }
+    state.probeSelectMode = false;
+    state.selectedProbeIds = new Set();
+    render();
+  } catch (e) {
+    showError('Failed to delete probes: ' + e.message);
+  }
 };
 
 window.onProbeSearchInput = function(value) {

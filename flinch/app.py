@@ -256,6 +256,19 @@ async def delete_probe(probe_id: int):
     return {"deleted": True}
 
 
+@app.post("/api/probes/bulk-delete")
+async def api_bulk_delete_probes(request: Request):
+    """Delete multiple probes at once."""
+    data = await request.json()
+    probe_ids = data.get("probe_ids", [])
+    if not probe_ids:
+        raise HTTPException(status_code=400, detail="No probe IDs provided")
+    placeholders = ",".join("?" for _ in probe_ids)
+    _conn.execute(f"DELETE FROM probes WHERE id IN ({placeholders})", probe_ids)
+    _conn.commit()
+    return {"deleted": len(probe_ids)}
+
+
 @app.post("/api/probes/load-defaults")
 async def load_default_probes():
     """Load the default research-based probe set."""

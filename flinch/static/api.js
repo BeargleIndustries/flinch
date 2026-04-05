@@ -411,6 +411,13 @@ export async function deleteProbe(probeId, probeName) {
   }
 }
 
+export async function bulkDeleteProbes(probeIds) {
+  return api('/api/probes/bulk-delete', {
+    method: 'POST',
+    body: { probe_ids: probeIds },
+  });
+}
+
 export async function loadDefaultProbes() {
   try {
     const result = await api('/api/probes/load-defaults', { method: 'POST' });
@@ -1401,6 +1408,7 @@ window.promoteToExample = promoteToExample;
 window.continuePushback = continuePushback;
 window.nextProbe = nextProbe;
 window.deleteProbe = deleteProbe;
+window.bulkDeleteProbes = bulkDeleteProbes;
 window.loadDefaultProbes = loadDefaultProbes;
 window.deleteCurrentSession = deleteCurrentSession;
 window.deleteRun = deleteRun;

@@ -123,4 +123,7 @@ export const state = {
   themes: [],                 // list of available theme summaries
   selectedTheme: 'beargle-dark',  // currently selected theme name
   selectedThemeData: null,    // full theme object for live preview
+  // Bulk probe select mode
+  probeSelectMode: false,
+  selectedProbeIds: new Set(),
 };

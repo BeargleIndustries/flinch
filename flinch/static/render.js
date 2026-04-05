@@ -60,7 +60,10 @@ export function renderProbeListOnly() {
     container.innerHTML = `
       <div style="padding:24px 16px; text-align:center;">
         <div style="font-size:10px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:#252a35; font-family:'JetBrains Mono',monospace; margin-bottom:8px;">No probes loaded</div>
-        <button onclick="loadDefaultProbes()" style="font-size:11px; color:#3b82f6; background:none; border:1px solid #1e3a8a; border-radius:3px; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:4px 10px;">Load Defaults</button>
+        <div style="display:flex; gap:8px; justify-content:center;">
+          <button onclick="loadDefaultProbes()" style="font-size:11px; color:#3b82f6; background:none; border:1px solid #1e3a8a; border-radius:3px; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:4px 10px;">Load Defaults</button>
+          <button onclick="showImportFileModal()" style="font-size:11px; color:#34d399; background:none; border:1px solid #065f46; border-radius:3px; cursor:pointer; font-family:'JetBrains Mono',monospace; padding:4px 10px;">Import File</button>
+        </div>
       </div>`;
     return;
   }

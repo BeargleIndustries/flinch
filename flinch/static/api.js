@@ -432,6 +432,29 @@ export async function loadDefaultProbes() {
   }
 }
 
+export async function listProbeFiles() {
+  const result = await api('/api/probes/files');
+  return result.files || [];
+}
+
+export async function importProbeFile(filename) {
+  try {
+    const result = await api('/api/probes/import-file', {
+      method: 'POST',
+      body: { filename },
+    });
+    await loadProbes();
+    render();
+    return result;
+  } catch (e) {
+    showError('Failed to import file: ' + e.message);
+    throw e;
+  }
+}
+
+window.listProbeFiles = listProbeFiles;
+window.importProbeFile = importProbeFile;
+
 export async function createProbe(data) {
   const probe = await api('/api/probes', {
     method: 'POST',

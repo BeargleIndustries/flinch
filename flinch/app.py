@@ -287,6 +287,39 @@ async def load_default_probes():
     return {"loaded": count, "total": len(db.list_probes(_conn))}
 
 
+@app.get("/api/probes/files")
+async def list_probe_files():
+    """List available probe files in the probes directory."""
+    files = []
+    if PROBES_DIR.exists():
+        for p in sorted(PROBES_DIR.iterdir()):
+            if p.suffix in (".md", ".yaml", ".yml"):
+                files.append({"name": p.name, "path": str(p)})
+    return {"files": files}
+
+
+@app.post("/api/probes/import-file")
+async def import_probe_file(request: Request):
+    """Import probes from a specific file in the probes directory."""
+    data = await request.json()
+    filename = data.get("filename", "")
+    if not filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    path = PROBES_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+    if not path.suffix in (".md", ".yaml", ".yml"):
+        raise HTTPException(status_code=400, detail="Only .md and .yaml files supported")
+    # Security: ensure path stays within probes dir
+    if not path.resolve().is_relative_to(PROBES_DIR.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if path.suffix == ".md":
+        count = db.import_probes_from_markdown(_conn, str(path))
+    else:
+        count = db.import_probes_from_yaml(_conn, str(path))
+    return {"loaded": count, "file": filename, "total": len(db.list_probes(_conn))}
+
+
 @app.post("/api/probes")
 async def create_probe(req: CreateProbeRequest):
     probe_id = db.create_probe(

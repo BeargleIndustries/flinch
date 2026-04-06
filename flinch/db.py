@@ -586,15 +586,33 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
-async def get_async_db() -> "aiosqlite.Connection":
-    """Get an async database connection for experiment operations."""
+def get_async_db():
+    """Get an async database connection for experiment operations.
+
+    Usage: async with get_async_db() as db:
+    Do NOT await this — it returns a context manager directly.
+    """
     if aiosqlite is None:
         raise ImportError("aiosqlite is required for experiment features. Run: pip install aiosqlite")
-    db = await aiosqlite.connect(str(DB_PATH))
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA foreign_keys = ON")
-    await db.execute("PRAGMA journal_mode = WAL")
-    return db
+    return _AsyncDBContext()
+
+
+class _AsyncDBContext:
+    """Context manager that opens, configures, and closes an aiosqlite connection."""
+    def __init__(self):
+        self._db = None
+
+    async def __aenter__(self):
+        self._db = await aiosqlite.connect(str(DB_PATH))
+        self._db.row_factory = aiosqlite.Row
+        await self._db.execute("PRAGMA foreign_keys = ON")
+        await self._db.execute("PRAGMA journal_mode = WAL")
+        return self._db
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._db:
+            await self._db.close()
+        return False
 
 
 def _row_to_dict(row) -> dict:

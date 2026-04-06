@@ -587,8 +587,7 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
         target_model = session.get("target_model", "unknown")
 
         try:
-            db_conn = await get_async_db()
-            try:
+            async with get_async_db() as db_conn:
                 ts = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 experiment_id = await create_experiment(
                     db_conn,
@@ -617,70 +616,60 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
 
                 await create_experiment_responses(db_conn, experiment_id)
                 await update_experiment(db_conn, experiment_id, status="running")
-            finally:
-                await db_conn.close()
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': f'experiment setup failed: {e}'})}\n\n"
             return
 
         # --- Stream runner events, writing into experiment tables as we go ---
-        # Reuse one async DB connection for all experiment writes
-        exp_db = None
         try:
-            exp_db = await get_async_db()
-            async for event in _runner.run_batch_conditions(
-                session_id, req.probe_ids, conditions, req.delay_ms
-            ):
-                event_type = event["event"]
-                event_data = event["data"]
+            async with get_async_db() as exp_db:
+                async for event in _runner.run_batch_conditions(
+                    session_id, req.probe_ids, conditions, req.delay_ms
+                ):
+                    event_type = event["event"]
+                    event_data = event["data"]
 
-                if event_type == "progress" and experiment_id is not None:
-                    try:
-                        cond_label = event_data.get("condition", "")
-                        probe_id = event_data.get("probe_id")
-                        resp_text = event_data.get("response_text", "")
-                        classification = event_data.get("classification", "")
-
-                        cond_id = condition_label_to_id.get(cond_label)
-                        prompt_id = probe_id_to_prompt_id.get(probe_id)
-
-                        if cond_id is not None and prompt_id is not None:
-                            row = await find_experiment_response(
-                                exp_db, experiment_id, cond_id, prompt_id, target_model
-                            )
-                            if row:
-                                await update_experiment_response(
-                                    exp_db,
-                                    row["id"],
-                                    response_text=resp_text,
-                                    classification=classification,
-                                    status="completed",
-                                    completed_at=datetime.now(_tz.utc).isoformat(),
-                                )
-                    except Exception as write_err:
-                        logging.getLogger("flinch").warning(
-                            "Experiment write failed for probe %s condition %s: %s",
-                            event_data.get("probe_id"), event_data.get("condition"), write_err)
-
-                elif event_type == "complete":
-                    if experiment_id is not None:
+                    if event_type == "progress" and experiment_id is not None:
                         try:
-                            await update_experiment(exp_db, experiment_id, status="completed")
-                        except Exception as complete_err:
-                            logging.getLogger("flinch").warning(
-                                "Failed to mark experiment %s completed: %s", experiment_id, complete_err)
-                    event_data = dict(event_data, experiment_id=experiment_id)
+                            cond_label = event_data.get("condition", "")
+                            probe_id = event_data.get("probe_id")
+                            resp_text = event_data.get("response_text", "")
 
-                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+                            cond_id = condition_label_to_id.get(cond_label)
+                            prompt_id = probe_id_to_prompt_id.get(probe_id)
+
+                            if cond_id is not None and prompt_id is not None:
+                                row = await find_experiment_response(
+                                    exp_db, experiment_id, cond_id, prompt_id, target_model
+                                )
+                                if row:
+                                    await update_experiment_response(
+                                        exp_db,
+                                        row["id"],
+                                        response_text=resp_text,
+                                        status="completed",
+                                        completed_at=datetime.now(_tz.utc).isoformat(),
+                                    )
+                        except Exception as write_err:
+                            logging.getLogger("flinch").warning(
+                                "Experiment write failed for probe %s condition %s: %s",
+                                event_data.get("probe_id"), event_data.get("condition"), write_err)
+
+                    elif event_type == "complete":
+                        if experiment_id is not None:
+                            try:
+                                await update_experiment(exp_db, experiment_id, status="completed")
+                            except Exception as complete_err:
+                                logging.getLogger("flinch").warning(
+                                    "Failed to mark experiment %s completed: %s", experiment_id, complete_err)
+                        event_data = dict(event_data, experiment_id=experiment_id)
+
+                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
-            # Mark experiment as failed if stream crashes
             if experiment_id is not None:
                 try:
-                    fail_db = await get_async_db()
-                    try:
+                    async with get_async_db() as fail_db:
                         await update_experiment(fail_db, experiment_id, status="failed")
-                    finally:
-                        await fail_db.close()
                 except Exception:
                     pass
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
@@ -2767,7 +2756,7 @@ async def get_theme_css(name: str):
 @app.post("/api/experiments")
 async def api_create_experiment(req: CreateExperimentRequest):
     """Create a new experiment with conditions."""
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exp_id = await create_experiment(
             db_conn, req.name, req.description,
             model_ids=req.model_ids, base_model_ids=req.base_model_ids,
@@ -2783,13 +2772,13 @@ async def api_create_experiment(req: CreateExperimentRequest):
 
 @app.get("/api/experiments")
 async def api_list_experiments():
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"experiments": await list_experiments(db_conn)}
 
 
 @app.get("/api/experiments/{experiment_id}")
 async def api_get_experiment(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
         if not exp:
             raise HTTPException(404, "Experiment not found")
@@ -2800,7 +2789,7 @@ async def api_get_experiment(experiment_id: int):
 
 @app.put("/api/experiments/{experiment_id}")
 async def api_update_experiment(experiment_id: int, req: UpdateExperimentRequest):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         updates = {k: v for k, v in req.model_dump().items() if v is not None}
         if updates:
             await update_experiment(db_conn, experiment_id, **updates)
@@ -2810,7 +2799,7 @@ async def api_update_experiment(experiment_id: int, req: UpdateExperimentRequest
 
 @app.delete("/api/experiments/{experiment_id}")
 async def api_delete_experiment(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         await db_conn.execute("DELETE FROM experiments WHERE id = ?", (experiment_id,))
         await db_conn.commit()
     return {"deleted": True}
@@ -2818,7 +2807,7 @@ async def api_delete_experiment(experiment_id: int):
 
 @app.post("/api/experiments/{experiment_id}/conditions")
 async def api_add_condition(experiment_id: int, req: ConditionCreate):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         cond_id = await create_condition(db_conn, experiment_id, req.label, req.system_prompt, req.description, req.sort_order)
         await db_conn.commit()
     return {"id": cond_id}
@@ -2826,13 +2815,13 @@ async def api_add_condition(experiment_id: int, req: ConditionCreate):
 
 @app.get("/api/experiments/{experiment_id}/conditions")
 async def api_list_conditions(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"conditions": await list_conditions(db_conn, experiment_id)}
 
 
 @app.post("/api/experiments/{experiment_id}/prompts")
 async def api_add_prompts(experiment_id: int, req: list[ExperimentPromptCreate]):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         entries = [{"probe_id": p.probe_id, "custom_prompt_text": p.custom_prompt_text, "domain": p.domain} for p in req]
         await add_experiment_prompts(db_conn, experiment_id, entries)
         await db_conn.commit()
@@ -2841,7 +2830,7 @@ async def api_add_prompts(experiment_id: int, req: list[ExperimentPromptCreate])
 
 @app.post("/api/experiments/{experiment_id}/prompts/import")
 async def api_bulk_import_prompts(experiment_id: int, req: BulkPromptImportRequest):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         count = await bulk_import_prompts(db_conn, experiment_id, req.csv_text or "")
         await db_conn.commit()
     return {"imported": count}
@@ -2855,7 +2844,7 @@ async def api_import_hh_prompts(experiment_id: int, req: HHImportRequest):
     async def event_stream():
         try:
             importer = HHRLHFImporter()
-            async with await get_async_db() as db_conn:
+            async with get_async_db() as db_conn:
                 result = await importer.import_to_experiment(
                     db_conn=db_conn,
                     experiment_id=experiment_id,
@@ -2873,14 +2862,14 @@ async def api_import_hh_prompts(experiment_id: int, req: HHImportRequest):
 
 @app.get("/api/experiments/{experiment_id}/prompts")
 async def api_list_prompts(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"prompts": await list_experiment_prompts(db_conn, experiment_id)}
 
 
 @app.post("/api/experiments/{experiment_id}/estimate")
 async def api_estimate_experiment(experiment_id: int):
     """Cost/time estimate before running."""
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
         conditions = await list_conditions(db_conn, experiment_id)
         prompts = await list_experiment_prompts(db_conn, experiment_id)
@@ -2902,7 +2891,7 @@ async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
     import json as json_mod
 
     async def event_stream():
-        async with await get_async_db() as db_conn:
+        async with get_async_db() as db_conn:
             await create_experiment_responses(db_conn, experiment_id)
             await db_conn.commit()
             pool = RateLimiterPool(req.concurrency_per_provider)
@@ -2915,7 +2904,7 @@ async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
 
 @app.post("/api/experiments/{experiment_id}/pause")
 async def api_pause_experiment(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         await update_experiment(db_conn, experiment_id, status="paused")
         await db_conn.commit()
     return {"paused": True}
@@ -2929,7 +2918,7 @@ async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest 
     import json as json_mod
 
     async def event_stream():
-        async with await get_async_db() as db_conn:
+        async with get_async_db() as db_conn:
             pool = RateLimiterPool(req.concurrency_per_provider)
             runner = ExperimentRunner(db_conn, pool)
             async for event in runner.run_experiment(experiment_id):
@@ -2940,7 +2929,7 @@ async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest 
 
 @app.get("/api/experiments/{experiment_id}/progress")
 async def api_experiment_progress(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return await get_experiment_progress(db_conn, experiment_id)
 
 
@@ -2951,7 +2940,7 @@ async def api_compute_metrics(experiment_id: int, force: bool = False):
 
     async def event_stream():
         from flinch.metrics import ResponseMetricsAnalyzer
-        async with await get_async_db() as db_conn:
+        async with get_async_db() as db_conn:
             analyzer = ResponseMetricsAnalyzer()
             async for event in analyzer.analyze_experiment(db_conn, experiment_id, force=force):
                 yield f"data: {json_mod.dumps(event)}\n\n"
@@ -2967,7 +2956,7 @@ async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
     async def event_stream():
         from flinch.rater import AIRaterPipeline
         from flinch.rate_limiter import RateLimiterPool
-        async with await get_async_db() as db_conn:
+        async with get_async_db() as db_conn:
             pool = RateLimiterPool()
             pipeline = AIRaterPipeline(db_conn, req.rater_models, pool)
             async for event in pipeline.rate_experiment(experiment_id):
@@ -2980,7 +2969,7 @@ async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
 async def api_generate_prolific(experiment_id: int, req: GenerateProlificExportRequest):
     """Generate Prolific evaluation tasks."""
     from flinch.prolific import ProlificExporter
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exporter = ProlificExporter(db_conn)
         result = await exporter.generate_tasks(
             experiment_id, req.prompt_count, req.model_ids, req.raters_per_task, req.batch_id,
@@ -2992,7 +2981,7 @@ async def api_generate_prolific(experiment_id: int, req: GenerateProlificExportR
 async def api_export_prolific_csv(experiment_id: int):
     """Export Prolific tasks as CSV download."""
     from flinch.prolific import ProlificExporter
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exporter = ProlificExporter(db_conn)
         csv_data = await exporter.export_csv(experiment_id)
     return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=prolific_experiment_{experiment_id}.csv"})
@@ -3002,7 +2991,7 @@ async def api_export_prolific_csv(experiment_id: int):
 async def api_import_prolific_results(experiment_id: int, req: dict):
     """Import Prolific results CSV."""
     from flinch.prolific import ProlificExporter
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exporter = ProlificExporter(db_conn)
         result = await exporter.import_results(experiment_id, req.get("csv_text", ""))
     return result
@@ -3012,7 +3001,7 @@ async def api_import_prolific_results(experiment_id: int, req: dict):
 async def api_run_analysis(experiment_id: int, req: RunAnalysisRequest = RunAnalysisRequest()):
     """Run statistical analysis."""
     from flinch.stats import ExperimentAnalyzer
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         analyzer = ExperimentAnalyzer(db_conn)
         results = await analyzer.full_analysis(experiment_id)
     return {"analysis": results}
@@ -3022,7 +3011,7 @@ async def api_run_analysis(experiment_id: int, req: RunAnalysisRequest = RunAnal
 async def api_export_analysis(experiment_id: int):
     """Export analysis results as CSV."""
     from flinch.stats import ExperimentAnalyzer
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         analyzer = ExperimentAnalyzer(db_conn)
         csv_text = await analyzer.export_analysis_csv(experiment_id)
     return Response(
@@ -3037,7 +3026,7 @@ async def api_generate_report(experiment_id: int, req: GenerateReportRequest = G
     """Generate publication report."""
     from flinch.reporting import ExperimentReporter
     charts = []
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         reporter = ExperimentReporter(db_conn)
         if req.include_charts:
             charts = await reporter.generate_charts(experiment_id)
@@ -3049,7 +3038,7 @@ async def api_generate_report(experiment_id: int, req: GenerateReportRequest = G
 @app.get("/api/experiments/{experiment_id}/responses")
 async def api_list_responses(experiment_id: int, model_id: str = None, condition_id: int = None, prompt_id: int = None, status: str = None):
     """List experiment responses with optional filters."""
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         query = "SELECT * FROM experiment_responses WHERE experiment_id = ?"
         params = [experiment_id]
         if model_id:
@@ -3072,32 +3061,32 @@ async def api_list_responses(experiment_id: int, model_id: str = None, condition
 
 @app.get("/api/experiments/{experiment_id}/ratings")
 async def api_list_ratings(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"ratings": await list_ai_ratings(db_conn, experiment_id)}
 
 
 @app.get("/api/experiments/{experiment_id}/human-evals")
 async def api_list_human_evals(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"eval_tasks": await list_eval_tasks(db_conn, experiment_id)}
 
 
 @app.get("/api/experiments/{experiment_id}/analysis")
 async def api_list_analysis(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"results": await list_analysis_results(db_conn, experiment_id)}
 
 
 @app.get("/api/experiments/{experiment_id}/metrics")
 async def api_get_metrics(experiment_id: int):
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         return {"metrics": await get_response_metrics(db_conn, experiment_id)}
 
 
 @app.get("/api/experiments/{experiment_id}/export")
 async def api_export_experiment(experiment_id: int):
     """Full experiment data export as JSON."""
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
         conditions = await list_conditions(db_conn, experiment_id)
         prompts = await list_experiment_prompts(db_conn, experiment_id)
@@ -3117,7 +3106,7 @@ async def api_export_experiment(experiment_id: int):
 async def api_preregistration(experiment_id: int):
     """Generate OSF preregistration document."""
     from flinch.reporting import ExperimentReporter
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         reporter = ExperimentReporter(db_conn)
         doc = await reporter.generate_preregistration(experiment_id)
     return {"preregistration": doc}
@@ -3126,7 +3115,7 @@ async def api_preregistration(experiment_id: int):
 @app.get("/api/experiments/{experiment_id}/condition-comparison")
 async def api_condition_comparison(experiment_id: int):
     """Return per-condition compliance rates and metric distributions."""
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         result = await get_condition_comparison(db_conn, experiment_id)
     return result
 
@@ -3134,7 +3123,7 @@ async def api_condition_comparison(experiment_id: int):
 @app.get("/api/experiments/{experiment_id}/condition-export")
 async def api_condition_export_csv(experiment_id: int):
     """Export all responses with metrics as CSV — one row per response."""
-    async with await get_async_db() as db_conn:
+    async with get_async_db() as db_conn:
         async with db_conn.execute(
             """SELECT
                 p.name        AS probe_name,

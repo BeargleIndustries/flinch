@@ -333,7 +333,9 @@ function renderMain() {
 
   if (state.batchRunning || state.batchComplete) {
     // If we have a condition experiment, show the condition dashboard instead of generic batch view
-    if (state.conditionExperimentId && state.batchComplete) {
+    console.log('[render] batch state:', { batchRunning: state.batchRunning, batchComplete: state.batchComplete, conditionExperimentId: state.conditionExperimentId });
+    if (state.conditionExperimentId && state.batchComplete && !state.batchRunning) {
+      console.log('[render] -> condition comparison dashboard for experiment', state.conditionExperimentId);
       renderConditionComparisonDashboard(state.conditionExperimentId);
       return;
     }

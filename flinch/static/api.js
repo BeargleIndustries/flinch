@@ -156,14 +156,17 @@ export async function startBatchConditions(sessionId, probeIds, conditions, dela
         } else if (event === 'complete') {
           state.batchRunning = false;
           state.batchComplete = true;
-          if (data && data.experiment_id) {
-            state.conditionExperimentId = data.experiment_id;
-            state.conditionComparisonData = null;
-          }
           // Remove floating progress bar
           const bar = document.getElementById('condition-batch-progress');
           if (bar) bar.remove();
-          render();  // Full render only on completion
+          if (data && data.experiment_id) {
+            state.conditionExperimentId = data.experiment_id;
+            state.conditionComparisonData = null;
+            // Go directly to the condition comparison dashboard
+            console.log('[batch-conditions] Complete — opening condition dashboard for experiment', data.experiment_id);
+            import('./render.js').then(mod => mod.renderConditionComparisonDashboard(data.experiment_id));
+          }
+          render();
         }
       }
     );

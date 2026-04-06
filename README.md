@@ -14,7 +14,7 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 
 ## Status
 
-**v0.7.0 — Research Preview.** Actively used for research. Core workflow solid — probe, classify, coach, pushback, compare. Statistical analysis, publication-ready exports with configurable themes, PDF generation, RLHF experiment framework. Bug reports welcome.
+**v0.8.0 — Experiment Framework.** Full A/B condition experiment pipeline: run probes across system prompt conditions (e.g., deception vs. honesty), compute lexical metrics (MTLD, Honore's Statistic, hedging, etc.), run statistical analysis, export CSV. Local model support via Ollama. Bug reports welcome.
 
 ## Features
 
@@ -47,10 +47,15 @@ A "flinch" is a content restriction that doesn't hold up under examination. The 
 - **Dark theme web UI** — runs locally in your browser
 
 ### Experiment Framework
-- **RLHF experiment design** — structured experiment creation with conditions, prompts, and model matrices
+- **Condition experiments** — run the same probes under different system prompt conditions (e.g., honesty vs. deception framing). Variant groups support `type: conditions` for A/B testing and `type: framings` for probe text alternatives
+- **Lexical analysis engine** — 25+ metrics per response: MTLD, Honoré's Statistic, TTR, Flesch-Kincaid, Gunning Fog, POS rates, hedging/confidence/evasion markers, sentiment analysis
+- **Statistical analysis** — Mann-Whitney U, Wilcoxon signed-rank (paired by probe), Cohen's d, rank-biserial correlation, Benjamini-Hochberg FDR correction
+- **Condition comparison dashboard** — per-condition system prompts, side-by-side response browser, metric comparison table with significance flags
+- **HH-RLHF prompt library** — download script extracts 35K+ deception-viable prompts from Anthropic's HH-RLHF dataset with stratified sampling
+- **CSV export** — one row per response with all metrics, conditions, and system prompts for external analysis
+- **Resume support** — retry failed probes (3x with backoff), resume interrupted experiments from where they left off
 - **AI rater pipeline** — automated evaluation using multiple rater models with blinding and position randomization
-- **Statistical analysis** — win rates, effect sizes, confidence intervals, inter-rater agreement (Krippendorff's alpha)
-- **Report generation** — publication-ready experiment reports in markdown, HTML, or LaTeX
+- **Local model support** — run experiments against Ollama models (auto-detected) for free iteration before using API models
 
 ## Supported Models
 
@@ -90,8 +95,12 @@ pip install -e ".[multi-model]"
 # PDF export (requires system libraries — cairo, pango)
 pip install -e ".[pdf]"
 
-# RLHF experiment framework (stats, charts, inter-rater agreement)
+# Experiment framework (lexical analysis, stats, MTLD, Honoré's)
 pip install -e ".[experiment]"
+
+# Download HH-RLHF prompt library (one-time, ~35K prompts)
+pip install datasets
+python scripts/download_hh_prompts.py
 ```
 
 ## How It Works
@@ -119,7 +128,40 @@ Probes are markdown files in `flinch/probes/`. See `example-probes.md` for the f
 The actual prompt text sent to the target model.
 ```
 
-Load probes into Flinch using the "Load Defaults" button in the sidebar, or create them directly in the UI.
+Load probes using "Load Defaults" (imports all files in `flinch/probes/`), "Import File" (pick a specific file), or create them directly in the UI. Bulk select and delete probes via the "Select" toggle in the sidebar. Sessions can be scoped to specific probes via the probe picker in the new session dialog.
+
+## Running Condition Experiments
+
+Condition experiments test the same probes under different system prompt conditions. Create a variant group file in `flinch/variants/`:
+
+```markdown
+# My Experiment
+
+Description of what you're testing.
+
+- type: conditions
+
+---
+
+## Baseline
+
+## Condition A
+You are a helpful assistant that prioritizes accuracy.
+
+## Condition B
+You are a helpful assistant that prioritizes user satisfaction.
+```
+
+Then:
+1. Create a session and load your probes
+2. Go to the Framing Variants tab
+3. Click "Run" on your conditions group — runs every probe once per condition
+4. View results in the Condition Comparison dashboard (auto-opens after run)
+5. Click "Compute Metrics" for lexical analysis (MTLD, Honoré's, hedging, etc.)
+6. Click "Run Analysis" for statistical tests (Mann-Whitney U, Wilcoxon, FDR correction)
+7. Export CSV for external analysis
+
+If a run is interrupted, go to Experiments tab → click the experiment → Resume.
 
 ## Custom Themes
 

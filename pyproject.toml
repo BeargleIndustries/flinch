@@ -1,6 +1,6 @@
 [project]
 name = "flinch"
-version = "0.7.0"
+version = "0.8.0"
 description = "AI content restriction consistency research tool"
 readme = "README.md"
 license = "MIT"

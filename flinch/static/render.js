@@ -332,6 +332,11 @@ function renderMain() {
   }
 
   if (state.batchRunning || state.batchComplete) {
+    // If we have a condition experiment, show the condition dashboard instead of generic batch view
+    if (state.conditionExperimentId && state.batchComplete) {
+      renderConditionComparisonDashboard(state.conditionExperimentId);
+      return;
+    }
     main.innerHTML = renderBatchView();
     return;
   }

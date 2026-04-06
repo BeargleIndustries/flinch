@@ -224,9 +224,15 @@ function renderExpCards(exps) {
                 ${(exp.models || []).map(m => `<span style="font-size:11px;color:#555;font-family:'JetBrains Mono',monospace;">${esc(m)}</span>`).join('')}
               </div>
             </div>
-            <div style="text-align:right;flex-shrink:0;">
-              <div style="font-size:11px;color:#444;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin-bottom:4px;">${fmtDate(exp.created_at)}</div>
+            <div style="text-align:right;flex-shrink:0; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+              <div style="font-size:11px;color:#444;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">${fmtDate(exp.created_at)}</div>
               ${exp.total_trials ? `<div style="font-size:11px;color:#555;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">${fmtNum(exp.completed_trials)} / ${fmtNum(exp.total_trials)} trials</div>` : ''}
+              <button onclick="event.stopPropagation(); window.openConditionDashboard(${exp.id})"
+                style="font-size:10px; color:#3b82f6; background:none; border:1px solid rgba(59,130,246,0.3); border-radius:4px; padding:3px 8px; cursor:pointer; font-family:'JetBrains Mono',monospace;"
+                onmouseenter="this.style.background='rgba(59,130,246,0.1)'"
+                onmouseleave="this.style.background='none'">
+                View Comparison
+              </button>
             </div>
           </div>
           ${exp.status === 'running' && exp.total_trials > 0 ? progressBar((exp.completed_trials / exp.total_trials) * 100, '#2196F3') : ''}

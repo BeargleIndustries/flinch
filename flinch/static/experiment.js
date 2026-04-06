@@ -3,14 +3,6 @@
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Ensure openConditionDashboard is available (may already be set by render.js)
-if (!window.openConditionDashboard) {
-  window.openConditionDashboard = async function(experimentId) {
-    const { renderConditionComparisonDashboard } = await import('./render.js');
-    await renderConditionComparisonDashboard(experimentId);
-  };
-}
-
 const STATUS_COLORS = {
   draft:     { bg: 'rgba(102,102,102,0.12)', color: '#999',    border: 'rgba(102,102,102,0.25)' },
   running:   { bg: 'rgba(33,150,243,0.12)',  color: '#64b5f6', border: 'rgba(33,150,243,0.3)'  },

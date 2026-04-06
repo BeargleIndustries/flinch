@@ -1275,6 +1275,18 @@
 
       initExperimentUI(expContainer);
     };
+
+    window.openConditionDashboard = async function(experimentId) {
+      // Switch from experiment container back to main
+      const main = document.getElementById('main');
+      const expContainer = document.getElementById('experiment-container');
+      if (expContainer) expContainer.style.display = 'none';
+      if (main) main.style.display = '';
+      if (window.state) window.state.experimentView = false;
+
+      const { renderConditionComparisonDashboard } = await import('/static/render.js');
+      await renderConditionComparisonDashboard(experimentId);
+    };
   </script>
 </body>
 </html>

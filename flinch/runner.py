@@ -334,7 +334,11 @@ class Runner:
                 try:
                     target.reset()
                     response_text = (await target.send(probe["prompt_text"])).text
-                    classification = await classify(response_text, probe["prompt_text"], self._backend)
+                    try:
+                        classification = await classify(response_text, probe["prompt_text"], self._backend)
+                    except Exception:
+                        # LLM judge failed — fall back to keyword-only classification
+                        classification = await classify(response_text, probe["prompt_text"], None)
 
                     run_id = db.create_run(
                         self._conn,

@@ -118,7 +118,18 @@ export async function startBatchConditions(sessionId, probeIds, conditions, dela
     failed: 0,
     results: [],
   };
-  render();
+  // Show inline progress instead of full re-render (which switches away from variant tab)
+  const progressEl = document.getElementById('condition-batch-progress');
+  if (progressEl) {
+    progressEl.innerHTML = `<span style="color:#f59e0b;">Starting ${total} runs...</span>`;
+  } else {
+    // Create a floating progress bar if element doesn't exist
+    const bar = document.createElement('div');
+    bar.id = 'condition-batch-progress';
+    bar.style.cssText = 'position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#0f0f0f; border:1px solid #1a1a1a; border-radius:6px; padding:8px 16px; font-size:12px; font-family:"JetBrains Mono",monospace; color:#e5e7eb; z-index:999; box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+    bar.innerHTML = `<span style="color:#f59e0b;">Starting ${total} runs...</span>`;
+    document.body.appendChild(bar);
+  }
 
   try {
     await apiStream(
@@ -129,21 +140,30 @@ export async function startBatchConditions(sessionId, probeIds, conditions, dela
           state.batchProgress.completed = data.completed;
           state.batchProgress.total = data.total;
           state.batchProgress.results.push(data);
-          loadStats();
-          render();
+          // Update inline progress without full re-render
+          const el = document.getElementById('condition-batch-progress');
+          if (el) {
+            const pct = Math.round((data.completed / data.total) * 100);
+            el.innerHTML = `<span style="color:#34d399;">${data.completed}/${data.total}</span> (${pct}%) — ${data.condition || ''}: ${(data.probe_name || '').substring(0, 40)}`;
+          }
         } else if (event === 'error') {
-          state.batchProgress.completed = data.completed;
+          state.batchProgress.completed = data.completed || (state.batchProgress.completed + 1);
           state.batchProgress.failed = (state.batchProgress.failed || 0) + 1;
-          render();
+          const el = document.getElementById('condition-batch-progress');
+          if (el) {
+            el.innerHTML = `<span style="color:#ef4444;">Error: ${data.error || 'unknown'}</span>`;
+          }
         } else if (event === 'complete') {
           state.batchRunning = false;
           state.batchComplete = true;
           if (data && data.experiment_id) {
             state.conditionExperimentId = data.experiment_id;
-            state.conditionComparisonData = null; // invalidate cache
+            state.conditionComparisonData = null;
           }
-          loadStats();
-          render();
+          // Remove floating progress bar
+          const bar = document.getElementById('condition-batch-progress');
+          if (bar) bar.remove();
+          render();  // Full render only on completion
         }
       }
     );

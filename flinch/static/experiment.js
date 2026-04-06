@@ -211,7 +211,7 @@ function renderExpCards(exps) {
   return `
     <div style="display:flex;flex-direction:column;gap:10px;">
       ${exps.map(exp => `
-        <div class="card" style="cursor:pointer;padding:18px 20px;" onclick="window._expUI.openExp(${exp.id})">
+        <div class="card" style="cursor:pointer;padding:18px 20px;" onclick="window.openConditionDashboard(${exp.id})">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
             <div style="flex:1;min-width:0;">
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">

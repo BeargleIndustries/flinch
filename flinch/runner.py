@@ -334,7 +334,6 @@ class Runner:
                 try:
                     target.reset()
                     response_text = (await target.send(probe["prompt_text"])).text
-                    classification = await classify(response_text, probe["prompt_text"])
 
                     run_id = db.create_run(
                         self._conn,
@@ -346,7 +345,6 @@ class Runner:
                         self._conn,
                         run_id,
                         initial_response=response_text,
-                        initial_classification=classification.value,
                         notes=f"condition:{cond_label}",
                     )
                     completed += 1
@@ -360,7 +358,6 @@ class Runner:
                             "run_id": run_id,
                             "condition": cond_label,
                             "response_text": response_text,
-                            "classification": classification.value,
                             "completed": completed,
                             "total": total,
                         },

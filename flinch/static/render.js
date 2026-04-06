@@ -2028,17 +2028,17 @@ function _renderConditionDashboardHTML(experimentId, data) {
       : cond.compliance_rate >= 0.4 ? '#f59e0b'
       : '#ef4444';
 
+    const sysPrompt = cond.system_prompt || '';
+    const promptPreview = sysPrompt ? escHtml(sysPrompt.substring(0, 120)) + (sysPrompt.length > 120 ? '...' : '') : '<span style="color:#374151; font-style:italic;">No system prompt (baseline)</span>';
+
     html += `
       <div style="background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; padding:16px;">
-        <div style="font-size:13px; font-weight:600; color:#e2e8f0; font-family:'JetBrains Mono',monospace; margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(cond.label)}</div>
+        <div style="font-size:13px; font-weight:600; color:#e2e8f0; font-family:'JetBrains Mono',monospace; margin-bottom:2px;">${escHtml(cond.label)}</div>
         <div style="font-size:11px; color:#374151; font-family:'JetBrains Mono',monospace; margin-bottom:10px;">${total} response${total !== 1 ? 's' : ''}</div>
-        ${clsBar(cls, total)}
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px;">${clsLegend(cls, total)}</div>
-        <div style="display:flex; align-items:baseline; gap:6px;">
-          <span style="font-size:22px; font-weight:700; color:${rateColor}; font-family:'JetBrains Mono',monospace; letter-spacing:-0.02em;">${rate}</span>
-          <span style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace;">compliance</span>
+        <div style="font-size:10px; color:#4b5563; font-family:'JetBrains Mono',monospace; line-height:1.5; padding:8px; background:#0a0a0a; border:1px solid #1a1a1a; border-radius:4px;">
+          <div style="font-size:9px; color:#374151; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">System Prompt</div>
+          ${promptPreview}
         </div>
-        ${cond.description ? `<div style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace; margin-top:8px; line-height:1.4;">${escHtml(cond.description)}</div>` : ''}
       </div>
     `;
   }
@@ -2978,9 +2978,8 @@ window._loadConditionResponses = async function(experimentId, promptId) {
 
       html += `
         <div style="background:#0a0a0a; border:1px solid #1a1a1a; border-radius:6px; padding:12px; display:flex; flex-direction:column; gap:8px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-            <div style="font-size:11px; font-weight:600; color:#64748b; font-family:'JetBrains Mono',monospace; letter-spacing:0.05em; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(cond.label)}</div>
-            ${cls ? `<span style="font-size:10px; font-weight:600; color:${clsColor}; font-family:'JetBrains Mono',monospace; white-space:nowrap;">${cls.toUpperCase()}</span>` : ''}
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:11px; font-weight:600; color:#94a3b8; font-family:'JetBrains Mono',monospace; letter-spacing:0.05em; text-transform:uppercase;">${escHtml(cond.label)}</div>
           </div>
           ${text
             ? `<div style="font-size:11px; color:#94a3b8; line-height:1.6; white-space:pre-wrap; max-height:200px; overflow-y:auto; word-break:break-word;">${escHtml(text.substring(0, 800))}${text.length > 800 ? '<span style="color:#374151;">…</span>' : ''}</div>`

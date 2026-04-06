@@ -334,7 +334,7 @@ class Runner:
                 try:
                     target.reset()
                     response_text = (await target.send(probe["prompt_text"])).text
-                    classification = classify(response_text)
+                    classification = await classify(response_text, probe["prompt_text"], self._backend)
 
                     run_id = db.create_run(
                         self._conn,

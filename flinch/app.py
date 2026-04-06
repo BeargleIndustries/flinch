@@ -606,7 +606,15 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
                     )
                     condition_label_to_id[cond["label"]] = cid
 
-                prompt_entries = [{"probe_id": pid, "sort_order": i} for i, pid in enumerate(req.probe_ids)]
+                prompt_entries = []
+                for i, pid in enumerate(req.probe_ids):
+                    probe = db.get_probe(_conn, pid)
+                    prompt_entries.append({
+                        "probe_id": pid,
+                        "sort_order": i,
+                        "custom_prompt_text": probe["prompt_text"] if probe else "",
+                        "domain": probe.get("domain", "") if probe else "",
+                    })
                 await add_experiment_prompts(db_conn, experiment_id, prompt_entries)
 
                 exp_prompts = await list_experiment_prompts(db_conn, experiment_id)

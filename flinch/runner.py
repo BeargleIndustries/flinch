@@ -331,38 +331,49 @@ class Runner:
                     }
                     continue
 
-                try:
-                    target.reset()
-                    response_text = (await target.send(probe["prompt_text"])).text
+                max_retries = 3
+                last_error = None
+                for attempt in range(max_retries):
+                    try:
+                        target.reset()
+                        response_text = (await target.send(probe["prompt_text"])).text
 
-                    run_id = db.create_run(
-                        self._conn,
-                        probe_id,
-                        session_id,
-                        session["target_model"],
-                    )
-                    db.update_run(
-                        self._conn,
-                        run_id,
-                        initial_response=response_text,
-                        notes=f"condition:{cond_label}",
-                    )
-                    completed += 1
-                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
-                    yield {
-                        "event": "progress",
-                        "data": {
-                            "batch_id": batch_id,
-                            "probe_id": probe_id,
-                            "probe_name": probe["name"],
-                            "run_id": run_id,
-                            "condition": cond_label,
-                            "response_text": response_text,
-                            "completed": completed,
-                            "total": total,
-                        },
-                    }
-                except Exception as e:
+                        run_id = db.create_run(
+                            self._conn,
+                            probe_id,
+                            session_id,
+                            session["target_model"],
+                        )
+                        db.update_run(
+                            self._conn,
+                            run_id,
+                            initial_response=response_text,
+                            notes=f"condition:{cond_label}",
+                        )
+                        completed += 1
+                        db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+                        yield {
+                            "event": "progress",
+                            "data": {
+                                "batch_id": batch_id,
+                                "probe_id": probe_id,
+                                "probe_name": probe["name"],
+                                "run_id": run_id,
+                                "condition": cond_label,
+                                "response_text": response_text,
+                                "completed": completed,
+                                "total": total,
+                            },
+                        }
+                        last_error = None
+                        break  # success
+                    except Exception as e:
+                        last_error = e
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)  # backoff: 1s, 2s
+                            continue
+
+                if last_error is not None:
                     failed += 1
                     completed += 1
                     db.update_batch_run(self._conn, batch_id, probes_completed=completed)
@@ -371,7 +382,7 @@ class Runner:
                         "data": {
                             "probe_id": probe_id,
                             "condition": cond_label,
-                            "error": str(e),
+                            "error": str(last_error),
                             "completed": completed,
                             "total": total,
                         },

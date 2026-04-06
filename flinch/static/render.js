@@ -1989,6 +1989,14 @@ function _renderConditionDashboardHTML(experimentId, data) {
         ` : hasAnalysis ? `
           <span style="font-size:11px; color:#a855f7; font-family:'JetBrains Mono',monospace; padding:7px 12px; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:6px;">analysis done</span>
         ` : ''}
+        ${(data.pending_count || 0) > 0 ? `
+          <button onclick="window._resumeExperiment(${experimentId})"
+            style="padding:7px 14px; font-size:12px; font-family:'JetBrains Mono',monospace; background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); color:#f59e0b; border-radius:6px; cursor:pointer; transition:all 0.15s;"
+            onmouseenter="this.style.background='rgba(245,158,11,0.2)'"
+            onmouseleave="this.style.background='rgba(245,158,11,0.1)'">
+            Resume (${data.pending_count} pending)
+          </button>
+        ` : ''}
         <button onclick="window.exportConditionCSV(${experimentId})"
           style="padding:7px 14px; font-size:12px; font-family:'JetBrains Mono',monospace; background:rgba(52,211,153,0.08); border:1px solid rgba(52,211,153,0.2); color:#34d399; border-radius:6px; cursor:pointer; transition:all 0.15s;"
           onmouseenter="this.style.background='rgba(52,211,153,0.15)'"
@@ -2844,6 +2852,43 @@ window.renderConditionComparisonDashboard = renderConditionComparisonDashboard;
 
 window.openConditionDashboard = async function(experimentId) {
   await renderConditionComparisonDashboard(experimentId);
+};
+
+window._resumeExperiment = async function(experimentId) {
+  const confirmed = confirm('Resume this experiment? Will re-run all pending responses.');
+  if (!confirmed) return;
+
+  // Show floating progress bar
+  let bar = document.getElementById('condition-batch-progress');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'condition-batch-progress';
+    bar.style.cssText = 'position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#0f0f0f; border:1px solid #1a1a1a; border-radius:6px; padding:8px 16px; font-size:12px; font-family:"JetBrains Mono",monospace; color:#e5e7eb; z-index:999; box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = '<span style="color:#f59e0b;">Resuming...</span>';
+
+  try {
+    const { apiStream } = await import('./api.js');
+    await apiStream(
+      `/api/experiments/${experimentId}/resume`,
+      {},
+      (event, data) => {
+        if (event === 'progress') {
+          const pct = Math.round((data.completed / data.total) * 100);
+          bar.innerHTML = `<span style="color:#34d399;">${data.completed}/${data.total}</span> (${pct}%) - ${data.condition || ''}: ${(data.probe_name || '').substring(0, 40)}`;
+        } else if (event === 'error' && data.error) {
+          bar.innerHTML = `<span style="color:#ef4444;">Error: ${data.error}</span>`;
+        } else if (event === 'complete') {
+          bar.remove();
+          renderConditionComparisonDashboard(experimentId);
+        }
+      }
+    );
+  } catch (e) {
+    bar.innerHTML = `<span style="color:#ef4444;">Resume failed: ${e.message}</span>`;
+    setTimeout(() => bar.remove(), 5000);
+  }
 };
 
 window._conditionComputeMetrics = async function(experimentId) {

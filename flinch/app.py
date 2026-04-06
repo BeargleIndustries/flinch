@@ -3181,6 +3181,118 @@ async def api_condition_export_csv(experiment_id: int):
     )
 
 
+@app.post("/api/experiments/{experiment_id}/resume")
+async def api_resume_experiment(experiment_id: int):
+    """Resume an incomplete condition experiment — re-runs only pending responses."""
+    async with get_async_db() as db_conn:
+        # Get experiment info
+        exp = await get_experiment(db_conn, experiment_id)
+        if not exp:
+            raise HTTPException(404, "Experiment not found")
+
+        # Find pending responses with their condition and probe info
+        async with db_conn.execute(
+            """SELECT er.id, er.condition_id, er.prompt_id, er.model_id,
+                      ec.label AS condition_label, ec.system_prompt,
+                      COALESCE(ep.custom_prompt_text, p.prompt_text) AS probe_text,
+                      COALESCE(p.name, 'probe-' || ep.id) AS probe_name,
+                      ep.probe_id
+               FROM experiment_responses er
+               JOIN experiment_conditions ec ON er.condition_id = ec.id
+               JOIN experiment_prompts ep ON er.prompt_id = ep.id
+               LEFT JOIN probes p ON ep.probe_id = p.id
+               WHERE er.experiment_id = ? AND er.status = 'pending'
+               ORDER BY ec.sort_order, ep.sort_order""",
+            (experiment_id,),
+        ) as cur:
+            pending = [dict(r) for r in await cur.fetchall()]
+
+    if not pending:
+        return {"message": "No pending responses — experiment is complete", "pending": 0}
+
+    total = len(pending)
+    model_id = pending[0]["model_id"]
+
+    async def event_generator():
+        completed = 0
+        failed = 0
+        current_target = None
+        current_sys_prompt = None
+
+        try:
+            async with get_async_db() as resume_db:
+                for item in pending:
+                    cond_label = item["condition_label"]
+                    sys_prompt = item["system_prompt"] or ""
+                    probe_text = item["probe_text"] or ""
+                    probe_name = item["probe_name"] or ""
+
+                    # Create new target when condition changes
+                    if current_sys_prompt != sys_prompt or current_target is None:
+                        current_target = _runner._make_target(model_id, sys_prompt)
+                        current_sys_prompt = sys_prompt
+
+                    max_retries = 3
+                    last_error = None
+                    for attempt in range(max_retries):
+                        try:
+                            current_target.reset()
+                            response_text = (await current_target.send(probe_text)).text
+
+                            await update_experiment_response(
+                                resume_db,
+                                item["id"],
+                                response_text=response_text,
+                                status="completed",
+                                completed_at=datetime.now(_tz.utc).isoformat(),
+                            )
+
+                            # Also save to runs table for audit
+                            if item["probe_id"]:
+                                session = db.get_sessions(_conn)
+                                if session:
+                                    sid = session[-1]["id"]
+                                    run_id = db.create_run(_conn, item["probe_id"], sid, model_id)
+                                    db.update_run(_conn, run_id, initial_response=response_text, notes=f"condition:{cond_label}")
+
+                            completed += 1
+                            last_error = None
+                            yield f"event: progress\ndata: {json.dumps({'probe_name': probe_name, 'condition': cond_label, 'completed': completed, 'total': total, 'response_text': response_text})}\n\n"
+                            break
+                        except Exception as e:
+                            last_error = e
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(2 ** attempt)
+
+                    if last_error:
+                        failed += 1
+                        completed += 1
+                        yield f"event: error\ndata: {json.dumps({'probe_name': probe_name, 'condition': cond_label, 'error': str(last_error), 'completed': completed, 'total': total})}\n\n"
+
+                    await asyncio.sleep(1)
+
+                # Mark experiment completed if no pending left
+                async with resume_db.execute(
+                    "SELECT COUNT(*) FROM experiment_responses WHERE experiment_id = ? AND status = 'pending'",
+                    (experiment_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+                    still_pending = row[0] if row else 0
+
+                if still_pending == 0:
+                    await update_experiment(resume_db, experiment_id, status="completed")
+
+            yield f"event: complete\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': completed, 'failed': failed, 'still_pending': still_pending})}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def main():
     uvicorn.run("flinch.app:app", host="127.0.0.1", port=8000, reload=True)
 

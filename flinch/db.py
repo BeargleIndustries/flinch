@@ -3837,10 +3837,19 @@ async def get_condition_comparison(db, experiment_id):
     has_analysis = len(analysis_list) > 0
     analysis_results = analysis_list[0] if analysis_list else None
 
+    # Count pending responses
+    async with db.execute(
+        "SELECT COUNT(*) FROM experiment_responses WHERE experiment_id = ? AND status = 'pending'",
+        (experiment_id,),
+    ) as cur:
+        row = await cur.fetchone()
+        pending_count = row[0] if row else 0
+
     return {
         "experiment_id": experiment_id,
         "conditions": conditions,
         "has_metrics": has_metrics,
         "has_analysis": has_analysis,
         "analysis_results": analysis_results,
+        "pending_count": pending_count,
     }

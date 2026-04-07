@@ -2895,7 +2895,7 @@ window._resumeExperiment = async function(experimentId) {
   try {
     const { apiStream } = await import('./api.js');
     await apiStream(
-      `/api/experiments/${experimentId}/resume`,
+      `/api/experiments/${experimentId}/resume-conditions`,
       {},
       (event, data) => {
         if (event === 'progress') {

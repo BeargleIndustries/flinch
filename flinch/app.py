@@ -3185,8 +3185,8 @@ async def api_condition_export_csv(experiment_id: int):
     )
 
 
-@app.post("/api/experiments/{experiment_id}/resume")
-async def api_resume_experiment(experiment_id: int):
+@app.post("/api/experiments/{experiment_id}/resume-conditions")
+async def api_resume_conditions(experiment_id: int):
     """Resume an incomplete condition experiment — re-runs only pending responses."""
     async with get_async_db() as db_conn:
         # Get experiment info

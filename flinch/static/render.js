@@ -2060,14 +2060,24 @@ function _renderConditionDashboardHTML(experimentId, data) {
       polarity:           'Polarity',
     };
 
-    // Get significance data keyed by metric if analysis exists
+    // Get significance data keyed by metric — use FDR-corrected p-values from corrections or nonparametric
     const sigMap = {};
     if (hasAnalysis && analysisResults) {
-      const raw = analysisResults.results || analysisResults;
-      if (raw && typeof raw === 'object') {
-        for (const [metric, info] of Object.entries(raw)) {
-          if (info && info.p_value !== undefined) {
-            sigMap[metric] = info.p_value;
+      // analysisResults is now {analysis_type: {pair: {metric: {p_value, ...}}}}
+      const corrections = analysisResults.corrections || analysisResults.nonparametric || {};
+      // Take the minimum p-value across all pairs for each metric
+      for (const [pair, metrics] of Object.entries(corrections)) {
+        if (typeof metrics !== 'object') continue;
+        for (const [metric, info] of Object.entries(metrics)) {
+          if (info && info.p_fdr !== undefined) {
+            // Use FDR-corrected p-value, keep the smallest across pairs
+            if (sigMap[metric] === undefined || info.p_fdr < sigMap[metric]) {
+              sigMap[metric] = info.p_fdr;
+            }
+          } else if (info && info.p_value !== undefined) {
+            if (sigMap[metric] === undefined || info.p_value < sigMap[metric]) {
+              sigMap[metric] = info.p_value;
+            }
           }
         }
       }

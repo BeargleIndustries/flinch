@@ -3832,10 +3832,26 @@ async def get_condition_comparison(db, experiment_id):
             "metrics": metrics,
         })
 
-    # Analysis results (may not exist)
+    # Analysis results (may not exist) — return all keyed by analysis_type
     analysis_list = await list_analysis_results(db, experiment_id)
     has_analysis = len(analysis_list) > 0
-    analysis_results = analysis_list[0] if analysis_list else None
+    analysis_results = {}
+    for ar in analysis_list:
+        atype = ar.get("analysis_type", "unknown")
+        results_raw = ar.get("results")
+        if isinstance(results_raw, str):
+            import json as _json
+            try:
+                analysis_results[atype] = _json.loads(results_raw)
+            except Exception:
+                analysis_results[atype] = results_raw
+        elif isinstance(results_raw, dict):
+            analysis_results[atype] = results_raw
+        else:
+            analysis_results[atype] = results_raw
+    # Ensure analysis_results is None (not empty dict) when no analysis
+    if not analysis_results:
+        analysis_results = None
 
     # Count pending responses
     async with db.execute(

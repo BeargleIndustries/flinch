@@ -3218,6 +3218,7 @@ async def api_resume_experiment(experiment_id: int):
     model_id = pending[0]["model_id"]
 
     async def event_generator():
+        from datetime import datetime, timezone as _tz_resume
         completed = 0
         failed = 0
         current_target = None
@@ -3248,16 +3249,8 @@ async def api_resume_experiment(experiment_id: int):
                                 item["id"],
                                 response_text=response_text,
                                 status="completed",
-                                completed_at=datetime.now(_tz.utc).isoformat(),
+                                completed_at=datetime.now(_tz_resume.utc).isoformat(),
                             )
-
-                            # Also save to runs table for audit
-                            if item["probe_id"]:
-                                session = db.get_sessions(_conn)
-                                if session:
-                                    sid = session[-1]["id"]
-                                    run_id = db.create_run(_conn, item["probe_id"], sid, model_id)
-                                    db.update_run(_conn, run_id, initial_response=response_text, notes=f"condition:{cond_label}")
 
                             completed += 1
                             last_error = None

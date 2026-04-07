@@ -3225,6 +3225,7 @@ async def api_resume_experiment(experiment_id: int):
         current_sys_prompt = None
 
         try:
+            yield f"event: info\ndata: {json.dumps({'message': f'Resuming {total} pending responses for model {model_id}'})}\n\n"
             async with get_async_db() as resume_db:
                 for item in pending:
                     cond_label = item["condition_label"]
@@ -3234,8 +3235,12 @@ async def api_resume_experiment(experiment_id: int):
 
                     # Create new target when condition changes
                     if current_sys_prompt != sys_prompt or current_target is None:
-                        current_target = _runner._make_target(model_id, sys_prompt)
-                        current_sys_prompt = sys_prompt
+                        try:
+                            current_target = _runner._make_target(model_id, sys_prompt)
+                            current_sys_prompt = sys_prompt
+                        except Exception as target_err:
+                            yield f"event: error\ndata: {json.dumps({'error': f'Failed to create target: {target_err}'})}\n\n"
+                            return
 
                     max_retries = 3
                     last_error = None

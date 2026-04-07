@@ -84,7 +84,7 @@ class ClaudeTarget(TargetModel):
             t0 = time.monotonic()
             response = await self._client.messages.create(**kwargs)
             latency_ms = int((time.monotonic() - t0) * 1000)
-            text = response.content[0].text
+            text = response.content[0].text if response.content else "[empty response]"
             self._messages.append({"role": "assistant", "content": text})
             return TargetResponse(
                 text=text,

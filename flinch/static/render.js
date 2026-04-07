@@ -2060,23 +2060,35 @@ function _renderConditionDashboardHTML(experimentId, data) {
       polarity:           'Polarity',
     };
 
-    // Get significance data keyed by metric — use FDR-corrected p-values from corrections or nonparametric
+    // Get significance data and effect sizes keyed by metric
     const sigMap = {};
+    const dMap = {};  // Cohen's d — max absolute value across pairs
     if (hasAnalysis && analysisResults) {
       // analysisResults is now {analysis_type: {pair: {metric: {p_value, ...}}}}
       const corrections = analysisResults.corrections || analysisResults.nonparametric || {};
-      // Take the minimum p-value across all pairs for each metric
       for (const [pair, metrics] of Object.entries(corrections)) {
         if (typeof metrics !== 'object') continue;
         for (const [metric, info] of Object.entries(metrics)) {
           if (info && info.p_fdr !== undefined) {
-            // Use FDR-corrected p-value, keep the smallest across pairs
             if (sigMap[metric] === undefined || info.p_fdr < sigMap[metric]) {
               sigMap[metric] = info.p_fdr;
             }
           } else if (info && info.p_value !== undefined) {
             if (sigMap[metric] === undefined || info.p_value < sigMap[metric]) {
               sigMap[metric] = info.p_value;
+            }
+          }
+        }
+      }
+      // Extract Cohen's d from effect_sizes
+      const effectSizes = analysisResults.effect_sizes || {};
+      for (const [pair, metrics] of Object.entries(effectSizes)) {
+        if (typeof metrics !== 'object') continue;
+        for (const [metric, info] of Object.entries(metrics)) {
+          if (info && info.cohens_d !== undefined) {
+            const absD = Math.abs(info.cohens_d);
+            if (dMap[metric] === undefined || absD > Math.abs(dMap[metric])) {
+              dMap[metric] = info.cohens_d;
             }
           }
         }
@@ -2108,6 +2120,7 @@ function _renderConditionDashboardHTML(experimentId, data) {
             <tr>
               <th style="text-align:left; padding:6px 12px 6px 0; color:#4b5563; font-weight:600; border-bottom:1px solid #1a1a1a; white-space:nowrap;">Metric</th>
               ${conditions.map(c => `<th style="text-align:right; padding:6px 12px; color:#64748b; font-weight:600; border-bottom:1px solid #1a1a1a; white-space:nowrap;">${escHtml(c.label)}</th>`).join('')}
+              ${hasAnalysis ? `<th style="text-align:center; padding:6px 8px; color:#4b5563; font-weight:600; border-bottom:1px solid #1a1a1a;">d</th>` : ''}
               ${hasAnalysis ? `<th style="text-align:center; padding:6px 8px; color:#4b5563; font-weight:600; border-bottom:1px solid #1a1a1a;">Sig</th>` : ''}
             </tr>
           </thead>
@@ -2124,6 +2137,7 @@ function _renderConditionDashboardHTML(experimentId, data) {
           const m = c.metrics && c.metrics[metricKey];
           return `<td style="text-align:right; padding:7px 12px; border-bottom:1px solid #111;">${fmtStat(m ? m.mean : null, m ? m.sd : null)}</td>`;
         }).join('')}
+        ${hasAnalysis ? `<td style="text-align:center; padding:7px 8px; border-bottom:1px solid #111; color:${Math.abs(dMap[metricKey] || 0) >= 0.8 ? '#ef4444' : Math.abs(dMap[metricKey] || 0) >= 0.5 ? '#f59e0b' : Math.abs(dMap[metricKey] || 0) >= 0.2 ? '#3b82f6' : '#374151'};">${dMap[metricKey] !== undefined ? dMap[metricKey].toFixed(2) : '—'}</td>` : ''}
         ${hasAnalysis ? `<td style="text-align:center; padding:7px 8px; border-bottom:1px solid #111;">${sigStars(sigMap[metricKey])}</td>` : ''}
       </tr>`;
     }
@@ -2131,7 +2145,7 @@ function _renderConditionDashboardHTML(experimentId, data) {
     html += `
           </tbody>
         </table>
-        ${hasAnalysis ? `<div style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace; margin-top:8px;">* p&lt;.05 &nbsp; ** p&lt;.01 &nbsp; *** p&lt;.001</div>` : ''}
+        ${hasAnalysis ? `<div style="font-size:10px; color:#374151; font-family:'JetBrains Mono',monospace; margin-top:8px;">* p&lt;.05 &nbsp; ** p&lt;.01 &nbsp; *** p&lt;.001 &nbsp;&nbsp; d: <span style="color:#3b82f6;">small (&ge;0.2)</span> &nbsp; <span style="color:#f59e0b;">medium (&ge;0.5)</span> &nbsp; <span style="color:#ef4444;">large (&ge;0.8)</span></div>` : ''}
       </div>
     `;
   }

@@ -3172,8 +3172,12 @@ window._runVariantGroup = async function(groupName, probeIds) {
     if (!confirmed) return;
     const sessionId = state.currentSession.id || state.currentSession;
     try {
-      console.log('Starting batch-conditions:', { sessionId, probeCount: runProbeIds.length, conditionCount: conditions.length, conditions });
-      await startBatchConditions(sessionId, runProbeIds, conditions);
+      // Auto-set concurrency: 1 for local/ollama models, 5 for API models
+      const model = (state.currentSession.target_model || '').toLowerCase();
+      const isLocal = model.startsWith('ollama:');
+      const concurrency = isLocal ? 1 : 5;
+      console.log('Starting batch-conditions:', { sessionId, probeCount: runProbeIds.length, conditionCount: conditions.length, concurrency, conditions });
+      await startBatchConditions(sessionId, runProbeIds, conditions, concurrency);
     } catch (e) {
       console.error('Batch conditions failed:', e);
       showError('Batch conditions failed: ' + e.message);

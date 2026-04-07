@@ -173,6 +173,7 @@ class BatchConditionsRequest(BaseModel):
     probe_ids: list[int]
     conditions: list[ConditionItem]
     delay_ms: int = 2000
+    concurrency: int = 1  # parallel API calls per condition (1=sequential, 5=fast for API models)
 
 class AnnotationRequest(BaseModel):
     note_text: str | None = Field(default=None, max_length=2000)
@@ -632,7 +633,8 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
         try:
             async with get_async_db() as exp_db:
                 async for event in _runner.run_batch_conditions(
-                    session_id, req.probe_ids, conditions, req.delay_ms
+                    session_id, req.probe_ids, conditions, req.delay_ms,
+                    concurrency=req.concurrency,
                 ):
                     event_type = event["event"]
                     event_data = event["data"]
@@ -1526,6 +1528,7 @@ async def list_available_models():
         "provider": "anthropic",
         "models": [
             {"id": "claude-opus-4-20250514", "name": "Claude Opus 4"},
+            {"id": "claude-sonnet-4-6-20250725", "name": "Claude Sonnet 4.6"},
             {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4"},
             {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5"},
             {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet (legacy)", "deprecated": True},

@@ -290,11 +290,13 @@ class Runner:
         probe_ids: list[int],
         conditions: list[dict],
         delay_ms: int = 2000,
+        concurrency: int = 1,
     ):
         """Async generator yielding SSE events — runs each probe under each condition.
 
         conditions: list of {"label": str, "system_prompt": str}
         Produces N_probes × N_conditions runs total.
+        concurrency: number of parallel API calls per condition (1 = sequential, >1 = parallel batches).
         """
         session = db.get_session(self._conn, session_id)
         if not session:
@@ -310,9 +312,8 @@ class Runner:
             cond_label = condition.get("label", "")
             cond_system_prompt = condition.get("system_prompt", "")
 
-            # Build a fresh target for this condition's system prompt
-            target = self._make_target(session["target_model"], cond_system_prompt)
-
+            # Pre-fetch all probes for this condition
+            probes = []
             for probe_id in probe_ids:
                 probe = db.get_probe(self._conn, probe_id)
                 if not probe:
@@ -329,64 +330,67 @@ class Runner:
                             "total": total,
                         },
                     }
-                    continue
+                else:
+                    probes.append(probe)
 
-                max_retries = 3
-                last_error = None
-                for attempt in range(max_retries):
-                    try:
-                        target.reset()
-                        response_text = (await target.send(probe["prompt_text"])).text
+            # Process probes in batches of `concurrency`
+            for batch_start in range(0, len(probes), concurrency):
+                batch = probes[batch_start:batch_start + concurrency]
 
-                        run_id = db.create_run(
-                            self._conn,
-                            probe_id,
-                            session_id,
-                            session["target_model"],
-                        )
-                        db.update_run(
-                            self._conn,
-                            run_id,
-                            initial_response=response_text,
-                            notes=f"condition:{cond_label}",
-                        )
+                async def _run_one(probe):
+                    """Run a single probe against the target. Returns (probe, result_dict) or (probe, error)."""
+                    target = self._make_target(session["target_model"], cond_system_prompt)
+                    for attempt in range(3):
+                        try:
+                            target.reset()
+                            response_text = (await target.send(probe["prompt_text"])).text
+                            run_id = db.create_run(self._conn, probe["id"], session_id, session["target_model"])
+                            db.update_run(self._conn, run_id, initial_response=response_text, notes=f"condition:{cond_label}")
+                            return probe, {"ok": True, "run_id": run_id, "response_text": response_text}
+                        except Exception as e:
+                            if attempt < 2:
+                                await asyncio.sleep(2 ** attempt)
+                                continue
+                            return probe, {"ok": False, "error": str(e)}
+                    return probe, {"ok": False, "error": "max retries exceeded"}
+
+                # Run batch concurrently
+                results = await asyncio.gather(*[_run_one(p) for p in batch])
+
+                for probe, result in results:
+                    if result["ok"]:
                         completed += 1
                         db.update_batch_run(self._conn, batch_id, probes_completed=completed)
                         yield {
                             "event": "progress",
                             "data": {
                                 "batch_id": batch_id,
-                                "probe_id": probe_id,
+                                "probe_id": probe["id"],
                                 "probe_name": probe["name"],
-                                "run_id": run_id,
+                                "run_id": result["run_id"],
                                 "condition": cond_label,
-                                "response_text": response_text,
+                                "response_text": result["response_text"],
                                 "completed": completed,
                                 "total": total,
                             },
                         }
-                        last_error = None
-                        break  # success
-                    except Exception as e:
-                        last_error = e
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)  # backoff: 1s, 2s
-                            continue
+                    else:
+                        failed += 1
+                        completed += 1
+                        db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+                        yield {
+                            "event": "error",
+                            "data": {
+                                "probe_id": probe["id"],
+                                "condition": cond_label,
+                                "error": result["error"],
+                                "completed": completed,
+                                "total": total,
+                            },
+                        }
 
-                if last_error is not None:
-                    failed += 1
-                    completed += 1
-                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
-                    yield {
-                        "event": "error",
-                        "data": {
-                            "probe_id": probe_id,
-                            "condition": cond_label,
-                            "error": str(last_error),
-                            "completed": completed,
-                            "total": total,
-                        },
-                    }
+                if batch_start + concurrency < len(probes):
+                    await asyncio.sleep(delay_ms / 1000)
 
                 if completed < total:
                     await asyncio.sleep(delay_ms / 1000)

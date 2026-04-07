@@ -108,7 +108,7 @@ export function cancelBatch() {
   render();
 }
 
-export async function startBatchConditions(sessionId, probeIds, conditions, delayMs) {
+export async function startBatchConditions(sessionId, probeIds, conditions, concurrency, delayMs) {
   const total = probeIds.length * conditions.length;
   state.batchRunning = true;
   state.batchComplete = false;
@@ -134,7 +134,7 @@ export async function startBatchConditions(sessionId, probeIds, conditions, dela
   try {
     await apiStream(
       `/api/sessions/${sessionId}/batch-conditions`,
-      { probe_ids: probeIds, conditions, delay_ms: delayMs || 2000 },
+      { probe_ids: probeIds, conditions, delay_ms: delayMs || 2000, concurrency: concurrency || 1 },
       (event, data) => {
         if (event === 'progress') {
           state.batchProgress.completed = data.completed;

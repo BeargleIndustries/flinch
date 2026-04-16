@@ -38,3 +38,28 @@ AUDIT.md
 
 # User data
 sessions/
+
+# Rust / Cargo / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+**/*.rs.bk
+
+# Bundled build-time resources (fetched/built by scripts/bundle-resources.py)
+src-tauri/resources/*.tar.gz
+src-tauri/resources/*.whl
+
+# Tauri dev-run scratch DB (appears when running cargo tauri dev)
+src-tauri/data/
+
+# Installer outputs
+*.exe
+*.msi
+*.nsis
+
+# Sidecar bootstrap markers
+sidecar.hash
+crash-*.log
+
+# Launcher state (per-clone, lives in %LOCALAPPDATA%)
+.flinch-bootstrap.json

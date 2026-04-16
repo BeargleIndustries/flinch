@@ -311,6 +311,11 @@ async function init() {
   initKeyboardShortcuts();
   // Check Ollama in background — non-blocking
   checkOllamaStatus();
+  // Show settings modal if no API keys configured (non-blocking)
+  try {
+    const { checkAndShowIfNoKeys } = await import('./settings.js');
+    checkAndShowIfNoKeys();
+  } catch (_) {}
 }
 
 init();

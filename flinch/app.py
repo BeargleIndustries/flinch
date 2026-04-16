@@ -119,7 +119,10 @@ app = FastAPI(title="Flinch", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+    # Local-only origins: Tauri's webview scheme, localhost, and any 127.0.0.1
+    # port (the sidecar is bound to a runtime-picked port, and the splash page
+    # served from tauri.localhost needs to reach /health during boot).
+    allow_origin_regex=r"^https?://(?:tauri\.localhost|localhost|127\.0\.0\.1)(?::\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -3295,8 +3298,174 @@ async def api_resume_conditions(experiment_id: int):
     )
 
 
+# ---------------------------------------------------------------------------
+# Health endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    try:
+        from importlib.metadata import version as pkg_version
+        ver = pkg_version("flinch")
+    except Exception:
+        ver = "0.8.0"
+    return {"status": "ok", "version": ver}
+
+
+# ---------------------------------------------------------------------------
+# Settings endpoints
+# ---------------------------------------------------------------------------
+
+_PROVIDER_ENV_VARS: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "xai": "XAI_API_KEY",
+    # Canonical name matches /api/settings/keys which labels this provider "meta"
+    # (Meta/Llama via Together). "together" is accepted as an alias for clients
+    # that use raw env-var naming.
+    "meta": "TOGETHER_API_KEY",
+    "together": "TOGETHER_API_KEY",
+}
+
+
+class ValidateKeyRequest(BaseModel):
+    provider: str
+    key: str
+
+
+class SetKeyRequest(BaseModel):
+    provider: str
+    key: str
+
+
+@app.post("/api/settings/set-key")
+async def set_key_runtime(req: SetKeyRequest):
+    """Set an API key env var in the running sidecar so subsequent probe
+    runs pick it up without restarting. Persisted storage (Windows
+    Credential Manager on desktop) is handled separately by the Tauri
+    shell via set_api_key. This endpoint only updates in-process state.
+    """
+    provider = req.provider.lower()
+    key = req.key.strip()
+    if provider not in _PROVIDER_ENV_VARS:
+        return {"ok": False, "error": f"Unknown provider: {provider}"}
+    if not key:
+        return {"ok": False, "error": "Empty key"}
+    os.environ[_PROVIDER_ENV_VARS[provider]] = key
+    return {"ok": True}
+
+
+@app.delete("/api/settings/set-key")
+async def clear_key_runtime(provider: str):
+    provider = provider.lower()
+    if provider not in _PROVIDER_ENV_VARS:
+        return {"ok": False, "error": f"Unknown provider: {provider}"}
+    os.environ.pop(_PROVIDER_ENV_VARS[provider], None)
+    return {"ok": True}
+
+
+@app.post("/api/settings/validate-key")
+async def validate_key(req: ValidateKeyRequest):
+    provider = req.provider.lower()
+    key = req.key.strip()
+    if provider not in _PROVIDER_ENV_VARS:
+        return {"valid": False, "error": f"Unknown provider: {provider}"}
+    try:
+        if provider == "anthropic":
+            import anthropic as _anthropic
+            _anthropic.Anthropic(api_key=key).models.list()
+        elif provider == "openai":
+            import openai as _openai
+            _openai.OpenAI(api_key=key).models.list()
+        elif provider == "google":
+            import google.generativeai as genai
+            genai.configure(api_key=key)
+            list(genai.list_models())
+        elif provider == "xai":
+            import openai as _openai
+            _openai.OpenAI(api_key=key, base_url="https://api.x.ai/v1").models.list()
+        elif provider in ("meta", "together"):
+            import openai as _openai
+            _openai.OpenAI(api_key=key, base_url="https://api.together.xyz/v1").models.list()
+        return {"valid": True, "error": None}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Sidecar entrypoint helpers
+# ---------------------------------------------------------------------------
+
+class FlinchServer(uvicorn.Server):
+    """Prints READY {port} to stdout after the listening socket is bound.
+
+    Modeled after Pry's PryServer — override startup() so the sentinel is
+    emitted only after super().startup() returns (socket is accepting).
+    """
+
+    def __init__(self, config: uvicorn.Config, port: int) -> None:
+        super().__init__(config)
+        self._flinch_port = port
+
+    async def startup(self, sockets=None):  # type: ignore[override]
+        await super().startup(sockets=sockets)
+        print(f"READY {self._flinch_port}", flush=True)
+
+
+def _read_stdin_keys() -> None:
+    """If stdin is a pipe, read one JSON line and set API key env vars.
+
+    Expected format: {"keys": {"anthropic": "sk-...", "openai": "sk-..."}}
+    Skips silently if stdin is a TTY (dev mode) or if parsing fails.
+    """
+    import sys
+    if sys.stdin.isatty():
+        return
+    try:
+        line = sys.stdin.readline()
+        if not line:
+            return
+        payload = json.loads(line)
+        keys = payload.get("keys", {})
+        key_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "xai": "XAI_API_KEY",
+            # Canonical name is "meta" (matches /api/settings/keys). "together"
+            # accepted as an alias for clients using raw env-var naming.
+            "meta": "TOGETHER_API_KEY",
+            "together": "TOGETHER_API_KEY",
+        }
+        for provider, env_var in key_map.items():
+            val = keys.get(provider, "").strip()
+            if val:
+                os.environ[env_var] = val
+    except Exception as e:
+        import logging
+        logging.getLogger("flinch").warning("stdin key handoff failed: %s", e)
+
+
 def main():
-    uvicorn.run("flinch.app:app", host="127.0.0.1", port=8000, reload=True)
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(description="Flinch sidecar server")
+    parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    args = parser.parse_args()
+
+    # Set DB path env var BEFORE any db module usage
+    if args.db_path:
+        os.environ["FLINCH_DB_PATH"] = args.db_path
+
+    # Read API keys from stdin pipe (Tauri sidecar mode); no-op in TTY dev mode
+    _read_stdin_keys()
+
+    port = args.port
+    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="info")
+    server = FlinchServer(config, port=port)
+    server.run()
 
 
 if __name__ == "__main__":

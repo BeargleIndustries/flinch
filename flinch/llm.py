@@ -21,15 +21,18 @@ class LLMBackend:
 class AnthropicBackend(LLMBackend):
     """Backend using the Anthropic SDK (default for coach)."""
 
-    def __init__(self, client):
+    DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+
+    def __init__(self, client, default_model: str | None = None):
         import anthropic
         self._client = client
         self._anthropic = anthropic
+        self._default_model = default_model or self.DEFAULT_MODEL
 
-    async def complete(self, system: str, messages: list[dict], model: str, max_tokens: int = 1024) -> str:
+    async def complete(self, system: str, messages: list[dict], model: str | None, max_tokens: int = 1024) -> str:
         try:
             response = await self._client.messages.create(
-                model=model,
+                model=model or self._default_model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=messages,

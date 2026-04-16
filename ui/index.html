@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flinch</title>
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<main class="frame">
+  <div class="brand">F<span class="dot" aria-hidden="true"></span></div>
+
+  <div class="copy">
+    <div class="title" id="title">Preparing Flinch…</div>
+    <div class="subtitle" id="subtitle">This is a one-time setup. It should take about 15 seconds.</div>
+  </div>
+
+  <div>
+    <div class="progress indeterminate" id="progress"><div class="progress-bar" id="progress-bar"></div></div>
+    <div class="stage" id="stage">starting…</div>
+  </div>
+
+  <div class="error" id="error">
+    <div class="error-title" id="error-title">Setup didn't complete</div>
+    <div id="error-message">An unexpected error occurred during setup.</div>
+  </div>
+
+  <details class="troubleshoot" id="troubleshoot">
+    <summary>Troubleshooting</summary>
+    <div class="troubleshoot-body">
+      If setup keeps failing, it is most often Windows Defender or another
+      anti-virus product quarantining the embedded Python runtime. Add an
+      exclusion for <code>%LOCALAPPDATA%\Flinch\runtime\</code> and relaunch.
+      If the problem persists, delete that folder and relaunch to retry
+      bootstrap from scratch.
+    </div>
+  </details>
+
+  <div class="hint" id="diag">initializing…</div>
+</main>
+
+<script src="./splash.js"></script>
+</body>
+</html>

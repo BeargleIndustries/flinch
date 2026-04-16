@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -11,7 +12,7 @@ try:
 except ImportError:
     aiosqlite = None  # Experiment features require aiosqlite
 
-DB_PATH = Path("data/flinch.db")
+DB_PATH = Path(os.environ.get("FLINCH_DB_PATH", "data/flinch.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS probes (
@@ -533,7 +534,8 @@ def _migrate_experiment_responses_table(conn):
 
 
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
-    path = db_path or DB_PATH
+    # Re-read env var at call time so FLINCH_DB_PATH set after module import is respected
+    path = db_path or Path(os.environ.get("FLINCH_DB_PATH", str(DB_PATH)))
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -603,7 +605,10 @@ class _AsyncDBContext:
         self._db = None
 
     async def __aenter__(self):
-        self._db = await aiosqlite.connect(str(DB_PATH))
+        # Re-read env var at connect time so --db-path / FLINCH_DB_PATH set
+        # after module import (e.g. from argparse in main()) is respected.
+        db_path = Path(os.environ.get("FLINCH_DB_PATH", str(DB_PATH)))
+        self._db = await aiosqlite.connect(str(db_path))
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA foreign_keys = ON")
         await self._db.execute("PRAGMA journal_mode = WAL")

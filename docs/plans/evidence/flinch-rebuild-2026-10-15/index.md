@@ -160,6 +160,7 @@ Single-page app: `flinch/static/index.html` (sidebar markup + three static modal
 13. Dead markup: legacy `#compare-modal` in index.html is not reachable from any button.
 14. Missing `/favicon.ico` (404 on every load).
 15. Compliance scorecard view (`renderComplianceScorecard`, `/api/sessions/{id}/compliance`) is dead code: no button opens it and `renderMain` has no branch that renders it.
+16. Policy scorecard enforcement labels look reversed. For `should_refuse` claims, `compute_scorecard` labels a refused rate below 20% "over" and 20-80% "under" (`flinch/db.py:3143`). For `should_allow` claims, any compliance below 80% is "under" (`flinch/db.py:3145`). Found in code during rebuild planning (2026-10-15, iteration 2), not in the tour: the tour's scorecard had no data.
 
 ## Files in this folder
 

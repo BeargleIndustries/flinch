@@ -1,0 +1,206 @@
+[
+  {
+    "file": "01-startup-api-keys-modal.png",
+    "note": "Startup with no keys: settings.js auto-opens the 'API Keys' modal over the idle home"
+  },
+  {
+    "file": "02-home-idle-no-session.png",
+    "note": "Idle home (no session): hero + Research Tools / Results & Export / Extras cards"
+  },
+  {
+    "file": "03-sidebar-probes-loaded.png",
+    "note": "Sidebar after 'Load Defaults' (example-probes.md imported): probe list grouped by domain + search/filter"
+  },
+  {
+    "file": "04-import-file-modal.png",
+    "note": "'Import File' modal listing files found in flinch/probes/"
+  },
+  {
+    "file": "05-add-probe-form.png",
+    "note": "Sidebar '+ add' inline probe form (name/domain/prompt/tags)"
+  },
+  {
+    "file": "06-add-probe-form-narrative.png",
+    "note": "Add-probe form with 'IF Narrative Probe' toggled: opening scene + target direction fields"
+  },
+  {
+    "file": "07-new-session-modal.png",
+    "note": "'New Session' modal: name, target model, coach backend, coach profile, system prompt, probe picker"
+  },
+  {
+    "file": "08-new-session-probe-picker.png",
+    "note": "New Session modal with probe picker expanded (search, All/None, per-domain toggles)"
+  },
+  {
+    "file": "09-new-session-local-coach.png",
+    "note": "New Session modal with coach backend switched to Local (Ollama) model selector"
+  },
+  {
+    "file": "10-session-idle.png",
+    "note": "Session selected, idle: 'Select a probe to begin', Run All Probes, Narrative Momentum / Framing Consistency tiles"
+  },
+  {
+    "file": "11-probe-selected.png",
+    "note": "Probe selected: probe card (domain/tags/prompt) with Send button; run history in sidebar"
+  },
+  {
+    "file": "12-probe-sent-no-key.png",
+    "note": "Pressing 'Send Probe' with no API key: POST /api/sessions/{id}/run returns 404 'Anthropic API key required...' and the UI shows a red error toast; phase returns to probe_selected"
+  },
+  {
+    "file": "13-keyboard-shortcuts-overlay.png",
+    "note": "'?' keyboard-shortcuts help overlay (shortcuts.js)"
+  },
+  {
+    "file": "14-multi-model-compare-picker.png",
+    "note": "Multi-Model Comparison picker: model checkboxes by provider, probe selection, Run button"
+  },
+  {
+    "file": "15-narrative-momentum.png",
+    "note": "Narrative Momentum view: create sequence form (strategy, warmup turns, whittle), sequence list"
+  },
+  {
+    "file": "16-framing-variants-edit.png",
+    "note": "Framing Variants view, Edit tab: variant group files + AI create section"
+  },
+  {
+    "file": "17-framing-variants-manual-create.png",
+    "note": "Framing Variants, manual variant-group creation rows"
+  },
+  {
+    "file": "18-framing-variants-results.png",
+    "note": "Framing Variants, Results tab (consistency data for current session)"
+  },
+  {
+    "file": "19-stat-analysis.png",
+    "note": "Statistical Analysis view: probe selection + repeat count, run controls"
+  },
+  {
+    "file": "20-dashboard-overview.png",
+    "note": "Dashboard > Overview: stats cards, All/Sessions/Comparisons/Sequences list, Export All / Clear All"
+  },
+  {
+    "file": "21-dashboard-sessions-tab.png",
+    "note": "Dashboard > Overview with 'sessions' list filter"
+  },
+  {
+    "file": "22-dashboard-comparisons-tab.png",
+    "note": "Dashboard > Overview with 'comparisons' list filter"
+  },
+  {
+    "file": "23-dashboard-sequences-tab.png",
+    "note": "Dashboard > Overview with 'sequences' list filter"
+  },
+  {
+    "file": "24-dashboard-clear-all-confirm.png",
+    "note": "Dashboard 'Clear All' inline confirmation"
+  },
+  {
+    "file": "25-dashboard-session-detail.png",
+    "note": "Dashboard inline session detail (runs list for the session)"
+  },
+  {
+    "file": "26-dashboard-policy-scorecard.png",
+    "note": "Dashboard > Policy Scorecard section (generate scorecard for session)"
+  },
+  {
+    "file": "27-dashboard-policy-scorecard-generated.png",
+    "note": "Policy Scorecard after pressing Generate (empty session)"
+  },
+  {
+    "file": "28-dashboard-publication-export.png",
+    "note": "Dashboard > Publication Export: theme selector + live theme preview, export controls"
+  },
+  {
+    "file": "29-dashboard-publication-theme-switched.png",
+    "note": "Publication Export with a different theme selected (live preview)"
+  },
+  {
+    "file": "30-dashboard-publication-generated.png",
+    "note": "Publication Export after pressing Generate (empty session)"
+  },
+  {
+    "file": "31-experiments-list.png",
+    "note": "Experiments tab (experiment.js): list / empty state + New Experiment"
+  },
+  {
+    "file": "32-experiment-wizard-step1.png",
+    "note": "New Experiment wizard step 1: name, description, repetitions"
+  },
+  {
+    "file": "33-experiment-wizard-step2.png",
+    "note": "New Experiment wizard step 2 (Conditions) with one condition row added: name, type select, optional system prompt"
+  },
+  {
+    "file": "34-experiment-wizard-step3.png",
+    "note": "New Experiment wizard step 3 (Models & Probes): target model rows + probe-set IDs textarea"
+  },
+  {
+    "file": "35-experiment-wizard-step4.png",
+    "note": "New Experiment wizard step 4 (Review): summary + estimated total trials"
+  },
+  {
+    "file": "36-experiment-create-422-error.png",
+    "note": "Pressing 'Create Experiment' in the wizard: POST /api/experiments returns 422 (wizard sends conditions[].name/type + models; API wants conditions[].label + model_ids) and the wizard shows the failure message"
+  },
+  {
+    "file": "36-policy-browser.png",
+    "note": "Policy Claims Browser: provider policy claims list with filter"
+  },
+  {
+    "file": "37-compliance-scorecard.png",
+    "note": "Attempted compliance view: showComplianceView() loads /api/sessions/1/compliance but renderMain has no branch for it; screen stays on session idle view (renderComplianceScorecard unreachable)"
+  },
+  {
+    "file": "38-pushback-coach-examples.png",
+    "note": "Pushback Coach examples manager (seeded examples per move, default coach profile)"
+  },
+  {
+    "file": "39-settings-view.png",
+    "note": "Settings view (render.js renderSettingsView): per-provider API key rows with Save/Clear/Test, Ollama status"
+  },
+  {
+    "file": "40-settings-api-keys-modal.png",
+    "note": "settings.js 'API Keys' modal re-opened manually (boolean status per provider, Add key input)"
+  },
+  {
+    "file": "41-snapshot-browser.png",
+    "note": "Baseline snapshot browser (list of saved baselines for session, Compare/Delete)"
+  },
+  {
+    "file": "42-snapshot-diff.png",
+    "note": "Baseline snapshot diff view (snapshot vs current session)"
+  },
+  {
+    "file": "43-compare-modal-legacy.png",
+    "note": "Legacy 'compare-modal' overlay from index.html (session-vs-session compare), forced visible"
+  },
+  {
+    "file": "44-home-after-tour.png",
+    "note": "Home after tour (goHome): session idle state"
+  },
+  {
+    "file": "45-experiments-list-with-card.png",
+    "note": "Experiments list with one experiment card (renderExpCards): status badge, conditions, open/condition-dashboard buttons"
+  },
+  {
+    "file": "46-experiment-dashboard.png",
+    "note": "Experiment dashboard (renderExpDashboard): status, progress bar, Start/Pause/Resume, prompts import, Results/Analysis/Export navigation"
+  },
+  {
+    "file": "47-experiment-results.png",
+    "note": "Experiment results view (renderResultsView): model/condition/status filters, paginated response table (empty)"
+  },
+  {
+    "file": "48-experiment-analysis.png",
+    "note": "Experiment analysis view (renderAnalysisView): metrics/stats/raters controls (no data yet)"
+  },
+  {
+    "file": "49-experiment-export.png",
+    "note": "Experiment export view (renderExportView): JSON/CSV/report/preregistration/Prolific export buttons"
+  },
+  {
+    "file": "50-condition-comparison-dashboard.png",
+    "note": "Condition comparison dashboard (render.js renderConditionComparisonDashboard): per-condition compliance, compute metrics / run analysis, probe response picker"
+  }
+]

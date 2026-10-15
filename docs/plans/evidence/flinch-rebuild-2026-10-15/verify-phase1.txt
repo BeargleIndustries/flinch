@@ -1,0 +1,19 @@
+[verify-phase1] --- case: dev mode (no args other than --port) ---
+[verify-phase1] [child stdout] READY 60885
+[verify-phase1] /health OK (version '0.8.0')
+[verify-phase1] /api/settings/keys OK: 5 entries, all booleans, no raw keys
+[verify-phase1] --- case passed: dev mode (no args other than --port) ---
+[verify-phase1] --- case: packaged mode (--port + --db-path) ---
+[verify-phase1] [child stdout] READY 51347
+[verify-phase1] /health OK (version '0.8.0')
+[verify-phase1] /api/settings/keys OK: 5 entries, all booleans, no raw keys
+[verify-phase1] --db-path honored (DB present at /tmp/flinch_verify_amoiojgi/flinch.db)
+[verify-phase1] --- case passed: packaged mode (--port + --db-path) ---
+[verify-phase1] --- case: stdin key handoff (packaged mode simulation) ---
+[verify-phase1] [child stdout] [flinch] Anthropic API key loaded (45 chars)
+[verify-phase1] [child stdout] [flinch] Classification backend: AnthropicBackend
+[verify-phase1] [child stdout] READY 40761
+[verify-phase1] stdin handoff OK — anthropic.is_set=True, meta.is_set=True
+[verify-phase1] --- case passed: stdin key handoff (packaged mode simulation) ---
+[verify-phase1] ALL CASES PASSED
+exit: 0

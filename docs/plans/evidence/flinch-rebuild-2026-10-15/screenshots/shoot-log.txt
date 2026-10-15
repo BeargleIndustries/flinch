@@ -1,0 +1,127 @@
+=== viewport 1280x800 ===
+  [1280x800] 01-startup-api-keys-modal.png -- Startup with no keys: settings.js auto-opens the 'API Keys' modal over the idle home
+  [1280x800] 02-home-idle-no-session.png -- Idle home (no session): hero + Research Tools / Results & Export / Extras cards
+  [1280x800] 03-sidebar-probes-loaded.png -- Sidebar after 'Load Defaults' (example-probes.md imported): probe list grouped by domain + search/filter
+  [1280x800] 04-import-file-modal.png -- 'Import File' modal listing files found in flinch/probes/
+  [1280x800] 05-add-probe-form.png -- Sidebar '+ add' inline probe form (name/domain/prompt/tags)
+  [1280x800] 06-add-probe-form-narrative.png -- Add-probe form with 'IF Narrative Probe' toggled: opening scene + target direction fields
+  [1280x800] 07-new-session-modal.png -- 'New Session' modal: name, target model, coach backend, coach profile, system prompt, probe picker
+  [1280x800] 08-new-session-probe-picker.png -- New Session modal with probe picker expanded (search, All/None, per-domain toggles)
+  [1280x800] 09-new-session-local-coach.png -- New Session modal with coach backend switched to Local (Ollama) model selector
+  [1280x800] 10-session-idle.png -- Session selected, idle: 'Select a probe to begin', Run All Probes, Narrative Momentum / Framing Consistency tiles
+  [1280x800] 11-probe-selected.png -- Probe selected: probe card (domain/tags/prompt) with Send button; run history in sidebar
+  [1280x800] 12-probe-sent-no-key.png -- After pressing Send with no API key: error toast / awaiting state (no-key failure path)
+  [1280x800] 13-keyboard-shortcuts-overlay.png -- '?' keyboard-shortcuts help overlay (shortcuts.js)
+  [1280x800] 14-multi-model-compare-picker.png -- Multi-Model Comparison picker: model checkboxes by provider, probe selection, Run button
+  [1280x800] 15-narrative-momentum.png -- Narrative Momentum view: create sequence form (strategy, warmup turns, whittle), sequence list
+  [1280x800] 16-framing-variants-edit.png -- Framing Variants view, Edit tab: variant group files + AI create section
+  [1280x800] 17-framing-variants-manual-create.png -- Framing Variants, manual variant-group creation rows
+  [1280x800] 18-framing-variants-results.png -- Framing Variants, Results tab (consistency data for current session)
+  [1280x800] 19-stat-analysis.png -- Statistical Analysis view: probe selection + repeat count, run controls
+  [1280x800] 20-dashboard-overview.png -- Dashboard > Overview: stats cards, All/Sessions/Comparisons/Sequences list, Export All / Clear All
+  [1280x800] 21-dashboard-sessions-tab.png -- Dashboard > Overview with 'sessions' list filter
+  [1280x800] 22-dashboard-comparisons-tab.png -- Dashboard > Overview with 'comparisons' list filter
+  [1280x800] 23-dashboard-sequences-tab.png -- Dashboard > Overview with 'sequences' list filter
+  [1280x800] 24-dashboard-clear-all-confirm.png -- Dashboard 'Clear All' inline confirmation
+  [1280x800] 25-dashboard-session-detail.png -- Dashboard inline session detail (runs list for the session)
+  [1280x800] 26-dashboard-policy-scorecard.png -- Dashboard > Policy Scorecard section (generate scorecard for session)
+  [1280x800] 27-dashboard-policy-scorecard-generated.png -- Policy Scorecard after pressing Generate (empty session)
+  [1280x800] 28-dashboard-publication-export.png -- Dashboard > Publication Export: theme selector + live theme preview, export controls
+  [1280x800] 29-dashboard-publication-theme-switched.png -- Publication Export with a different theme selected (live preview)
+  [1280x800] 30-dashboard-publication-generated.png -- Publication Export after pressing Generate (empty session)
+  [1280x800] 31-experiments-list.png -- Experiments tab (experiment.js): list / empty state + New Experiment
+  [1280x800] 32-experiment-wizard-step1.png -- New Experiment wizard step 1: name, description, repetitions
+  [1280x800] 33-experiment-wizard-step2.png -- New Experiment wizard step 2: conditions
+  [1280x800] 34-experiment-wizard-step3.png -- New Experiment wizard step 3: probe set / session
+  [1280x800] 35-experiment-wizard-step4.png -- New Experiment wizard step 4: review / create
+  [1280x800] 36-policy-browser.png -- Policy Claims Browser: provider policy claims list with filter
+  [1280x800] 37-compliance-scorecard.png -- Compliance Scorecard view (policy claims vs session results)
+  [1280x800] 38-pushback-coach-examples.png -- Pushback Coach examples manager (seeded examples per move, default coach profile)
+  [1280x800] 39-settings-view.png -- Settings view (render.js renderSettingsView): per-provider API key rows with Save/Clear/Test, Ollama status
+  [1280x800] 40-settings-api-keys-modal.png -- settings.js 'API Keys' modal re-opened manually (boolean status per provider, Add key input)
+  [1280x800] 41-snapshot-browser.png -- Baseline snapshot browser (list of saved baselines for session, Compare/Delete)
+  [1280x800] 42-snapshot-diff.png -- Baseline snapshot diff view (snapshot vs current session)
+  [1280x800] 43-compare-modal-legacy.png -- Legacy 'compare-modal' overlay from index.html (session-vs-session compare), forced visible
+  [1280x800] 44-home-after-tour.png -- Home after tour (goHome): session idle state
+  console errors captured: 3
+=== viewport 1024x700 ===
+  [1024x700] 01-startup-api-keys-modal.png -- Startup with no keys: settings.js auto-opens the 'API Keys' modal over the idle home
+  [1024x700] 02-home-idle-no-session.png -- Idle home (no session): hero + Research Tools / Results & Export / Extras cards
+  [1024x700] 03-sidebar-probes-loaded.png -- Sidebar after 'Load Defaults' (example-probes.md imported): probe list grouped by domain + search/filter
+  [1024x700] 04-import-file-modal.png -- 'Import File' modal listing files found in flinch/probes/
+  [1024x700] 05-add-probe-form.png -- Sidebar '+ add' inline probe form (name/domain/prompt/tags)
+  [1024x700] 06-add-probe-form-narrative.png -- Add-probe form with 'IF Narrative Probe' toggled: opening scene + target direction fields
+  [1024x700] 07-new-session-modal.png -- 'New Session' modal: name, target model, coach backend, coach profile, system prompt, probe picker
+  [1024x700] 08-new-session-probe-picker.png -- New Session modal with probe picker expanded (search, All/None, per-domain toggles)
+  [1024x700] 09-new-session-local-coach.png -- New Session modal with coach backend switched to Local (Ollama) model selector
+  [1024x700] 10-session-idle.png -- Session selected, idle: 'Select a probe to begin', Run All Probes, Narrative Momentum / Framing Consistency tiles
+  [1024x700] 11-probe-selected.png -- Probe selected: probe card (domain/tags/prompt) with Send button; run history in sidebar
+  [1024x700] 12-probe-sent-no-key.png -- After pressing Send with no API key: error toast / awaiting state (no-key failure path)
+  [1024x700] 13-keyboard-shortcuts-overlay.png -- '?' keyboard-shortcuts help overlay (shortcuts.js)
+  [1024x700] 14-multi-model-compare-picker.png -- Multi-Model Comparison picker: model checkboxes by provider, probe selection, Run button
+  [1024x700] 15-narrative-momentum.png -- Narrative Momentum view: create sequence form (strategy, warmup turns, whittle), sequence list
+  [1024x700] 16-framing-variants-edit.png -- Framing Variants view, Edit tab: variant group files + AI create section
+  [1024x700] 17-framing-variants-manual-create.png -- Framing Variants, manual variant-group creation rows
+  [1024x700] 18-framing-variants-results.png -- Framing Variants, Results tab (consistency data for current session)
+  [1024x700] 19-stat-analysis.png -- Statistical Analysis view: probe selection + repeat count, run controls
+  [1024x700] 20-dashboard-overview.png -- Dashboard > Overview: stats cards, All/Sessions/Comparisons/Sequences list, Export All / Clear All
+  [1024x700] 21-dashboard-sessions-tab.png -- Dashboard > Overview with 'sessions' list filter
+  [1024x700] 22-dashboard-comparisons-tab.png -- Dashboard > Overview with 'comparisons' list filter
+  [1024x700] 23-dashboard-sequences-tab.png -- Dashboard > Overview with 'sequences' list filter
+  [1024x700] 24-dashboard-clear-all-confirm.png -- Dashboard 'Clear All' inline confirmation
+  [1024x700] 25-dashboard-session-detail.png -- Dashboard inline session detail (runs list for the session)
+  [1024x700] 26-dashboard-policy-scorecard.png -- Dashboard > Policy Scorecard section (generate scorecard for session)
+  [1024x700] 27-dashboard-policy-scorecard-generated.png -- Policy Scorecard after pressing Generate (empty session)
+  [1024x700] 28-dashboard-publication-export.png -- Dashboard > Publication Export: theme selector + live theme preview, export controls
+  [1024x700] 29-dashboard-publication-theme-switched.png -- Publication Export with a different theme selected (live preview)
+  [1024x700] 30-dashboard-publication-generated.png -- Publication Export after pressing Generate (empty session)
+  [1024x700] 31-experiments-list.png -- Experiments tab (experiment.js): list / empty state + New Experiment
+  [1024x700] 32-experiment-wizard-step1.png -- New Experiment wizard step 1: name, description, repetitions
+  [1024x700] 33-experiment-wizard-step2.png -- New Experiment wizard step 2: conditions
+  [1024x700] 34-experiment-wizard-step3.png -- New Experiment wizard step 3: probe set / session
+  [1024x700] 35-experiment-wizard-step4.png -- New Experiment wizard step 4: review / create
+  [1024x700] 36-policy-browser.png -- Policy Claims Browser: provider policy claims list with filter
+  [1024x700] 37-compliance-scorecard.png -- Compliance Scorecard view (policy claims vs session results)
+  [1024x700] 38-pushback-coach-examples.png -- Pushback Coach examples manager (seeded examples per move, default coach profile)
+  [1024x700] 39-settings-view.png -- Settings view (render.js renderSettingsView): per-provider API key rows with Save/Clear/Test, Ollama status
+  [1024x700] 40-settings-api-keys-modal.png -- settings.js 'API Keys' modal re-opened manually (boolean status per provider, Add key input)
+  [1024x700] 41-snapshot-browser.png -- Baseline snapshot browser (list of saved baselines for session, Compare/Delete)
+  [1024x700] 42-snapshot-diff.png -- Baseline snapshot diff view (snapshot vs current session)
+  [1024x700] 43-compare-modal-legacy.png -- Legacy 'compare-modal' overlay from index.html (session-vs-session compare), forced visible
+  [1024x700] 44-home-after-tour.png -- Home after tour (goHome): session idle state
+  console errors captured: 3
+--- patch run ---
+=== patch 1280x800 ===
+  session-select after handleSessionChange: {"options": ["", "1"], "value": "", "sessions": 1, "current": 1}
+  1280x800/12-probe-sent-no-key.png -- Pressing 'Send Probe' with no API key: POST /api/sessions/{id}/run returns 404 'Anthropic API key required...' and the UI shows a red error toast; phase returns to probe_selected
+  1280x800/33-experiment-wizard-step2.png -- New Experiment wizard step 2 (Conditions) with one condition row added: name, type select, optional system prompt
+  1280x800/34-experiment-wizard-step3.png -- New Experiment wizard step 3 (Models & Probes): target model rows + probe-set IDs textarea
+  1280x800/35-experiment-wizard-step4.png -- New Experiment wizard step 4 (Review): summary + estimated total trials
+  experiment ids: before=[] after=[] using=None
+=== patch 1024x700 ===
+  session-select after handleSessionChange: {"options": ["", "1"], "value": "", "sessions": 1, "current": 1}
+  1024x700/12-probe-sent-no-key.png -- Pressing 'Send Probe' with no API key: POST /api/sessions/{id}/run returns 404 'Anthropic API key required...' and the UI shows a red error toast; phase returns to probe_selected
+  1024x700/33-experiment-wizard-step2.png -- New Experiment wizard step 2 (Conditions) with one condition row added: name, type select, optional system prompt
+  1024x700/34-experiment-wizard-step3.png -- New Experiment wizard step 3 (Models & Probes): target model rows + probe-set IDs textarea
+  1024x700/35-experiment-wizard-step4.png -- New Experiment wizard step 4 (Review): summary + estimated total trials
+  experiment ids: before=[] after=[] using=None
+--- patch2 run ---
+=== patch2 1280x800 ===
+  1280x800/36-experiment-create-422-error.png -- Pressing 'Create Experiment' in the wizard: POST /api/experiments returns 422 (wizard sends conditions[].name/type + models; API wants conditions[].label + model_ids) and the wizard shows the failure message
+  API create: 200 {"experiment":{"id":1,"name":"baseline-screens experiment","description":"Created via API for baseline screenshots (wizard POST fails with 422)","status":"draft
+  experiment id 1
+  1280x800/45-experiments-list-with-card.png -- Experiments list with one experiment card (renderExpCards): status badge, conditions, open/condition-dashboard buttons
+  1280x800/46-experiment-dashboard.png -- Experiment dashboard (renderExpDashboard): status, progress bar, Start/Pause/Resume, prompts import, Results/Analysis/Export navigation
+  1280x800/47-experiment-results.png -- Experiment results view (renderResultsView): model/condition/status filters, paginated response table (empty)
+  1280x800/48-experiment-analysis.png -- Experiment analysis view (renderAnalysisView): metrics/stats/raters controls (no data yet)
+  1280x800/49-experiment-export.png -- Experiment export view (renderExportView): JSON/CSV/report/preregistration/Prolific export buttons
+  1280x800/50-condition-comparison-dashboard.png -- Condition comparison dashboard (render.js renderConditionComparisonDashboard): per-condition compliance, compute metrics / run analysis, probe response picker
+=== patch2 1024x700 ===
+  1024x700/36-experiment-create-422-error.png -- Pressing 'Create Experiment' in the wizard: POST /api/experiments returns 422 (wizard sends conditions[].name/type + models; API wants conditions[].label + model_ids) and the wizard shows the failure message
+  experiment id 1
+  1024x700/45-experiments-list-with-card.png -- Experiments list with one experiment card (renderExpCards): status badge, conditions, open/condition-dashboard buttons
+  1024x700/46-experiment-dashboard.png -- Experiment dashboard (renderExpDashboard): status, progress bar, Start/Pause/Resume, prompts import, Results/Analysis/Export navigation
+  1024x700/47-experiment-results.png -- Experiment results view (renderResultsView): model/condition/status filters, paginated response table (empty)
+  1024x700/48-experiment-analysis.png -- Experiment analysis view (renderAnalysisView): metrics/stats/raters controls (no data yet)
+  1024x700/49-experiment-export.png -- Experiment export view (renderExportView): JSON/CSV/report/preregistration/Prolific export buttons
+  1024x700/50-condition-comparison-dashboard.png -- Condition comparison dashboard (render.js renderConditionComparisonDashboard): per-condition compliance, compute metrics / run analysis, probe response picker

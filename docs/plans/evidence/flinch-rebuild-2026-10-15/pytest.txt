@@ -1,0 +1,22 @@
+
+no tests ran in 0.03s
+
+=== Direct run: python tests/test_experiment_pipeline.py (pytest collected 0 tests because there are no test_* functions) ===
+Traceback (most recent call last):
+  File "/home/user/flinch/tests/test_experiment_pipeline.py", line 250, in <module>
+    asyncio.run(run_pipeline_test())
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 196, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 119, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/home/user/flinch/tests/test_experiment_pipeline.py", line 39, in run_pipeline_test
+    db = await db_module.get_async_db()
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: object _AsyncDBContext can't be used in 'await' expression
+exit: 1

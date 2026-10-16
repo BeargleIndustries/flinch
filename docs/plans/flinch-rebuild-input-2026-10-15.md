@@ -49,8 +49,15 @@ Brad's verdict on `flinch-rebuild-plan-2026-10-15.md` (iteration 4): "almost non
 
 Decisions 1.1–1.3 (stack, updater, schema) stand, except that the benchmark section needs new tables; 1.3 ("schema untouched") therefore narrows to: existing tables and columns are untouched and an existing `flinch.db` opens unchanged; additive tables for benchmarks are allowed.
 
+## Round 3 (2026-10-16): information architecture
+
+| # | Question | Brad's answer |
+|---|---|---|
+| 3.1 | Does the IA in `design/01-information-architecture.md` hold (six sections by research question plus Settings, Pry-style header with session switcher, no global sidebar, two-pane Probe workbench)? | **Yes, write the screen specs against it.** §7 open points 2 and 3 take the draft's defaults (Models study stays session-less; narrative strategies listed read-only in the Library). |
+| 3.2 | Name of the consistency section | **Studies.** |
+
 ## PICKUP POINT
 
 Rewritten every time a session is cut.
 
-- 2026-10-16: Round 2 answered. Ground-up replan in progress: benchmark-harness research and a per-screen content inventory running; next is the information architecture, then one spec file per screen under `docs/plans/design/`, then the build plan re-cut against the specs. Nothing is approved; no code moves.
+- 2026-10-16: Rounds 1–3 answered. Design groundwork in `docs/plans/design/`: Pry vocabulary, benchmark research, IA (approved in Round 3), tokens, components. Next: content inventory saved, one spec per screen under `design/screens/`, `design/benchmarks.md`, `design/04-flows.md`, then the build plan re-cut against the specs (`docs/plans/flinch-rebuild-plan-v2.md`). Nothing is approved for execution; no code moves.

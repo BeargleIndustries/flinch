@@ -34,8 +34,23 @@ Backend changes in the approved plan: B1–B5 (dead test, missing `import loggin
 
 Open question for Brad, asked when L4 starts: Q1, the policy scorecard enforcement labels (baseline problem 16).
 
+## Round 2 (2026-10-16): the iteration-4 plan is rejected; ground-up replan
+
+Brad's verdict on `flinch-rebuild-plan-2026-10-15.md` (iteration 4): "almost none of that is about the app design and even the parts that are are deeply vague and basically just hint at a direction the design could go. none of this is actually a build plan by any standard. if you gave this to a team of developers they'd have no clue what they needed to do." The file is kept as `docs/plans/superseded/` history only; nothing in it is reused without re-justification.
+
+| # | Question | Brad's answer |
+|---|---|---|
+| 2.1 | Form of the design spec | **Text specs + wireframes in the repo**: one file per screen under `docs/plans/design/`, with layout wireframes, a component inventory, concrete tokens, and end-to-end flows. The lanes build from these. |
+| 2.2 | How much of the old plan survives | **Ground-up replan.** |
+| 2.3 | New scope: a **Benchmarks section** | Run standard benchmarks to standard (comparable to published scores), and run the same suite under Flinch-defined conditions and compare, the way condition experiments compare system prompts today. This supersedes the pre-read §1 line "no new features" for this one feature; everything else in §1 stands. |
+| 2.4 | Suites in the first release | **Pluggable runner shipping three suites**: SWE-bench Verified, one knowledge suite (GPQA or MMLU-Pro), one refusal suite (XSTest or OR-Bench). Exact picks for the knowledge and refusal suites are a plan question, decided from the research. |
+| 2.5 | What varies between conditions | **System prompt; model and provider (incl. local Ollama); sampling and reasoning settings** (temperature, max tokens, reasoning effort or thinking budget where exposed). Not agent-scaffold settings. The pushback coach loop is not part of benchmarks. |
+| 2.6 | Where runs execute | **Locally on Brad's machine, Docker required for SWE-bench.** The app drives the harness as a local process, shows cost and time estimates before a run, supports resumable partial runs and task subsets. |
+
+Decisions 1.1–1.3 (stack, updater, schema) stand, except that the benchmark section needs new tables; 1.3 ("schema untouched") therefore narrows to: existing tables and columns are untouched and an existing `flinch.db` opens unchanged; additive tables for benchmarks are allowed.
+
 ## PICKUP POINT
 
 Rewritten every time a session is cut.
 
-- 2026-10-16: Plan is at consensus, `Status: pending approval`, committed on `flinch-rebuild-plan`. Next: Brad reads `docs/plans/flinch-rebuild-plan-2026-10-15.md` and approves, requests changes, or rejects. On approval: cut `flinch-rebuild` from `master`, start L0 (T0–T3) with `/oh-my-claudecode:ralph` or `team`, lane briefs under `.omc/plans/flinch-lane-<L>.md`. No code moves before his word.
+- 2026-10-16: Round 2 answered. Ground-up replan in progress: benchmark-harness research and a per-screen content inventory running; next is the information architecture, then one spec file per screen under `docs/plans/design/`, then the build plan re-cut against the specs. Nothing is approved; no code moves.

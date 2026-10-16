@@ -1,7 +1,7 @@
 # Flinch UI rebuild: work plan
 
 - Date: 2026-10-15
-- Status: **pending approval**
+- Status: **REJECTED 2026-10-16** (Round 2 in the input record). Kept as history only.
 - Iteration: 4 (final improvements). Revised from the architect and critic reviews of iterations 1–3; every finding is answered in §14.
 - Plan branch: `flinch-rebuild-plan`. Build branch after approval: `flinch-rebuild`, cut from `master`. Each lane is a git worktree off it. The main session is the **integrator**: it merges lanes and is the only committer of `flinch/static/` (§7 "Integrator merge step").
 - Mode: ralplan consensus, SHORT.

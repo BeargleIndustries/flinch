@@ -32,9 +32,12 @@
 │ R4 COACH DEFAULT FOR NEW SESSIONS                                      held in memory ⓘ │
 │    Backend (Anthropic | Local)   Model [llama3.1:8b ▾]  ⓘ Local coach: slower, no judge  │
 ├──────────────────────────────────────────────────────────────────────────────────────┤
-│ R5 BENCHMARKS                                      checks defined in benchmarks.md     │
-│    Docker Desktop  ○ not found    WSL2  ● ready    Hugging Face token  ○ not set [Add…] │
-│    Log directory  %LOCALAPPDATA%\Flinch\benchmarks\logs   Disk used  0 B   [Open folder] │
+│ R5 BENCHMARKS                                                                        │
+│    Runner  ○ not installed  [Install benchmark runner (about 200 MB)]                │
+│    Hugging Face token  ○ not set  [password input         ] [Save]  ⓘ gated datasets │
+│    Judge key (XSTest)  ● OpenAI key set     Checked 2 min ago · [Check prerequisites] │
+│    Benchmarks folder  %APPDATA%\Flinch\benchmarks\  [Copy path]                     │
+│    Disk used  184 MB · 41 GB free  [Clear logs…]      prices as of 2026-10-16        │
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ R6 ABOUT                                                                             │
 │    Flinch 0.8.0 · desktop · database %APPDATA%\Flinch\flinch.db   [Check for updates]  │
@@ -120,9 +123,45 @@ As `03-components.md §1`; `⚙` is `aria-current`. KeyStatusChip reflects this 
 |---|---|---|
 | backend or model change | `POST /api/settings/coach-default {backend, model}` (app.py:2422-2429) → `{backend, model}` | Toast "Coach default: Local, llama3.1:8b." |
 
-### R5 Benchmarks (short; checks defined in `benchmarks.md`)
-- Components: Section (`id="benchmarks"`), definition grid (InsetBox rows), Chip (status), Button, Input password (HF token, same two-path save as R2 with provider `huggingface`; route defined in `benchmarks.md`), Caveat.
-- Rows: Docker Desktop (status chip + version or "not found"), WSL2 (status chip), Hugging Face token (set / not set, Add…/Remove…, with the Caveat `hf_gated` "Needed for gated datasets such as GPQA; you must have accepted the dataset's terms on Hugging Face first." per `../research/benchmark-harnesses-2026-10-16.md §6 item 4`), Log directory (path, "Open folder" desktop-only), Disk used (bytes, "Clear logs…" with D2). Every check's route, payload and refresh rule is **defined in `benchmarks.md`**; this section only places them. When the benchmarks API is absent the section shows EmptyState "Benchmarks are not set up in this build."
+### R5 Benchmarks
+- Components: Section (`id="benchmarks"`), definition grid (InsetBox rows), Chip (status), Button (primary sm, secondary sm, ghost sm), Input password (HF token), LoadingScreen step list (§24, inline during the runner install), Caveat, Term, EmptyState.
+- Scope: this release ships GPQA Diamond and XSTest; SWE-bench and its Docker, WSL2 and disk prerequisites are deferred (`../flinch-rebuild-input-2026-10-15.md` Round 5.1), so there is no Docker row. The benchmarks folder is the one `bench_dir` in `benchmarks.md` §2.2 (`%APPDATA%\Flinch\benchmarks\` on desktop, `data/benchmarks/` in dev, `FLINCH_BENCH_DIR` overrides); the earlier `%LOCALAPPDATA%\Flinch\benchmarks\logs` is withdrawn.
+- Content and bindings (`GET /api/benchmarks/settings` → `{bench_dir, disk: {used_bytes, free_bytes}, prices_as_of, hf_token_set, runner: {installed, inspect_ai, inspect_evals, pins, install: {state, error}}}`; `GET /api/benchmarks/prereqs` → `{checks: [{id, ok, detail, fix, link}], runner}`; `GET /api/settings/keys` → the six-entry list including `{env_var: "HF_TOKEN", provider: "huggingface", label, is_set, masked}`, `benchmarks.md` §2.6; this section renders that entry and R2 does not):
+
+| Element | Source route | JSON field | Formatting rule | Component |
+|---|---|---|---|---|
+| Runner status | `GET /api/benchmarks/settings` | `runner.installed`, `runner.inspect_ai`, `runner.inspect_evals`, `runner.install.state` | `installed`: "● Runner installed: inspect-ai x.y.z · inspect-evals a.b.c" Chip ok; `not_installed`: "○ not installed"; pin mismatch (`installed` false with versions present): "○ version x.y.z; this build expects {pin}"; `failed`: "✗ install failed" Chip danger | Chip + text |
+| Install benchmark runner | | | Button primary sm "Install benchmark runner (about 200 MB)" with hint "Downloads inspect-ai and inspect-evals into Flinch's own Python. Nothing else changes." (draft; brad-voice pass); shown in `not_installed` and pin-mismatch states; `failed` shows "Try again" (primary sm) and "Copy install log" (ghost sm); `installed` shows no button (no uninstall in this release) | Button |
+| Install progress | `POST /api/benchmarks/runner/install` (SSE `{stage, message, fraction}`) | `stage` ∈ resolving, downloading, installing, verifying; `message` (pip's last line, sanitised) | step list replaces the button while `installing`; the section is `aria-busy="true"`; the last `message` in mono under the list; a 409 (an install already running) attaches to the stream state instead of starting another | LoadingScreen step list |
+| Install failure | same stream, final event `{stage: "failed", message}` | `runner.install.error` | "The install failed: {error}." in `text-red-400` under the row; "Copy install log" copies the full sanitised pip output | text + Button |
+| Hugging Face token status | `GET /api/settings/keys` | the `huggingface` entry's `is_set`, `masked` | "● set hf_abcd…x9Q2" (the server's mask, app.py:2209-2213) or "○ not set"; a Term `hf_token` on the label | Chip |
+| Hugging Face token input | | | shown when not set, or after Replace…; placeholder "Paste the token"; never prefilled; `autocomplete="off"`, show/hide toggle; Caveat `hf_gated` beside it | Input password |
+| Save / Replace… / Remove… | | | Save primary sm (loading "Saving…"); Replace… and Remove… ghost sm on a set row; Remove opens D1 with the HF wording below | Button |
+| Judge key (XSTest) | `GET /api/benchmarks/prereqs` | the `judge_key` check | "● OpenAI key set" / amber "○ XSTest's judge is gpt-4o, which needs an OpenAI key. Add one in Settings." as a link to `#/settings#keys`; a Term `judge` on the label with the glossary line "part of the suite, not something you pick" | Chip + text |
+| GPQA token check | same | the `hf_token` check | after a save or Check prerequisites: "● token accepted; GPQA terms accepted" / amber "○ GPQA is gated. Add your Hugging Face token in Settings and accept the dataset terms on huggingface.co." with an external link to the dataset page; offline: "○ Couldn't reach huggingface.co to check the token." | text |
+| Checked ago / Check prerequisites | `POST /api/benchmarks/prereqs/check` | `checks[]` | "Checked 2 min ago"; Button secondary sm "Check prerequisites" (loading "Checking…") re-runs every registered check and refreshes the Runner, Judge key and GPQA token rows | text + Button |
+| Benchmarks folder | `GET /api/benchmarks/settings` | `bench_dir` | mono path; "Copy path" ghost sm copies it (no "open folder": Round 5.2); hint "Runs, their Inspect logs and the dataset cache live here. Set FLINCH_BENCH_DIR to move it." | text + Button |
+| Disk used | same | `disk.used_bytes`, `disk.free_bytes` | "184 MB" (binary units as the rest of the app; "0 B" when empty) with "· 41 GB free" | text |
+| Clear logs… | | | Button secondary sm, opens D2; disabled with reason "A run is in progress." while any run is `running` (`GET /api/benchmarks/runs?status=running`) | Button |
+| Prices as of | same | `prices_as_of` | "Estimates use this build's price table, as of 2026-10-16." (no refresh control: Round 5.2) | text |
+
+- Actions (the HF token uses the same two paths as R2, picked by the shell flag; there is no validate-key call for `huggingface` because `POST /api/settings/validate-key` has no Hugging Face arm, so the `hf_token` prerequisite check is the validation and runs right after the save):
+
+| Control | Calls | Then |
+|---|---|---|
+| Save (desktop) | 1. `POST /api/settings/set-key {provider: "huggingface", key}` (app.py:3342-3356) → `{ok}`; 2. Tauri `invoke("set_api_key", {provider: "huggingface", key})` (lib.rs:96-99 → api_keys.rs:37; `PROVIDERS` at api_keys.rs:25 gains `"huggingface"`, `benchmarks.md` §2.6); 3. `POST /api/benchmarks/prereqs/check {suite: "gpqa_diamond"}` | input cleared; status "● set" with the mask from a refreshed `GET /api/settings/keys`; the GPQA token check row shows the result; Toast "Hugging Face token saved to Credential Manager." or, when the check fails, Toast warn "Token saved, but GPQA's terms are not accepted yet on huggingface.co."; step 1 `ok:false` → inline "The server did not accept the token: {error}"; step 2 rejects → inline "Saved for this session only; Credential Manager refused: {error}. It will be asked for again next launch." |
+| Save (browser) | 1. `POST /api/settings/keys {HF_TOKEN: key}` (app.py:2280-2308; `_SUPPORTED_KEYS` gains `HF_TOKEN`) → `{ok, keys[]}`; 2. `POST /api/benchmarks/prereqs/check {suite: "gpqa_diamond"}` | status from the returned `keys`; Toast "Hugging Face token saved to .env." |
+| Remove… (desktop) | D1 (HF wording); `DELETE /api/settings/set-key?provider=huggingface` then `invoke("delete_api_key", {provider: "huggingface"})` | status "○ not set"; the GPQA token check row goes amber; Toast "Removed the Hugging Face token." |
+| Remove… (browser) | D1; `POST /api/settings/keys {HF_TOKEN: ""}` | same |
+| Replace… | none | shows the input on a set row; Cancel hides it |
+| Install benchmark runner / Try again | `POST /api/benchmarks/runner/install` (SSE) | step list runs; on the final `verifying` ok event the row becomes `installed` and Toast "Benchmark runner installed."; on `failed` the failure line and the two buttons |
+| Copy install log | none (the log is held from the stream) | clipboard; Toast "Copied the install log (keys and paths removed)." |
+| Check prerequisites | `POST /api/benchmarks/prereqs/check` | rows refresh; polite announcement "Prerequisites: all passed" / "Prerequisites: 1 failed, Hugging Face token not set" |
+| Copy path | none | clipboard; Toast "Copied the benchmarks folder path." |
+| Clear logs… | D2 → `POST /api/benchmarks/logs/clear` → `{runs_cleared, freed_bytes}` | Disk used refreshes; Toast "Cleared logs for {runs_cleared} runs; freed {size}." |
+
+- States of the Runner row, in one place (`benchmarks.md` §8.4): `not_installed` (button), `installing` (step list, `aria-busy`), `installed` (versions, no button), `failed` (reason, Try again, Copy install log), pin mismatch (treated as `not_installed` with the reinstall wording). Closing Flinch during an install leaves the next launch in `not_installed`; a retry is safe.
+- When the benchmarks API is absent (404 on `GET /api/benchmarks/settings`) the section shows EmptyState "Benchmarks are not set up in this build." (draft; brad-voice pass).
 
 ### R6 About
 - Components: Section (`id="about"`), text, Button (secondary sm "Check for updates", loading "Checking…"), UpdateCard (card variant), Button (ghost sm "Copy diagnostics", "Open crash logs").
@@ -156,10 +195,18 @@ As `03-components.md §1`; `⚙` is `aria-current`. KeyStatusChip reflects this 
 | Ollama checking | section mount, Test | | | chip pulse | | | | |
 | Ollama connected / offline | | | | chip + models / "○ offline" + hint "Is Ollama running? Try `ollama serve`." | model select enabled / disabled | | | |
 | coach saved | POST ok | | | | Toast | | | |
-| benchmarks absent | API 404 | | | | | EmptyState | | |
+| benchmarks absent | API 404 on `GET /api/benchmarks/settings` | | | | | EmptyState | | |
+| runner not installed | `runner.installed` false | | | | | Runner row "○ not installed" with the install button | | |
+| runner installing | SSE in flight | | | | | step list, `aria-busy`, last pip line | | |
+| runner installed | post-install check ok | | | | | "● Runner installed: inspect-ai x.y.z · inspect-evals a.b.c", no button; Toast | | |
+| runner install failed | stream `failed` / non-zero pip | | | | | "✗ install failed", reason line, Try again, Copy install log | | |
+| HF token saving / saved / check failed | Save | | | | | "Saving…" → "● set" + GPQA token check row result; warn Toast when the terms are not accepted | | |
+| judge key missing | `judge_key` check fails | | | | | amber row linking to `#/settings#keys` | | |
+| clearing logs | D2 confirmed | | | | | Disk used refreshes; Toast | | |
+| run in progress | any run `running` | | | | | Clear logs… disabled with reason "A run is in progress." | | |
 | update available | store `available` | | | | | | card | |
 | update downloading / installing / error | store phases | | | | | | card progress / spinner / error with Try again | |
-| browser shell | no `?shell=desktop` | | ".env" hints | | | Open folder disabled | Check, diagnostics disabled with reasons | |
+| browser shell | no `?shell=desktop` | | ".env" hints | | | HF token saves via `.env`; folder path reads `data/benchmarks/` | Check, diagnostics disabled with reasons | |
 | error | any GET fails | | that section shows "Could not load. Try again." | same | same | same | same | error Toast |
 
 ## 4. Numbers on this screen
@@ -169,7 +216,9 @@ As `03-components.md §1`; `⚙` is `aria-current`. KeyStatusChip reflects this 
 | "3 models" | `models.length` | the model names listed | Chip |
 | "sk-ant-a…x9Q2" | server mask (first 8, last 4; "***" under 16 chars) | | Chip |
 | "Tested 14:02" | local time of the last test this visit | the result text | text |
-| Disk used "0 B" | defined in `benchmarks.md` | | R5 |
+| Disk used "184 MB · 41 GB free" | `disk.used_bytes` (every file under `bench_dir`), `disk.free_bytes` (the drive holding it); `GET /api/benchmarks/settings` | the folder path beside it | R5 |
+| "about 200 MB" on the install button | the benchmarks extra's download size, `benchmarks.md` §8.3 (an estimate; T-check in L0) | | R5 |
+| "Cleared logs for 3 runs; freed 184 MB" | `runs_cleared`, `freed_bytes` from `POST /api/benchmarks/logs/clear` | | R5 Toast |
 | "Flinch 0.8.0" | `/health.version` | shell and DB path | R6 |
 | update bytes | `downloaded` of `total` | progress bar `aria-valuetext` | UpdateCard |
 
@@ -195,7 +244,9 @@ As `03-components.md §1`; `⚙` is `aria-current`. KeyStatusChip reflects this 
 | Ollama | R3 | glossary ("a local model server; Flinch talks to it at the base URL") |
 | coach backend | R4 | glossary |
 | Credential Manager | R2 hint | glossary |
-| Hugging Face token, Docker Desktop, WSL2 | R5 | glossary (definitions in `benchmarks.md`) |
+| Hugging Face token | R5 | glossary `hf_token`: "A key from huggingface.co that lets Flinch download gated datasets such as GPQA, after you accept the dataset's terms there." |
+| benchmark runner | R5 | glossary `runner`: "The inspect-ai and inspect-evals packages Flinch installs into its own Python to execute a suite." |
+| judge | R5 | glossary `judge` (as `benchmarks-catalog.md` §6) |
 | sidecar | R6 | glossary ("the Python server the desktop app runs") |
 
 ## 7. First-time tips (rule 6)
@@ -212,7 +263,8 @@ As `03-components.md §1`; `⚙` is `aria-current`. KeyStatusChip reflects this 
 
 ## 9. Dialogs and overlays opened from here
 - **D1 Remove key** (Dialog md, danger "Remove the Anthropic key"): intro "Sessions on Claude models will not run until a key is set again. Nothing recorded is deleted."
-- **D2 Clear benchmark logs** (defined in `benchmarks.md`).
+- **D1 (Hugging Face wording)**: danger "Remove the Hugging Face token"; intro "GPQA Diamond will not run until a token is set again. Downloaded datasets and recorded runs stay where they are." (draft; brad-voice pass).
+- **D2 Clear benchmark logs** (Dialog md, danger "Clear benchmark logs"): intro "This deletes the Inspect logs and worker logs for every finished, stopped or failed run ({n} runs, {size}). Scores, provenance and exports already made are kept; sample transcripts will no longer open. Runs in progress are not touched." (draft; brad-voice pass); Caveat line "Exports after this cannot include the logs."; primary "Clear logs", cancel "Keep them"; calls `POST /api/benchmarks/logs/clear` (`benchmarks.md` §3, §7). The counts come from `GET /api/benchmarks/runs?status=` (all but `running`) and `GET /api/benchmarks/settings` `disk.used_bytes`.
 - Crash logs Drawer (R6).
 - UpdateCard; Toasts; tips. No native `alert()`.
 
@@ -232,7 +284,14 @@ As `03-components.md §1`; `⚙` is `aria-current`. KeyStatusChip reflects this 
 | POST | `/api/settings/coach-default` | R4 change |
 | GET | `/health` | R6 version |
 | (Tauri) | `invoke set_api_key`, `delete_api_key`, `get_api_keys`, `copy_diagnostic`, `list_crash_logs` | R2 desktop path; R6 |
-| defined in `benchmarks.md` | benchmark prerequisite checks, HF token save, log dir, disk use | R5 |
+| GET | `/api/benchmarks/settings` | R5 load (runner state, folder, disk use, prices date); 404 → EmptyState |
+| GET | `/api/benchmarks/prereqs` | R5 load (judge key, GPQA token check rows) |
+| POST | `/api/benchmarks/prereqs/check` | R5 Check prerequisites; after an HF token save or remove (`{suite: "gpqa_diamond"}`) |
+| POST | `/api/benchmarks/runner/install` | R5 Install benchmark runner / Try again (SSE) |
+| POST | `/api/settings/set-key` / DELETE `?provider=huggingface` | R5 HF token save and remove (desktop; with `invoke set_api_key` / `delete_api_key`) |
+| POST | `/api/settings/keys` | R5 HF token save and remove (browser; `{HF_TOKEN: …}`) |
+| GET | `/api/benchmarks/runs?status=running` | R5 Clear logs… enablement |
+| POST | `/api/benchmarks/logs/clear` | R5 D2 |
 
 ## 11. Acceptance checks (concrete, DOM-level, runnable by a tester)
 1. With `?shell=desktop` and a valid key, Validate and save produces exactly these requests in order: `POST /api/settings/validate-key`, `POST /api/settings/set-key`, then `invoke("set_api_key")`; no request to `POST /api/settings/keys` is made (network assertion).

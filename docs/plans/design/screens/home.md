@@ -48,7 +48,7 @@ All visible strings in this spec are drafts (draft; brad-voice pass). No probe t
 │ │ suite, and how does │ │ variant groups,     │ │ it out?            │                 │
 │ │ that move under my  │ │ claims, coach       │ │                    │                 │
 │ │ conditions?         │ │ examples?           │ │                    │                 │
-│ │ needs Docker: see   │ │ 3 probes            │ │ 0 runs recorded    │                 │
+│ │ needs the runner:   │ │ 3 probes            │ │ 0 runs recorded    │                 │
 │ │ Settings            │ │                     │ │                    │                 │
 │ └─────────────────────┘ └─────────────────────┘ └────────────────────┘                 │
 │ R4 RECENT                                                                             │

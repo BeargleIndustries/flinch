@@ -160,7 +160,7 @@ The panel keeps its width (512 px). The Add tab's Name and Domain fields stack o
 | Defaults loading | "Load the example probes" | | | button loading "Loading…" | | (none) |
 | Defaults done | 200 | | | defaults Readout | | "Loaded 3 probes from the shipped files; 3 in the library now. Narrative strategies were loaded too." |
 | Artefact present | a probe name starts with "#" after any import | | | warn Readout with "Delete it" | | "The file's title block was imported as a probe named '# Flinch Example Probes' (a known import quirk). Delete it?" |
-| Artefact deleting / deleted / blocked | "Delete it" | | | spinner; cleared; or inline `detail` "Probe has 2 run(s) — delete those first" rendered with the dash replaced by a colon in the UI copy ("Probe has 2 runs: delete those first.") | | (none) |
+| Artefact deleting / deleted / blocked | "Delete it" | | | spinner; cleared; or the server `detail` (app.py:273, "Probe has N run(s)" followed by a dash and "delete those first") rendered in UI copy with a colon instead of the dash: "Probe has 2 runs: delete those first." | | (none) |
 
 ## 4. Numbers on this screen
 | Number | Formula | Inputs shown beside it | Component |
@@ -177,7 +177,7 @@ The panel keeps its width (512 px). The Add tab's Name and Domain fields stack o
 |---|---|---|---|
 | `fixed_set` (proposed, shared with `dialog-new-session.md`) | "A fixed set does not grow when probes are added later." | the intro's second sentence when the opener session has `probe_ids` | db.py:686-692; app.py:257-263 |
 | `import_skips` (proposed new id) | "Names already in the library are skipped." | the format line and the zero-loaded result | db.py:1035-1037 |
-| `narrative_plain` (proposed new id) | "In the Probe workbench a narrative probe is sent as a plain probe; the opening and target are used by Context studies." | the narrative note | runner.py:115-124 (send_probe sends `prompt_text` only); the narrative fields are read by the sequence runner |
+| `narrative_plain` (proposed new id) | "In the Probe workbench a narrative probe is sent as a plain probe; the opening and target are used by Context studies." | the narrative note | runner.py:116-130 (send_probe sends `prompt_text` only); the narrative fields are read by the sequence runner |
 | `classifier`, `rate_n`, `held_once`, `product_filter`, `coach_conf` | not in this dialog | | |
 
 ## 6. Terms (rule 4)
@@ -238,7 +238,7 @@ Placement audit: all four anchor beside their targets at 1280 and 1024 (the pane
 12. Pressing Escape on the Import tab closes the dialog and returns focus to the "⋯" menu trigger that opened it; pressing Escape while a row shows "Importing…" does nothing.
 13. With `GET /api/probes/files` returning `{"files":[]}`, the Import tab shows an EmptyState ending in "." with an "Add a probe" button that switches to the Add tab.
 14. At 1024×700 with the narrative block open, the overlay scrolls and "Add probe" is reachable by Tab; no horizontal scrollbar appears.
-15. No visible string contains U+2014; the server's "— delete those first" detail is rendered as "Probe has <n> runs: delete those first."
+15. No visible string contains U+2014; the server's "delete those first" detail (app.py:273) is rendered as "Probe has <n> runs: delete those first."
 
 ## 12. Open questions for Brad
 1. **Importing reads the server's folder only.** There is no upload route; `POST /api/probes/import-file` takes a filename inside `PROBES_DIR` (app.py:316-332). In the desktop build that folder sits inside the installed wheel, so "drop a file there" is awkward. Add `POST /api/probes/import-upload` (multipart) in this release, or document the folder?

@@ -5,7 +5,7 @@
 - Purpose (one sentence, what the researcher does here): picks the session to work in, sees at a glance what each one has produced, starts a new one, and deletes or exports one.
 - Arrives from: the Probe nav item, the Home Probe card, "All sessions" in the header SessionSwitcher, the back link in the Probe workbench header, `#/probe` typed directly. Leaves to: `#/probe/:s` (row click or "Open"), the New session dialog (then `#/probe/:s` on create), `#/settings#keys` (key chip or the no-key Readout link), `#/library/probes` (empty-library link). Back: header nav or the browser back button.
 - Components used (names from `../03-components.md`): Header, SessionSwitcher, KeyStatusChip, PrimaryNav, HelpMenu, Panel, Readout, Input (search), Chip (provider filter), Table, OutcomeBadge, Rate, Caveat, Term, Button, Menu (row actions), Dialog (delete with typed name), Toast, EmptyState, FirstTimeTip.
-- Baseline surfaces replaced (from `../00-content-inventory.md`): §1 Sidebar session `<select>`, "+ New Session" and "✕" (the select becomes the header SessionSwitcher; the list, create and delete live here); the session rows of §22 Dashboard › Overview (their JSON / CSV buttons, which exported the wrong session, baseline summary); the "Compare … — model" auto-created sessions are not listed here (they are Models studies, IA §4).
+- Baseline surfaces replaced (from `../00-content-inventory.md`): §1 Sidebar session `<select>`, "+ New Session" and "✕" (the select becomes the header SessionSwitcher; the list, create and delete live here); the session rows of §22 Dashboard › Overview (their JSON / CSV buttons, which exported the wrong session, baseline summary); the auto-created comparison sessions (named "Compare" plus the model name, app.py:1710-1720) are not listed here (they are Models studies, IA §4).
 
 All visible strings in this spec are drafts (draft; brad-voice pass). Probe names are from `flinch/probes/example-probes.md` only.
 
@@ -142,7 +142,7 @@ As `home.md` R0. The SessionSwitcher reads "No session" on this screen unless on
 | `first_label` (proposed new id) | "Counts here are by the first label, before any pushback." | every outcome cell (inline Info) and once under the table | db.py:2651-2654 count `initial_classification` only |
 | `classifier` | "The label is a keyword scan plus a judge model's guess. You can change it." | the line under the table, joined to `first_label`; the Rate's "What this is made of" details | classifier.py:48-61 |
 | `rate_n` | "A rate from N runs is a rate from N runs." | the Rate Info hover in each outcome cell | tokens §6 |
-| `product_filter` | "A refusal can come from a product filter, not the model." | the Rate's details block | runner.py:124-131 (no filter detection) |
+| `product_filter` | "A refusal can come from a product filter, not the model." | the Rate's details block | runner.py:130 (no filter detection) |
 | `held_once`, `coach_conf` | not on this screen | | |
 
 ## 6. Terms (rule 4)
@@ -152,7 +152,7 @@ As `home.md` R0. The SessionSwitcher reads "No session" on this screen unless on
 | target model | column header, Term line | "the model the probes are sent to; chosen per session" (db.py:34; runner.py:32-70) |
 | system prompt | Term line, row Chip | "text the target model receives before the probe; optional" (db.py:38) |
 | coach profile | Term line, row menu header | "the set of pushback moves and examples the coach draws on; 'standard' by default" (db.py:76-83; seed.py:127-130) |
-| coach backend | row menu header | "which provider's model writes the coach's suggestions" (runner.py:86-112) |
+| coach backend | row menu header | "which provider's model writes the coach's suggestions" (runner.py:86-114) |
 | probe set | Term line, Probes column | "the probes this session can send: all of them, or the subset chosen when it was created" (db.py:686-692) |
 | run | Runs column | "one probe sent once: the reply, its label, any pushback and the reply to that" (db.py:44-61) |
 | first label | outcome cell | "the label on the first reply, before any pushback" (db.py:2651) |
@@ -211,4 +211,4 @@ As `home.md` R0. The SessionSwitcher reads "No session" on this screen unless on
 ## 12. Open questions for Brad
 1. "Last activity" is not in `GET /api/dashboard/sessions` (db.py:2646-2661 returns `created_at` only). The column is Created for now; a `last_run_at` (max `runs.created_at`) in that query would let the list sort by recent use. Add it in this release?
 2. The outcome counts in the summary query are by `initial_classification` (db.py:2651-2654). The workbench history strip uses `outcome_classifications` from `GET /api/sessions/{id}/stats` (final if present, else initial, db.py:1620). Two screens, two tallies, each labelled. Prefer one tally everywhere (needs a query change), or keep both with the `first_label` caveat?
-3. The auto-created "Compare … — model" sessions are excluded here and surface under Studies › Models (IA §4). They are still real sessions with runs; should the SessionSwitcher menu list them too, or hide them the same way?
+3. The auto-created comparison sessions (named "Compare" plus the model name, app.py:1710-1720) are excluded here and surface under Studies › Models (IA §4). They are still real sessions with runs; should the SessionSwitcher menu list them too, or hide them the same way?

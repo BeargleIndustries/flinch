@@ -119,7 +119,7 @@ R1 setup card: the provider rows keep one line each; the key input narrows to 22
 | "Do this later" | none | n/a | text button; collapses the card to the status strip for this browser (localStorage `flinch:setup-dismissed`); the card returns on the next launch while 0 keys are set | Button text |
 | Status strip: keys | `GET /api/settings/keys` | `[].is_set, label` | "● 2 of 5 keys set · Anthropic, OpenAI" (labels of the set ones, provider part before the parenthesis) | Rate (md, what "keys set", caveat none) + text |
 | Status strip: last session | `GET /api/dashboard/sessions` | `[0].name, target_model, run_count, created_at` | "Last session: {name} · {target_model} · {run_count} runs" (summary is ordered `created_at` desc, db.py:2659); "No sessions yet" when empty | text + Button "Open" (secondary sm) |
-| Status strip: no Anthropic key but another key set | `GET /api/settings/keys` | `is_set` per provider | warn Readout: "No Anthropic key: Claude targets cannot be sent, and the judge model will be {provider}'s default." (llm.py:143-184 picks the first available of Anthropic, OpenAI, Google, then Ollama) | Readout tone `warn` |
+| Status strip: no Anthropic key but another key set | `GET /api/settings/keys` | `is_set` per provider | warn Readout: "No Anthropic key: Claude targets cannot be sent, and the judge model will be {provider}'s default." (llm.py:145-184 picks the first available of Anthropic, OpenAI, Google, then Ollama) | Readout tone `warn` |
 
 - Actions:
 
@@ -139,14 +139,14 @@ R1 setup card: the provider rows keep one line each; the key input narrows to 22
 
 | Element | Source route | JSON field | Formatting rule | Component |
 |---|---|---|---|---|
-| Batch card | client store `batch` fed by the open SSE from `POST /api/sessions/{id}/batch` (app.py:540-569; runner.py:240-285). There is no `GET` route for batch runs, so a batch exists on Home only while this page's app holds the SSE connection | `progress.completed, total, probe_name, classification` (runner.py:244-253); `error.probe_id, error` (runner.py:256-265); `complete.total, completed, failed` (runner.py:277-284) | title "run all in {session name}"; "2 of 3 done" (Rate count-first); outcome tally counted from `progress.classification`; "now: {probe_name}"; failed "1 failed" in amber from `error` events; elapsed from the client `startedAt` | ProgressCard |
+| Batch card | client store `batch` fed by the open SSE from `POST /api/sessions/{id}/batch` (app.py:540-569; runner.py:222-285). There is no `GET` route for batch runs, so a batch exists on Home only while this page's app holds the SSE connection | `progress.completed, total, probe_name, classification` (runner.py:238-250); `error.probe_id, error` (runner.py:251-263); `complete.total, completed, failed` (runner.py:278-285) | title "run all in {session name}"; "2 of 3 done" (Rate count-first); outcome tally counted from `progress.classification`; "now: {probe_name}"; failed "1 failed" in amber from `error` events; elapsed from the client `startedAt` | ProgressCard |
 | Experiment card | `GET /api/experiments` (app.py:2788-2791; db.py:3247-3262) filtered `status === 'running'`, then `GET /api/experiments/{id}` (app.py:2794-2802) `progress` | `progress.total, completed, failed, pending` (db.py:3456-3503) | "18 of 60 done"; polled every 5 s while on Home (the `/progress` route is JSON, baseline #18) | ProgressCard |
 
 - Actions:
 
 | Control | Calls | Then (navigation / state change / toast) |
 |---|---|---|
-| Cancel (batch) | `POST /api/batch/{batch_id}/cancel` (app.py:700-703) and close the SSE `EventSource` | Dialog "Stop running all? 2 of 3 are done and stay recorded." when `done.count > 0`; card shows "CANCELLED"; note: the runner loop does not read the cancelled status (runner.py:240-275), so closing the connection is what stops the client, and the server may finish the probe in flight (§12) |
+| Cancel (batch) | `POST /api/batch/{batch_id}/cancel` (app.py:700-703) and close the SSE `EventSource` | Dialog "Stop running all? 2 of 3 are done and stay recorded." when `done.count > 0`; card shows "CANCELLED"; note: the runner loop does not read the cancelled status (runner.py:233-270), so closing the connection is what stops the client, and the server may finish the probe in flight (§12) |
 | Pause / Resume (experiment) | `POST /api/experiments/{id}/pause` / `/resume` (app.py:2920-2935) | card eyebrow "PAUSED" / "RUNNING" |
 | Card title | none | `#/probe/:s` (batch) or `#/experiments/:id` (experiment) |
 
@@ -225,7 +225,7 @@ R1 setup card: the provider rows keep one line each; the key input narrows to 22
 | "3 in the library now" | `GET /api/probes`.length | the Library card repeats it; Library › Probes lists them | text in the setup list |
 | "{run_count} runs" per session | `run_count` (db.py:2650) | the four outcome counts on the same row | Table cell |
 | "7 of 12 refused (58%)" | `refused_count` of `run_count` (db.py:2651) | "by first label" and the `first_label` caveat on hover | Rate |
-| "2 of 3 done" (batch) | `progress.completed` of `progress.total` (runner.py:251-252) | outcome tally and "now: {probe_name}" | ProgressCard / Rate |
+| "2 of 3 done" (batch) | `progress.completed` of `progress.total` (runner.py:248-249) | outcome tally and "now: {probe_name}" | ProgressCard / Rate |
 | "18 of 60 done" (experiment) | `progress.completed` of `progress.total` (db.py:3456-3503) | failed and pending counts on the card | ProgressCard |
 | "2 of 3 probes agree (67%)" | round(`agreement_rate` × `total_probes`) of `total_probes` (app.py:1779, 1800) | "probes" and the word "agree"; §12 asks the API for the aligned count so the rounding goes away | Rate |
 | "{total_runs} runs recorded · {total_annotations} annotated" | `GET /api/dashboard/stats` | both counts in one phrase | Card meta |
@@ -236,10 +236,10 @@ R1 setup card: the provider rows keep one line each; the key input narrows to 22
 | ID | Phrase (draft; brad-voice pass) | Beside | Source in code |
 |---|---|---|---|
 | `classifier` | "The label is a keyword scan plus a judge model's guess. You can change it." | the batch ProgressCard outcome tally, the Results card meta | classifier.py:48-61 (keyword first, judge when keyword confidence ≤ 0.8) |
-| `keyword_only` (proposed new id) | "With no judge model available, the label is the keyword scan alone." | the "Labels" line of the setup card; the batch tally when 0 keys and no Ollama | classifier.py:57-59; app.py:101-108; llm.py:143-184 |
+| `keyword_only` (proposed new id) | "With no judge model available, the label is the keyword scan alone." | the "Labels" line of the setup card; the batch tally when 0 keys and no Ollama | classifier.py:57-59; app.py:101-108; llm.py:145-184 |
 | `first_label` (proposed new id) | "Counts here are by the first label, before any pushback." | every session row's Rate in R4 and the status strip | db.py:2651-2654 sums `initial_classification` only |
 | `rate_n` | "A rate from N runs is a rate from N runs." | R4 session Rate on hover of the Info icon | tokens §6 |
-| `product_filter` | "A refusal can come from a product filter, not the model." | the refused count in R4 and the batch tally, in the Rate's "What this is made of" details | runner.py:124-131 (the target reply is whatever the provider returns; no filter detection exists) |
+| `product_filter` | "A refusal can come from a product filter, not the model." | the refused count in R4 and the batch tally, in the Rate's "What this is made of" details | runner.py:130 (the target reply is whatever the provider returns; no filter detection exists) |
 | `coach_conf` | not on Home | | |
 
 ## 6. Terms (rule 4)
@@ -325,6 +325,6 @@ Placement audit: all four anchor beside their target at 1280×800 and 1024×700 
 ## 12. Open questions for Brad
 1. The Models study row shows "2 of 3 probes agree" by rounding `agreement_rate × total_probes`, because `GET /api/comparisons` carries the rate but not the aligned count (app.py:1779, 1800; db.py:2493-2503). A one-line API addition (`aligned_count`) removes the rounding. Worth doing in this release, or accept the rounding with its caveat?
 2. A batch has no `GET` route, so "Running now" can show a run all only while this page's app holds the SSE. If you want Home to show a batch started in another tab, the server needs `GET /api/batch/{id}` (the `batch_runs` table already has the fields, db.py:93-102).
-3. Cancel: `POST /api/batch/{id}/cancel` marks the row cancelled but `run_batch` never reads it (runner.py:240-275). The spec closes the EventSource, which stops the client; the probe in flight finishes on the server and is recorded. Accept, or add the status check to the loop?
+3. Cancel: `POST /api/batch/{id}/cancel` marks the row cancelled but `run_batch` never reads it (runner.py:233-270). The spec closes the EventSource, which stops the client; the probe in flight finishes on the server and is recorded. Accept, or add the status check to the loop?
 4. Two new caveat ids are proposed (`keyword_only`, `first_label`), extending the seven in `03-components.md` §5. Confirm the wording or fold them into `classifier`.
 5. "Studies" count on the card adds comparisons and sequences; stat runs are only listable per session (`GET /api/sessions/{id}/stat-runs`, app.py:2589). Should the count stay partial with a note, or should the Studies list get one aggregate route first?

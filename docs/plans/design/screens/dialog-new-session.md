@@ -92,8 +92,8 @@ The panel is the same width (512 px) and taller than the viewport once the picke
 
 | Element | Source route | JSON field | Formatting rule | Component |
 |---|---|---|---|---|
-| Backend | `GET /api/settings/coach-default` (app.py:2416-2419) | `backend`, `model` | options "Claude (Anthropic)" = `anthropic`, "OpenAI" = `openai`, "Google" = `google`, "xAI" = `xai`, "Together AI" = `together`, "Local (Ollama)" = `local` (the values the runner reads, runner.py:95-112; llm.py:187-203); prefilled from `backend` | Select |
-| Backend hint | `GET /api/settings/keys` | `is_set` of the matching provider (`together` maps to the keys entry `meta`, app.py:2206 and 3320-3327) | "Key set: the coach drafts pushbacks with {provider}'s default model." or warn "No key for {provider}: the coach will not draft pushbacks in this session. You can still write your own." (runner.py:112 raises; runner.py:153-154 swallows it) | text / Readout warn |
+| Backend | `GET /api/settings/coach-default` (app.py:2416-2419) | `backend`, `model` | options "Claude (Anthropic)" = `anthropic`, "OpenAI" = `openai`, "Google" = `google`, "xAI" = `xai`, "Together AI" = `together`, "Local (Ollama)" = `local` (the values the runner reads, runner.py:95-114; llm.py:187-203); prefilled from `backend` | Select |
+| Backend hint | `GET /api/settings/keys` | `is_set` of the matching provider (`together` maps to the keys entry `meta`, app.py:2206 and 3320-3327) | "Key set: the coach drafts pushbacks with {provider}'s default model." or warn "No key for {provider}: the coach will not draft pushbacks in this session. You can still write your own." (runner.py:114 raises; runner.py:157 swallows it) | text / Readout warn |
 | Local model | `GET /api/ollama/status` | `available`, `models[]`, `base_url` | shown only for `local`; Select of model names; prefilled from `coach-default.model`; when `available` is false the Select is disabled with the reason "Ollama is not running at {base_url}." and the warn Readout "A local coach needs Ollama running. Start it, or pick another backend." | Select |
 | Local note | static | n/a | "Local models draft slower and less reliably than hosted ones; the moves are the same." (replaces today's amber "experimental" block) | InsetBox row |
 | Profile | `GET /api/coach-profiles` (app.py:450-452; db.py:964-975) | `[].name, description, moves[]` | option per profile; default `standard`; under it "{description} · {moves.length} moves" (seed.py:127-130) with `Term` on "moves"; when the list is empty (seed not run) a single disabled option "standard" with the hint "The default profile is created on first run." | Select + text |
@@ -192,9 +192,9 @@ The panel is the same width (512 px) and taller than the viewport once the picke
 | ID | Phrase (draft; brad-voice pass) | Beside | Source in code |
 |---|---|---|---|
 | `classifier` | "The label is a keyword scan plus a judge model's guess. You can change it." | the model hint line, shortened to "Replies are labelled by a keyword scan plus a judge model." with the full phrase on the Info hover | classifier.py:48-61 |
-| `keyword_only` (proposed) | "With no judge model available, the label is the keyword scan alone." | the no-keys Readout | classifier.py:57-59; llm.py:143-184 |
+| `keyword_only` (proposed) | "With no judge model available, the label is the keyword scan alone." | the no-keys Readout | classifier.py:57-59; llm.py:145-184 |
 | `fixed_set` (proposed new id) | "A fixed set does not grow when probes are added later." | the picker | app.py:257-263; db.py:686-692 (the subset is read from `probe_ids` at every list call; no route updates it) |
-| `no_coach_key` (proposed new id) | "No key for {provider}: the coach will not draft pushbacks in this session. You can still write your own." | the backend hint | runner.py:112, 153-154 |
+| `no_coach_key` (proposed new id) | "No key for {provider}: the coach will not draft pushbacks in this session. You can still write your own." | the backend hint | runner.py:114, 153-154 |
 | `rate_n`, `held_once`, `product_filter`, `coach_conf` | not in this dialog | | |
 
 ## 6. Terms (rule 4)
@@ -204,7 +204,7 @@ The panel is the same width (512 px) and taller than the viewport once the picke
 | target model | intro, R2 label | "the model the probes are sent to; chosen once per session" (db.py:34; runner.py:32-70) |
 | system prompt | intro, R2 label | "text the target model receives before every probe" (db.py:38; runner.py:32-40) |
 | coach | R3 eyebrow | "a model that reads a refusal and drafts a pushback with a move; it suggests, you decide" (coach.py:49-78) |
-| coach backend | R3 | "which provider's model writes the coach's suggestions; separate from the target" (runner.py:86-112) |
+| coach backend | R3 | "which provider's model writes the coach's suggestions; separate from the target" (runner.py:86-114) |
 | coach profile | intro, R3 | "the moves and examples the coach draws on" (db.py:76-83) |
 | move | R3 profile line | "the kind of question a pushback asks; seven kinds" (coach.py:5-47) |
 | probe set | intro, R4 | "the probes this session can send: all of them, or a fixed subset" (db.py:686-692) |

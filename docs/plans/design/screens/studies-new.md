@@ -314,7 +314,7 @@ Actions:
 | `new.whittle` | Whittle checkbox (`data-tip="new-whittle"`) | Whittling runs the sequence again with one fewer warm-up turn each time, until the refusal comes back. The count where it comes back is the threshold. | first visit to the Context form |
 
 ## 8. Keyboard and focus
-- Shortcuts: `Escape` in a form returns to the picker (after a Dialog "Discard this form?" when any field changed); `Ctrl+Enter` in a form submits when Start is enabled; `1`–`5` on the picker focus the nth card; `/` focuses the probe search where present.
+- Shortcuts: `Escape` in a form returns to the picker (after a Dialog "Discard this form?" when any field changed); `Ctrl+Enter` in a form submits when Start is enabled; `1` to `5` on the picker focus the nth card; `/` focuses the probe search where present.
 - Focus order: header → breadcrumb links → (picker) cards in reading order → footer caveat; (form) Back → fields top to bottom in the order drawn → THIS WILL MAKE (not focusable) → Cancel → Start. Chip strips use roving focus with arrow keys. The error line receives focus when it appears.
 - Live regions: R2 Readout polite; the THIS WILL MAKE Stat has `aria-live="polite"` and announces only when the user pauses 1 s after a change; Start loading sets `aria-busy`; the error line is `role="alert"`.
 

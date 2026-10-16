@@ -62,6 +62,13 @@ Decisions 1.1–1.3 (stack, updater, schema) stand, except that the benchmark se
 |---|---|---|
 | 4.1 | Which of `design/05-backend-gaps.md` rows 18–27 (B bucket: new data or routes the v0.8.0 feature set never had) go into the build plan? | **Rows 18 and 19 only**: store per-turn latency and token counts (additive columns on `run_turns`) and the label source (keyword scan / judge / person, additive `label_source` column). Rows 20–27 stay out; the screens use the client-side fallbacks already specified. |
 
+## Round 5 (2026-10-16): SWE-bench and scope additions (from the spec review)
+
+| # | Question | Brad's answer |
+|---|---|---|
+| 5.1 | SWE-bench "to standard": the Inspect recipe is reproducible but not leaderboard-comparable; add the mini-SWE-agent scaffold, accept the Inspect recipe with caveats, or defer? | **Defer SWE-bench to a follow-up release.** This release ships GPQA Diamond and XSTest; the runner is built so SWE-bench plugs in later. Docker Desktop, WSL2 and the image prerequisites leave this release. Decision 2.4 narrows accordingly. |
+| 5.2 | Eight scope additions the Critic found in the specs with no decision behind them (judge per condition, human label overrides on benchmark samples, "open file location", planned-suite cards, price-table refresh, rename stub, move selector on manual pushback, global 1–6 keys) | **Remove all eight.** Judge fixed to each suite's published recipe. |
+
 ## PICKUP POINT
 
 Rewritten every time a session is cut.

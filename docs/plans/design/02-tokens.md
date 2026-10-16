@@ -42,8 +42,9 @@ export default {
           50:  '#eef2ff', 100: '#e0e7ff', 200: '#c7d2fe', 300: '#a5b4fc', 400: '#818cf8',
           500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81',
           950: '#1e1b4b',
-          DEFAULT: '#6366f1', // indigo-500  primary fill
-          hover:   '#818cf8', // indigo-400  primary hover, focus outline, logo, pointer
+          DEFAULT: '#4f46e5', // indigo-600  primary fill: buttons, Segmented active (§8.1: white on indigo-500 is 4.47, under AA)
+          hover:   '#6366f1', // indigo-500  primary hover (momentary; §8.1)
+          ring:    '#818cf8', // indigo-400  focus outline, logo, pointer, tab underline
           text:    '#a5b4fc', // indigo-300  active tab text, eyebrow accent, readout answers
         },
         // Outcomes: the four classification labels (models.py Classification)
@@ -77,8 +78,14 @@ export default {
       spacing: {
         header: '2.75rem', // 44 px, the h-11 header (vocab §1)
         rail:   '2.75rem', // 44 px, railed sidebar width (vocab §1 RAIL)
-        pane:   '300px',   // left pane at 1280 (IA §5)
+        pane:   '300px',   // left pane at 1280 (IA §5; 06-architecture §11 .pane-left)
         'pane-narrow': '280px', // left pane at 1024 (IA §5)
+        gutter: '1rem',    // 16 px page gutter at 1024 (06-architecture §11 .page px-4)
+        'gutter-wide': '1.5rem', // 24 px page gutter at ≥ 1280 (.page xl:px-6)
+        grid:   '1rem',    // 16 px card-grid gap and panel gap (.page-grid, .page-stack, .page-cols gap-4)
+      },
+      maxWidth: {
+        page: '1200px',    // content screens (06-architecture §11 .page max-w-[1200px])
       },
       zIndex: { 45: '45', 49: '49', 55: '55', 59: '59', 60: '60', 70: '70' }, // vocab §1 table
       boxShadow: {
@@ -102,7 +109,8 @@ Notes on the block:
 
 - `outcome.*` and `state.*` are nested so `bg-outcome-refused-tint text-outcome-refused-text border-outcome-refused-edge` reads as one badge recipe. The same hex values are reachable as `bg-red-950 text-red-400 border-red-800`; code may use either, docs cite the stock class.
 - `surface.sunken` equals `surface.page` on purpose (Pry puts inputs on `bg-zinc-950` inside `bg-zinc-900` panels, `vocab §5`). Naming it stops someone "fixing" it.
-- The accent `DEFAULT` is indigo-500, Pry's header Run fill. Dialog primaries use indigo-600; both are listed in §3 of `03-components.md`.
+- The accent `DEFAULT` is indigo-600, Pry's dialog-primary fill, not its header Run fill (indigo-500): white on indigo-500 is 4.47 : 1 and fails this file's own rule (§8.1). Every filled primary in Flinch, the Button primary variant and the Segmented active option (`03-components.md` §15, §16), is indigo-600 with an indigo-500 hover. indigo-500 stays reachable as `accent-500` for non-text fills (bar fills, the drag divider, selected-chip tint).
+- Page container and grid: `max-w-page` (1200 px), `px-gutter` / `xl:px-gutter-wide` (16 / 24 px), `gap-grid` (16 px) are the named forms of the numbers in `06-architecture.md` §11; the `.page`, `.page-grid`, `.page-stack`, `.page-cols` and `.pane-left` classes there are the only place they are applied (§3 below lists them).
 - No `--color-blue`, `--color-purple`, `--color-teal` from today's `index.html`: nothing in the IA needs them. The DLA fuchsia badge (`vocab §4`) has no Flinch use either.
 - Opacity variants (`bg-indigo-950/30`, `border-zinc-700/60`, `bg-zinc-900/50`) are written as stock Tailwind opacity modifiers, not tokens; §8 lists the composite results for contrast.
 
@@ -167,6 +175,19 @@ Line height: `leading-relaxed` (1.625) on readouts, tips, cards, caveats; `leadi
 
 **Layout constants** (vocab §1, IA §2, §5): header 44 px; left pane 300 px at ≥ 1280, 280 px at 1024 (`min-width` on the pane, ratio from `ResizableSplit` otherwise); divider 6 px (`w-1.5`); `MIN_WORKSPACE = 640`; drawer `max-w-[440px]`; dialog `max-w-lg` (normal) or `max-w-4xl` (wide); tip 320 px (min 220); tour card 400 px; Term tooltip max 256 px; popover `w-72`; menu `w-56`.
 
+**Page container and grid** (`06-architecture.md` §11 defines the classes in `src/app.css`; this table names the tokens they use; every content-screen wireframe cites one class from it):
+
+| Token | Value | Class in 06 §11 | Where |
+|---|---|---|---|
+| `page-max` (`max-w-page`) | 1200 px | `.page` | every content screen: Home, lists, Settings, Library, Results, study and experiment screens |
+| `gutter` / `gutter-wide` | 16 px at 1024, 24 px at ≥ 1280 (`px-4 xl:px-6`) | `.page` | same |
+| `grid-gap` (`gap-grid`) | 16 px (`gap-4`) | `.page-grid` (2 columns at 1024, 3 at ≥ 1280) | card grids: Home questions, Studies › New picker, Benchmarks catalog |
+| `panel-gap` | 16 px (`gap-4`) | `.page-stack`, `.page-cols` (main + side `2fr/1fr` at ≥ 1280, stacked at 1024) | panels one under another; main-plus-side layouts |
+| `pane` / `pane-narrow` | 300 px at ≥ 1280, 280 px at 1024 | `.pane-left` | two-pane screens (Probe workbench, Experiment › Responses, Benchmark › Results): full bleed under the header, no `.page` |
+| page padding-y | 20 px (`py-5`) | `.page` | top and bottom of every content screen |
+
+Vertical rhythm inside a `.page` is `gap-4` between panels and `mt-8` between Sections (above). Nothing else positions content.
+
 **Borders**: always 1 px. `border-zinc-800` by default; `border-zinc-700` on inputs, modals, menus, popovers and secondary buttons; `border-zinc-700/60` on the elevated card; accent borders (`border-indigo-700/60` tip, `border-indigo-900/50` readout, `border-indigo-800/70` update card) only on guidance surfaces. Left-edge 2 px rules (`border-l-2 border-indigo-500/50`) mark a note, not a border.
 
 **Shadows**: only on floating layers. `shadow-xl` modals, popovers, tips, Term; `shadow-2xl` drawer, tour card; `shadow-lg` menus (alt) and tooltips. Nothing in the page flow casts a shadow. One glow: the Pointer ring (`shadow-glow`).
@@ -177,7 +198,7 @@ Line height: `leading-relaxed` (1.625) on readouts, tips, cards, caveats; `leadi
 
 | State | Rule | Classes | Cite |
 |---|---|---|---|
-| Hover, filled button | one step lighter | `hover:bg-indigo-400` (500 base) / `hover:bg-indigo-500` (600 base) | vocab §5 |
+| Hover, filled button | one step lighter | `hover:bg-indigo-500` (indigo-600 base, §8.1; Pry's `hover:bg-indigo-400` on a 500 base is not used) | vocab §5 |
 | Hover, secondary | fill one step lighter, text one step lighter | `hover:bg-zinc-700 hover:text-zinc-200` | vocab §5 |
 | Hover, ghost | raised fill appears | `hover:bg-zinc-800 hover:text-zinc-100` | vocab §5 |
 | Hover, card | accent border at 40 % | `hover:border-indigo-500/40` | vocab §2 |
@@ -191,7 +212,7 @@ Line height: `leading-relaxed` (1.625) on readouts, tips, cards, caveats; `leadi
 | Selected, tab | accent underline and text | `border-b-2 border-indigo-400 text-indigo-300` | vocab §4 |
 | Selected, nav item (header) | same as tab | `border-b-2 border-indigo-400 text-indigo-300` | vocab §1 narrow tabs |
 | Selected, toggle | tinted fill | `bg-indigo-950/60 text-indigo-300 hover:bg-indigo-900/60` | vocab §4 |
-| Selected, segmented | solid fill | `bg-indigo-500 text-white` | vocab §4 |
+| Selected, segmented | solid fill | `bg-indigo-600 text-white` (Pry's indigo-500 is 4.47 : 1 with white and fails §8.1; `03-components.md` §16) | vocab §4 |
 | Selected, chip | ringed tint | `border-indigo-500 bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50` | vocab §4 |
 | Selected, list row | raised fill | `bg-zinc-800/80` | vocab §4 |
 | Pressed (aria-pressed) | tint with accent border | `border-indigo-600 bg-indigo-950/40 text-indigo-300` | vocab §4 |
@@ -262,6 +283,7 @@ Tested like code (pre-read §2.8). `lib/copy/copy-lint.test.ts` runs over every 
 10. **Draft strings** in this spec and the component spec are marked "(draft; brad-voice pass)"; the brad-voice pass happens in main context before they land in `lib/copy`.
 11. **Spelling**: "Hugging Face" two words; "API key"; "system prompt"; "pushback" one word; "ad hoc" two words in prose, "Ad-hoc probe" as the list item name.
 12. **No marketing**: no "powerful", "seamless", "effortless", "insights". A heading says what the screen is for.
+13. **Shortcuts have one owner.** The keyboard shortcut table lives in `screens/overlays-help-shortcuts-toasts.md` R2 and nowhere else; `lib/copy/shortcuts.ts` is generated from it, and every other spec, this file included, cites that table and defines no key of its own (fix rulebook §6: global `?`, `/`, `Esc`, `Alt+1…n`; workbench-only `s p w k a e n ↑ ↓ Enter`; no global digit keys, no `r`).
 
 ## 8. Contrast check
 
@@ -279,7 +301,7 @@ Surfaces: page `#09090b` (zinc-950), panel `#18181b` (zinc-900), raised `#27272a
 | text.faint (zinc-600) | #52525b | 2.57 | 2.29 | 1.93 | fail |
 | text.faintest (zinc-700) | #3f3f46 | 1.91 | 1.70 | 1.43 | fail |
 | accent.text (indigo-300) | #a5b4fc | 9.98 | 8.89 | 7.47 | AA |
-| accent.hover (indigo-400) | #818cf8 | 6.67 | 5.94 | 4.99 | AA |
+| accent.ring (indigo-400) | #818cf8 | 6.67 | 5.94 | 4.99 | AA |
 | outcome.refused.text (red-400) | #f87171 | 7.19 | 6.40 | 5.38 | AA |
 | outcome.collapsed.text (amber-400) | #fbbf24 | 11.92 | 10.61 | 8.92 | AA |
 | outcome.negotiated.text (orange-400) | #fb923c | 8.79 | 7.83 | 6.58 | AA |
@@ -295,9 +317,9 @@ Filled controls and composites:
 
 | Pair | Ratio | Verdict |
 |---|---|---|
-| white on indigo-500 (Pry header primary) | 4.47 | large only; a hair under 4.5, so Flinch uses indigo-600 for every button label (all are below 18.66 px) |
-| white on indigo-600 (dialog primary) | 6.29 | AA |
-| white on indigo-400 (hover of indigo-500) | 2.98 | fail; hover state only, momentary, and the button keeps its label at rest |
+| white on indigo-600 (accent DEFAULT: Button primary at rest, Segmented active) | 6.29 | AA |
+| white on indigo-500 (accent.hover: Button primary hover; Pry's header primary and Segmented active, which Flinch does not use) | 4.47 | large only; a hair under 4.5, so Flinch uses indigo-600 for every filled label at rest (all are below 18.66 px) and indigo-500 only as the momentary hover |
+| white on indigo-400 (Pry's hover of its indigo-500 primary) | 2.98 | fail; not used in Flinch (the hover is indigo-500 on an indigo-600 base) |
 | zinc-100 on zinc-700 (secondary hover) | 9.50 | AA |
 | indigo-300 on zinc-900 (active tab, readout answer) | 8.89 | AA |
 | zinc-300 on indigo-950/30 over zinc-950 (Readout body) | 12.73 | AA |
@@ -306,7 +328,7 @@ Filled controls and composites:
 
 Consequences, which `03-components.md` applies:
 
-1. **Primary buttons use `bg-indigo-600 hover:bg-indigo-500`** everywhere in Flinch, Pry's dialog variant, not its header variant (white on indigo-500 is 4.47, a hair under 4.5). The hover (indigo-500) is 4.47 and momentary, accepted.
+1. **Every filled accent control with a label uses `bg-indigo-600`**: Button primary (`hover:bg-indigo-500`) and the Segmented active option (`03-components.md` §15, §16), Pry's dialog variant, not its header variant (white on indigo-500 is 4.47, a hair under 4.5). The hover (indigo-500) is 4.47 and momentary, accepted. This is why `accent.DEFAULT` in §1 is indigo-600 and §4 lists no indigo-500 fill under a label.
 2. **zinc-500 is for labels that are repeated or redundant**: eyebrows above a heading, form labels above a field with a placeholder, hints beside a control that also has a `Term`. It never carries the only copy of a fact. Wherever today's UI used `--text-muted #777` for a value, the rebuild uses zinc-400.
 3. **zinc-600 and zinc-700 are decorative only**: scale ticks under a bar that also has a value, rank numbers beside a name, placeholder text in an input that has a visible label. The empty-state sentence, which Pry sets in zinc-600, is set in **zinc-500** in Flinch and is large enough (14 px) that 4.12 is accepted as the one deliberate exception, logged here.
 4. **Outcome colours are never the only cue**: every badge prints its word; every bar has its count. Collapsed (amber) and negotiated (orange) are 1.3 : 1 apart from each other, which is the reason the word is mandatory.

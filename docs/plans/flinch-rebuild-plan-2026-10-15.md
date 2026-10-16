@@ -2,10 +2,10 @@
 
 - Date: 2026-10-15
 - Status: **pending approval**
-- Iteration: 3. Revised from `architect-iter1`/`critic-iter1` and `architect-iter2`/`critic-iter2`; every finding is answered in §14.
+- Iteration: 4 (final improvements). Revised from the architect and critic reviews of iterations 1–3; every finding is answered in §14.
 - Plan branch: `flinch-rebuild-plan`. Build branch after approval: `flinch-rebuild`, cut from `master`. Each lane is a git worktree off it. The main session is the **integrator**: it merges lanes and is the only committer of `flinch/static/` (§7 "Integrator merge step").
 - Mode: ralplan consensus, SHORT.
-- Inputs: `docs/plans/flinch-rebuild-pre-read-2026-10-15.md` (§1 scope is binding), `docs/plans/flinch-rebuild-input-2026-10-15.md` (Rounds 0 and 1), `docs/plans/handoff-pry-parity-2026-10-15.md` (§2, §4, §5, §8), `docs/plans/pry-design-reference.md`, `docs/plans/evidence/flinch-rebuild-2026-10-15/index.md` (baseline; "problem N" below means its numbered list, 1-18), `.../api-routes.md`, `CLAUDE.md`, `pyproject.toml`, `src-tauri/tauri.conf.json`, `ui/splash.js`, `src-tauri/src/sidecar.rs`, `flinch/app.py`, `scripts/bundle-resources.py`, `scripts/verify-phase1.py`, `tests/test_experiment_pipeline.py`.
+- Inputs: `docs/plans/flinch-rebuild-pre-read-2026-10-15.md` (§1 scope is binding), `docs/plans/flinch-rebuild-input-2026-10-15.md` (Rounds 0 and 1), `docs/plans/handoff-pry-parity-2026-10-15.md` (§2, §4, §5, §8), `docs/plans/pry-design-reference.md`, `docs/plans/evidence/flinch-rebuild-2026-10-15/index.md` (baseline; "problem N" below means its numbered list, 1-19; 17 is reserved for T10), `.../api-routes.md`, `CLAUDE.md`, `pyproject.toml`, `src-tauri/tauri.conf.json`, `ui/splash.js`, `src-tauri/src/sidecar.rs`, `flinch/app.py`, `scripts/bundle-resources.py`, `scripts/verify-phase1.py`, `tests/test_experiment_pipeline.py`.
 - Decision record: input file Round 0 (scope) and Round 1: **1.1** SvelteKit 5 (runes) + Tailwind, static build, inside the existing Tauri shell, nothing shared with Pry's code; **1.2** updater ships as a separable final lane; **1.3** schema untouched, existing `flinch.db` opens unchanged, an existing DB is a gate fixture.
 
 ## 1. Requirements summary
@@ -169,12 +169,29 @@ One row per row of the baseline surface inventory. Rules: **1** numbers, **2** c
 | Regression Snapshots browser + diff (`render.js:3678`, `:3733`) | keep; the name is entered in a Dialog | `#/session/:id/snapshots` | 1, 2, 4 | Changed/unchanged counts; per probe improved/regressed/changed by the fixed rank refused > negotiated > collapsed > complied (app.py:880-925). Routes: `/api/sessions/{id}/snapshots`, `/api/snapshots/{id}`, `/diff` |
 | Experiments list (`experiment.js:174-246`) | keep | `#/experiments` | 4, 6 | `GET /api/experiments` |
 | New Experiment wizard (`experiment.js:247-439`) | keep. Problem 4 goes away: the wizard posts `CreateExperimentRequest` (models.py:250-257, `conditions[].label`, a non-empty `system_prompt` per models.py:215, `model_ids`), reads `{experiment, conditions}`, then adds prompts from the chosen probes via `POST .../prompts` (app.py:2837). The **repetitions input is dropped**: no backend code reads it (no `repetitions` in `flinch/*.py`; experiment.js:45, :410), and each cell runs once | `#/experiments/new` | 4, 6 | Review lists the chosen conditions, models and probes (no computed numbers). `POST .../estimate` needs a created experiment with prompts (app.py:2884-2898), so its fields appear on the Overview tab after Create |
-| Experiment dashboard (`experiment.js:440`) | merge into one Experiment screen. Problem 6 goes away: the screen reads `{experiment, conditions, progress}` (app.py:2794-2802) | `#/experiments/:id` Overview tab | 1, 2 (K16), 6 | Before Start: cells = prompts × conditions × models, the three factors and `estimated_cost_usd` from `POST /estimate`. Running: completed of total per condition ← `GET /progress`, a plain-JSON route (app.py:2944-2947; problem 18), polled every 2 s while status is `running`. `POST /start` and `/resume` are SSE streams that drive the run (app.py:2900-2940), so `sse.ts` keeps the stream open while the screen is open. Routes: `/start`, `/pause`, `/resume`, `/resume-conditions`, `/estimate`, `/progress` |
+| Experiment dashboard (`experiment.js:440`) | merge into one Experiment screen. Problem 6 goes away: the screen reads `{experiment, conditions, progress}` (app.py:2794-2802) | `#/experiments/:id` Overview tab | 1, 2 (K16), 6 | Before Start: cells = prompts × conditions × models, the three factors and `estimated_cost_usd` from `POST /estimate`. Running: completed of total per condition ← `GET /progress`, a plain-JSON route (app.py:2944-2947; problem 18), polled every 2 s while status is `running`. `POST /start` and `/resume` are SSE streams that drive the run (app.py:2900-2940). The screen opens the stream through `src/lib/api/experiment-runs.ts`, a module-level store that never closes it when a component is destroyed, so moving around inside Flinch keeps the run alive, as in v0.8.0 (experiment.js:94-105, :949). Closing or reloading Flinch stops it (K19). Routes: `/start`, `/pause`, `/resume`, `/resume-conditions`, `/estimate`, `/progress` |
 | Results / Statistical Analysis / Export (`experiment.js:551`, `:641`, `:736`) | merge as tabs. Problem 5 goes away: the screen calls `/responses` (app.py:3053) | `#/experiments/:id` Responses, Analysis, Export tabs | 1, 2, 4 | Win rate = wins ÷ rankings per condition (stats.py:108-197). Cohen's d + bootstrap 95% CI + Student t-test p + n1/n2 (stats.py:199-259). Mann-Whitney U, p, rank-biserial, n1/n2 (stats.py:409-458). Wilcoxon W, p, pairs, median difference (stats.py:460-538). Mann-Whitney p raw / Bonferroni / FDR across k tests (stats.py:540-589, :731-735). Krippendorff's alpha with raters and items (stats.py:261-323). Power with n = completed ÷ 3 (stats.py:362-392, :710). Routes: `POST /analyze`, `GET /analysis`. Export: `/export` csv/jsonl (app.py:3101), `/prolific` + `/prolific/csv` (app.py:2983, :2995), `/preregistration` (app.py:3120), `/report` (app.py:3039), `/analysis/export` (app.py:3025) |
 | Condition Comparison (`render.js:1898-2185`) | merge into the Experiment screen | `#/experiments/:id` Conditions tab | 1, 2, 4 | "compliance rate" = (complied + negotiated) ÷ completed responses, with the counts (db.py:3800-3805). Metric mean, SD and n (db.py:3816-3826). **Per pair of conditions and per metric:** d with CI and n1/n2, U with Mann-Whitney p raw and FDR p, read from `effect_sizes`, `nonparametric` and `corrections` in `/condition-comparison`. No min/max across pairs. Routes: `GET /condition-comparison`, `POST` + `GET /metrics`, `POST /analyze`, `GET /condition-export`, `/responses?prompt_id=`, `/prompts` |
 | Turn detail modal (`api.js viewRun`) | merge | Turn list on the run screen | 4 | `/api/runs/{id}/turns` |
 
 Routes no reachable v0.8.0 surface called stay API-only; §11 step 4's coverage table lists them.
+
+Caveats per rebuilt screen (§5 has phrases and sources):
+- Run screen: K1, K1b, K3, K4, K5, K18.
+- History panel / session stats: K1, K2, K3, K18.
+- No-key notice: K1b.
+- `#/compare`: K1, K2, K4.
+- Variants results: K1, K6.
+- Narrative: K1, K15, K16.
+- Stat analysis: K1, K2.
+- Snapshots diff: K7.
+- Scorecard: K2, K4, K8, K12.
+- Publication: K2, K17.
+- `#/policies`: K12.
+- Experiment Overview: K16, K19.
+- Responses: K1.
+- Conditions: K2, K9, K10, K11.
+- Analysis: K10, K13, K14.
 
 ## 5. Caveat list (rule 2)
 
@@ -201,6 +218,7 @@ All phrases are drafts and go through the brad-voice pass in L5. `copy/pins/<lan
 | K16 | "Cost is a rough guess from fixed token counts and a fixed price table in Flinch, not a quote from the provider." | runner.py:620-632 (500 in / 1,000 out per cell, averaged over four providers' prices), :1175-1226 | experiment estimate (Overview, before Start), sequence batch estimate |
 | K17 | "Pushback success counts Flinch's three example pushbacks along with yours." Rendered only when the export has no model filter; with a filter the examples drop out (publication.py:334-345). | publication.py:318-345; seed.py:78-106 | publication preview (pushback summary, unfiltered) |
 | K18 | "Counts include labels changed by hand. The original label isn't kept." | app.py:432-439 | label control, session stats |
+| K19 | "Closing or reloading Flinch stops a running experiment." | app.py:2900-2940 (the run lives inside the `/start`/`/resume` stream's generator) | Experiment Overview while a run stream is open |
 
 ## 6. Glossary term list (rule 4)
 
@@ -266,7 +284,7 @@ Each lane owns only its own files:
 3. `git add -A flinch/static && git commit -m "Rebuild flinch/static after <lane>"`
 4. `python scripts/dev/run-gates.py --lane <L> --integrator`
 
-The merge is done when the integrator gate file is all green. If any gate is red: `git reset --hard ORIG_HEAD~1` (undoes the rebuild commit and the merge), fix on the lane, and merge again.
+The merge is done when the integrator gate file is all green. If any gate is red: `git reset --hard ORIG_HEAD` (the pre-merge head, which undoes the merge and the rebuild commit; `HEAD~2` is equivalent), fix on the lane, and merge again.
 
 **B-list: the complete set of backend and shell changes.** Nothing else under `flinch/*.py` or `src-tauri/` changes, apart from L6's updater files and L7's version bumps.
 
@@ -344,13 +362,13 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
   - `tips/registry.ts`: `TipDef {id, title, route, params?, open?, target, blurb, why, placement}`. `route` is the hash route pattern; `params` maps its placeholders to keys in `flinch-v0.8.0.ids.json`, so `#/session/:id/run/:runId` resolves to a concrete fixture URL. `open` is an optional selector clicked first, for tips inside dialogs.
   - `tips/coordinate.ts`: F0. Cookies `flinch_tips` and `flinch_first` (`Max-Age=31536000; SameSite=Strict; Path=/`), with localStorage as the fallback; every access in try/catch.
   - `api/client.ts`: fetch wrapper and `ApiError` carrying the server's `detail`.
-  - `api/sse.ts`: reads the POST SSE streams (`batch`, `batch-conditions`, `run-auto`, sequence-batch `start`, `stat-run`, experiment `start`/`resume`/`metrics`; `text/event-stream` at app.py:567, :695, :2056, :2184, :2584, :2917, :2942, :2963).
+  - `api/sse.ts`: reads the POST SSE streams (`batch`, `batch-conditions`, `run-auto`, sequence-batch `start`, `stat-run`, experiment `start`/`resume`/`metrics`/`resume-conditions`; `text/event-stream` at app.py:567, :695, :2056, :2184, :2584, :2917, :2942, :2963, :3296).
   - `tailwind.config.js` tokens: zinc surfaces, indigo accent, and `outcome.{refused,collapsed,negotiated,complied}` carrying the four hues of v0.8.0's `--color-*`.
 - Acceptance: vitest passes these cases:
   - `place.test.ts`: for 12 anchor positions at 1024×700 and 1280×800, the popup stays in the viewport, doesn't intersect its target, and arrows are ≤ 160.
   - `Rate.test.ts`: `count=3 of=12` renders "3 of 12" and "25%"; `of=0` renders "no runs yet" and no "NaN".
-  - `coordinate.test.ts`: after `markTipSeen('a')`, `document.cookie` contains `flinch_tips=a`, and the value matches `^[a-z0-9_,-]*$`. `isTipSeen` returns false and doesn't throw when both the cookie and `localStorage` accessors throw.
-  - `sse.test.ts`: parses the `event:`/`data:` frames emitted at app.py:680 into 3 typed events.
+  - `coordinate.test.ts`: after `markTipSeen('a')`, `document.cookie` contains `flinch_tips=a`, and the value matches `^[a-z0-9_,-]*$`. The full tip-id registry joined with commas is under 3,000 bytes (a cookie holds 4 KB); if a later registry exceeds that, `coordinate.ts` stores the overflow in localStorage and the test asserts it does. `isTipSeen` returns false and doesn't throw when both the cookie and `localStorage` accessors throw.
+  - `sse.test.ts`: parses the `event:`/`data:` frames emitted at app.py:680 into 3 typed events, and data-only frames (app.py:2914, :2939, :2960) into 3 default `message` events.
   - `svelte-check` reports that `<Rate>` without `of` fails to type-check (fixture file in `src/lib/__typecheck__/`).
 - Depends on: T1.
 
@@ -427,20 +445,22 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
 ### L3: experiments
 
 **T8: Experiment list, wizard, and the tabbed experiment screen.** Rules: 1, 2, 4, 6.
-- Files: `src/routes/experiments/**`, `api/l3.ts`, `readouts/l3.ts`, `glossary/l3.ts`, `tips/l3.ts`, `pins/l3.ts`, `shots/l3.json`, `ExperimentProgress.test.ts`.
+- Files: `src/routes/experiments/**`, `api/l3.ts`, `api/experiment-runs.ts`, `readouts/l3.ts`, `glossary/l3.ts`, `tips/l3.ts`, `pins/l3.ts`, `shots/l3.json`, `ExperimentProgress.test.ts`.
 - Acceptance:
   - On an empty DB, the wizard's `POST /api/experiments` returns 200 (problem 4).
   - An empty system prompt keeps Next disabled, with the reason shown.
   - The wizard has no repetitions input.
   - Review lists the chosen conditions, models and probes and shows no computed number.
   - After Create, Overview shows cells, prompts, conditions, models and `estimated_cost_usd` from `POST /estimate` with K16 beside them, before Start. It also shows name, models, created date and conditions from the fixture's experiment (problem 6).
-  - `ExperimentProgress.test.ts` returns 3 mocked `GET /progress` JSON responses at a 2 s poll interval (fake timers) and asserts that "completed of total" updates 3 times. Polling stops when status leaves `running` (problem 18).
-  - While a `/start` or `/resume` stream is open, Overview says the run continues only while the screen stays open (draft; brad-voice pass), because the stream drives the run (app.py:2900-2940).
+  - `ExperimentProgress.test.ts` returns 3 mocked `GET /progress` JSON responses at a 2 s poll interval (fake timers) and asserts that "completed of total" updates 3 times. Polling stops when status leaves `running` (problem 18). It also stops when status is `running` but `experiment-runs.ts` holds no open stream (a run that died, e.g. after a reload), and the tab then shows "not running" (draft; brad-voice pass) instead of stale counts.
+  - Run survives navigation: with a mocked `/start` stream open, navigating `#/experiments/:id` → `#/dashboard` → back leaves the stream open (the store reports it open; the mock saw no abort) and "completed of total" keeps rising.
+  - Start sends the body `{}` and receives 200 `text/event-stream` on the fixture (problem 19: `/start` requires a body, app.py:2901; v0.8.0 sent none, experiment.js:949).
+  - Overview shows K19 while a stream is open.
   - Responses calls `/responses` (problem 5).
   - Conditions lists each condition pair × metric with d, CI, n1/n2, U, p raw and FDR p, with no min/max.
   - Analysis: for every key in `readouts/l3.ts`, `shoot.mjs`'s DOM check finds a `[data-result=<key>]` element with its `[data-inputs]` child non-empty. An `{"error": ...}` payload renders its text in the tab.
   - All five Export outputs are recorded 2xx.
-  - K9, K10, K11, K13, K14 and K16 pass the DOM check.
+  - K9, K10, K11, K13, K14, K16 and K19 pass the DOM check.
 - Depends on: L0.
 
 ### L4: dashboard, scorecard, publication, policies, coach examples, settings
@@ -474,7 +494,7 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
     - (2) whether `window.__TAURI__` exists on the sidecar origin
     - (3) whether `invoke('set_api_key')` succeeds from it
     - (4) whether `invoke('runtime_status')` succeeds from it, which settles E2's premise
-    - (5) dismiss a tip, quit, relaunch (new random port): the tip stays dismissed and Settings doesn't redirect, which confirms WebView2 keeps the F0 cookie
+    - (5) dismiss a tip, quit, relaunch (new random port): the tip stays dismissed and Settings doesn't redirect, which confirms WebView2 keeps the F0 cookie; the WebView2 runtime version is recorded with the result
     - If (1) fails, record baseline problem 17 and apply B6 (then G7 applies), and re-test.
   - Otherwise G7 does not apply to this task. `ui/` files are embedded as bytes and `cargo check` can't fail on them; they are verified by `splash-shot.mjs` and G5. The full shell runs in L7.
 - Depends on: L0.
@@ -484,7 +504,7 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
 **T11: brad-voice copy pass, in main context.** Rules: 8, 9; handoff §5.
 - Sequence:
   1. Starts once L1–L4 are merged and green.
-  2. `/anthropic-skills:brad-voice` runs in the main session over every visible string: screens, tips, glossary definitions, K1–K18, empty states, errors, the splash.
+  2. `/anthropic-skills:brad-voice` runs in the main session over every visible string: screens, tips, glossary definitions, K1–K19, empty states, errors, the splash.
   3. A critic agent reviews.
   4. A cold-read agent with a fresh context, seeing only screenshots, lists every misread.
   5. Fixes go back through brad-voice.
@@ -508,7 +528,7 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
 - Brad generates the key (`cargo tauri signer generate -w ~/.tauri/flinch-updater.key`) and backs it up. Claude never runs that command, never reads the key, never commits it.
 - Files:
   - `src-tauri/Cargo.toml`: `tauri-plugin-updater = "2"`, `tauri-plugin-process = "2"`
-  - `src-tauri/src/lib.rs`: plugins plus command `stop_sidecar_for_update`
+  - `src-tauri/src/lib.rs`: plugins, command `stop_sidecar_for_update`, and `RuntimeStatus.installed` = `bootstrap::is_runtime_ready()` (bootstrap/mod.rs:39-45: ready marker + venv Python). `RuntimeStatus.ready` only means a sidecar handle exists (lib.rs:52-59), which is false on most launches when the splash first asks.
   - `src-tauri/capabilities/default.json`: `updater:default`, `process:allow-restart` for `main`
   - `src-tauri/tauri.conf.json`: `bundle.createUpdaterArtifacts: true`; `plugins.updater` = `{pubkey, endpoints: [existing latest.json URL], windows: {installMode: "passive"}}`, dropping the v1 `active`/`dialog`/`_comment` keys
   - `ui/splash.js` + `ui/index.html`: E1, below; `copy/pins/l6.ts` (card strings, own `status`); `shots/l6.json`
@@ -521,7 +541,7 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
     - `-SkipBuild` only rewrites `latest.json`
   - `docs/releasing.md`: the five version locations per `test_versions_match`; never mark the release as a pre-release
 - E1 behaviour:
-  - The check starts once `runtime_status.ready` is true, so a first-run bootstrap (pip running) never sees the card.
+  - The check starts when `runtime_status.installed` is true, so a first-run bootstrap (pip running) never sees the card, while a normal launch checks straight away.
   - It runs in parallel with the sidecar `/health` wait. Its budget is 3 s from splash start.
   - If no update is found, or the check fails or misses the budget, navigation proceeds exactly as today.
   - If an update is found before navigation, navigation pauses on the card ("Install" / "Not now").
@@ -531,7 +551,7 @@ Problems 4, 5, 6, 8, 9, 11, 12, 13, 14, 15 and 18 are UI-side and go away with t
   - A dry run of `release.ps1` with a throwaway key exits 0 with its `latest.json` checks passed; then the throwaway key is deleted.
   - `splash-shot.mjs` with a stubbed update captures the card with 0 CSP violations.
   - With a stubbed check that hangs, navigation happens at or before max(`/health` OK, splash start + 3 s) + 0.5 s.
-  - With `runtime_status.ready = false`, no check runs.
+  - Stubbed launch with `installed=true, ready=false`: the check runs. Stubbed `installed=false, ready=false`: no check runs.
   - `voice/l6.md` holds the card strings' brad-voice output and critic note, and `pins/l6.ts` has `status: 'final'`.
   - On a scratch branch, `git revert` of the L6 commits leaves G1–G8 green; that branch is then deleted.
 - Depends on: L5.
@@ -604,10 +624,10 @@ The first-timer has never opened Flinch, knows what an AI chatbot is, and has no
 | Live-model states can't be captured without keys | Fixture rows plus route mocks; no key is ever used | `mocked` flags in the manifest |
 | Keys written in plain text to `.env` on the desktop | The desktop path never calls `POST /api/settings/keys` | T10 Windows test (1) |
 | IPC from the sidecar origin behaves unexpectedly (both directions unverified) | T10 tests (2)–(4); B6 only if needed | L4 gate file |
-| F0 cookies are shared with every server on `127.0.0.1` (RFC 6265 §8.5) | Names prefixed `flinch_`; values are tip ids and a flag only | `coordinate.test.ts` value pattern |
+| F0 cookies are shared with every server on `127.0.0.1` (RFC 6265 §8.5). In browser mode, other local servers (any port) receive `flinch_tips`/`flinch_first` with each request. On the desktop the WebView2 jar is Flinch's alone. | Names prefixed `flinch_`; values are tip ids and a flag only. `SameSite=Strict` stays: the splash → sidecar hop is cross-site, so the cookie isn't sent on that request, but the page reads it through `document.cookie` | `coordinate.test.ts` value pattern and size |
 | WebView2 drops the cookie between launches | localStorage fallback; tips then repeat (the baseline behaviour) | T10 Windows test (5) |
 | Splash breaks under the real CSP | `splash-shot.mjs` serves `ui/` with the tauri.conf.json CSP | 0 `securitypolicyviolation` events |
-| Leaving the Experiment screen ends a running experiment (the stream drives it, app.py:2900-2940; same at baseline) | Overview says so while a stream is open | T8 acceptance |
+| A running experiment lives inside the `/start`/`/resume` stream (app.py:2900-2940). A component-owned stream would stop it on navigation, a regression from v0.8.0, where only closing or reloading did. | Stream held in the module-level store `experiment-runs.ts`; K19 on Overview | T8 "run survives navigation" test |
 | Update path untestable until the next release (v0.8.0 has no updater) | This release installs manually; `release.ps1` dry run; L6 can be reverted | T13 records; next release's update test |
 | Old UI kept on upgrade if pyproject.toml doesn't change (`bootstrap/mod.rs:51-84`) | Version bump each release (`test_versions_match`, `releasing.md`) | T14 upgrade test |
 | Copy slop from lint-only passes | T11 in main context with critic and cold-read | `--release` requires every pin `final`; `voice/l5.md` |
@@ -645,8 +665,9 @@ The first-timer has never opened Flinch, knows what an AI chatbot is, and has no
   - The backend and shell changes are the B-list: five small fixes and one conditional capability. Rule-6 first-time state lives in `127.0.0.1` cookies (F0), and the random sidecar port stays.
   - The old UI is replaced on the branch lane by lane.
   - Numbers read their inputs from existing payloads.
+  - Experiment run streams live in a module-level store so navigation never stops a run.
   - Guided entry, caveats, terms and copy tests are written fresh in Pry's design language.
-  - The signed updater is a separable last lane, with the update card on the splash: checked after the runtime is ready, within 3 s of splash start, and shown only when an update is found.
+  - The signed updater is a separable last lane, with the update card on the splash: checked once the runtime is installed (`RuntimeStatus.installed`), within 3 s of splash start, and shown only when an update is found.
 - **Drivers.** 1.3 compatibility; the offline, CSP-bound FastAPI distribution path (problem 10); verifiability with no key at two window sizes.
 - **Alternatives considered.** A2 and A3; B2; C2; D2; E2; F1, F2 and F3. Reasons in §2. F1 (fixed port, iteration 2's B7) lost because it cites no baseline problem and, with no Host check, exposes the sidecar to DNS rebinding and cross-site body-less POSTs; a Host-check middleware would be backend work no rule requires.
 - **Why chosen.**
@@ -661,6 +682,7 @@ The first-timer has never opened Flinch, knows what an AI chatbot is, and has no
   - Classifier confidence stays invisible (not persisted; 1.3).
   - The repetitions field is gone because the backend never used it.
   - Tip-seen and first-launch state are `127.0.0.1` cookies that any local server on that host can read; they hold only tip ids and a flag.
+  - Closing or reloading Flinch stops a running experiment, as in v0.8.0 (K19).
   - The scorecard is shown as-is until Q1 is answered.
   - The first in-app update can be tested only at the next release.
 - **Follow-ups (of this plan).** Answer Q1. Record popup geometry at release as the reference for the next release's diff. Run the next release's in-app update test.
@@ -722,7 +744,7 @@ Iteration 3 (from `architect-iter2`, A18–A24 plus partials; `critic-iter2`, C2
 - A21, K17 false with a model filter: applied. K17 only on unfiltered exports.
 - A22, tips on param routes and in dialogs: applied. `TipDef.params` (from `ids.json`) and `open`.
 - A23, L6 edits L4's files after pins are final: applied. `pins/l6.ts`; `ui/` passes L4 → L6 after L5.
-- A24, card during first-run bootstrap: applied. Check starts only after `runtime_status.ready`.
+- A24, card during first-run bootstrap: applied with the wrong gate; corrected in iteration 4 (A25).
 - Architect B7 security antithesis: applied as: F1 rejected on that ground; no Origin/Host middleware added.
 - Architect splash CSP gap: applied. `splash-shot.mjs` serves the tauri.conf.json CSP and fails on violations; stub uses `events.rs` stage names.
 - C7 partial, route counts and `/results` in G10: applied. "101 unique paths", pair count in the file header; G10 skips `/results`.
@@ -736,6 +758,18 @@ Iteration 3 (from `architect-iter2`, A18–A24 plus partials; `critic-iter2`, C2
 - C26, lane shots need the lane build: applied (as A19).
 - C27, PNG attributes: applied (as A18).
 - C28, `.env` path text: applied. The directory containing `flinch` (`site-packages` when installed).
-- C29, failed merge path: applied. `git reset --hard ORIG_HEAD~1`, fix on the lane, merge again.
+- C29, failed merge path: applied. Reset to the pre-merge head, fix on the lane, merge again (command corrected in iteration 4).
 - C-suggestions: Clear All phrase `DELETE_ALL_DATA` (the value app.py:2531 requires); G10 10 s timeouts; `/api/version` in the sidebar row; T8 Analysis DOM check against `readouts/l3.ts`; G8 FAILs on an empty tip set, and L0 ships ≥ 1 tip.
 - Added from code while revising: the leave-the-screen run caveat for experiments (app.py:2900-2940), §10 rows for cookie sharing and WebView2 persistence.
+
+Iteration 4 (final improvements, from `critic-iter3` C30–C32 and `architect-iter3` A25–A28).
+
+- C30 / A26, a component-owned run stream would stop experiments on navigation: applied. `api/experiment-runs.ts` store (L3), never closed on destroy. K19 "Closing or reloading Flinch stops a running experiment" added. §10 row rewritten. T8 navigation test added.
+- C31, `/resume-conditions` missing from `sse.ts`: applied (app.py:3296).
+- C32, `ORIG_HEAD~1` resets one commit too far: applied. `git reset --hard ORIG_HEAD` (or `HEAD~2`); the iteration-3 line reworded.
+- A25, `runtime_status.ready` keeps the card off normal launches: applied. Gate on `RuntimeStatus.installed` = `is_runtime_ready()` (bootstrap/mod.rs:39-45), added in L6's `lib.rs` change; two stubbed-launch acceptances.
+- A27, `/start` without a body likely returns 422: applied. T8 sends `{}` and expects 200 `text/event-stream`. Recorded as problem 19 from code, unverified at runtime.
+- A28, data-only SSE frames untested: applied. `sse.test.ts` covers app.py:2914, :2939, :2960.
+- Critic non-blocking: polling stops with "not running" when status is `running` but no stream is held; the F0 risk row says plainly that other `127.0.0.1` servers receive the cookies in browser mode; T10 test (5) records the WebView2 version; the C29 line reworded.
+- Architect F0 notes: registry-size test (< 3,000 bytes, localStorage overflow); `SameSite=Strict` kept with the reason in §10; browser vs desktop cookie jars stated.
+- Not taken: the Critic's open question on `run_experiment` worker tasks outliving a cancelled stream (runner.py:515). That is baseline backend behaviour, and the store-level stream stops navigation from triggering it, so no backend change is added.

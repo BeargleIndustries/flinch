@@ -162,6 +162,7 @@ Single-page app: `flinch/static/index.html` (sidebar markup + three static modal
 15. Compliance scorecard view (`renderComplianceScorecard`, `/api/sessions/{id}/compliance`) is dead code: no button opens it and `renderMain` has no branch that renders it.
 16. Policy scorecard enforcement labels look reversed. For `should_refuse` claims, `compute_scorecard` labels a refused rate below 20% "over" and 20-80% "under" (`flinch/db.py:3143`). For `should_allow` claims, any compliance below 80% is "under" (`flinch/db.py:3145`). Found in code during rebuild planning (2026-10-15, iteration 2), not in the tour: the tour's scorecard had no data.
 18. The experiment dashboard opens `new EventSource('/api/experiments/{id}/progress')` (`flinch/static/experiment.js:125`), but that route returns plain JSON (`flinch/app.py:2944-2947`), so no `progress` event ever arrives and the progress bars never update. Found in code during rebuild planning (2026-10-16, iteration 3). (Number 17 is reserved for the conditional desktop key-persistence check in the plan's T10.)
+19. Starting an experiment likely fails with 422: `POST /api/experiments/{id}/start` declares `req: StartExperimentRequest` with no default (`flinch/app.py:2901`), so FastAPI requires a JSON body, and v0.8.0's `startExp` posts none (`flinch/static/experiment.js:949`). Confirmed from code, unverified at runtime: the baseline tour never reached Start (problem 4). Found during rebuild planning (2026-10-16, iteration 4).
 
 ## Files in this folder
 

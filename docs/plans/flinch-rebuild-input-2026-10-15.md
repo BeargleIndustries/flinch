@@ -56,8 +56,14 @@ Decisions 1.1–1.3 (stack, updater, schema) stand, except that the benchmark se
 | 3.1 | Does the IA in `design/01-information-architecture.md` hold (six sections by research question plus Settings, Pry-style header with session switcher, no global sidebar, two-pane Probe workbench)? | **Yes, write the screen specs against it.** §7 open points 2 and 3 take the draft's defaults (Models study stays session-less; narrative strategies listed read-only in the Library). |
 | 3.2 | Name of the consistency section | **Studies.** |
 
+## Round 4 (2026-10-16): optional backend additions
+
+| # | Question | Brad's answer |
+|---|---|---|
+| 4.1 | Which of `design/05-backend-gaps.md` rows 18–27 (B bucket: new data or routes the v0.8.0 feature set never had) go into the build plan? | **Rows 18 and 19 only**: store per-turn latency and token counts (additive columns on `run_turns`) and the label source (keyword scan / judge / person, additive `label_source` column). Rows 20–27 stay out; the screens use the client-side fallbacks already specified. |
+
 ## PICKUP POINT
 
 Rewritten every time a session is cut.
 
-- 2026-10-16: Rounds 1–3 answered. Design groundwork in `docs/plans/design/`: Pry vocabulary, benchmark research, IA (approved in Round 3), tokens, components. Next: content inventory saved, one spec per screen under `design/screens/`, `design/benchmarks.md`, `design/04-flows.md`, then the build plan re-cut against the specs (`docs/plans/flinch-rebuild-plan-v2.md`). Nothing is approved for execution; no code moves.
+- 2026-10-16: Rounds 1–4 answered. All 30 screen specs, tokens, components, benchmarks.md and 05-backend-gaps.md are committed under `docs/plans/design/`. In flight: `04-flows.md` + `06-consistency-report.md`, and an Architect + Critic buildability review of the spec set. Next: fold review findings into the specs, then write `docs/plans/flinch-rebuild-plan-v2.md` cut against the screen specs (gates, lanes, backend A rows + rows 18/19 + Benchmarks, evidence, ADR), status pending approval. No code moves before Brad's word.

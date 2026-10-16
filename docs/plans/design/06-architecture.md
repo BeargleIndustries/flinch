@@ -614,7 +614,7 @@ Routes, payloads and the runner contract are `benchmarks.md` §7 and §2, by ref
 
 `lib/copy/caveats.ts` and `lib/glossary/index.ts` are created and owned by L0 and hold **every** id any screen uses, with the draft phrase from the screen spec that introduced it (marked "(draft; brad-voice pass)"). The `CaveatId` and `GlossaryKey` unions are the only source of ids; a `<Caveat id="…">` or `<Term key="…">` with an unlisted id is a compile error. Lanes edit the phrase text of their own ids during the brad-voice pass and **never add an id**: a new id is added to this section first, then to the registry by L0. `caveats.test.ts` asserts the registry's key set equals the list below exactly, and `glossary.test.ts` asserts every key below has a definition without banned verbs (02 §7.7).
 
-### 9.1 Caveat ids (harvested from every `screens/*.md` §5, `benchmarks.md` §11 and `03-components.md` §5; 123 ids)
+### 9.1 Caveat ids (harvested from every `screens/*.md` §5, `benchmarks.md` §11 and `03-components.md` §5; 143 ids)
 
 Common (03 §5): `classifier`, `rate_n`, `held_once`, `product_filter`, `coach_conf`, `improved`, `modified_bench`.
 
@@ -622,7 +622,7 @@ Probe, Home, Sessions, dialogs: `held_n`, `keyword_only`, `closed_conversation`,
 
 Studies: `latest_only`, `threshold_once`, `compare_sessions`, `first_reply_only`, `cost_estimate`, `experiment_not_here`, `warmup_label`, `fresh_run`, `adapted_probe`, `strategy_success`, `stale_status`, `no_override_turn`, `two_needed`, `disagree_def`, `score_no_colour`, `one_run_cell`, `error_not_disagree`, `same_prompt`, `not_saved`, `latest_only_side`, `side_note`, `steps_not_measure`, `final_wins`, `excerpt_500`, `no_override_stat`, `fresh_context`, `failed_not_counted`, `one_label_stored`.
 
-Experiments: `system_prompt_required`, `estimate_after_create`, `hh_not_probes`, `batch_conditions_autostart`, `draft_without_keys`, `cell_definition`, `run_stops_on_close`, `interrupted_run`, `unlabelled`, `negotiated_counts`, `report_markdown_only`, `win_rate_meaning`, `t_vs_u`, `responses_cap`, `rater_criteria`, `prompts_fixed`, `prolific_once`, `prereg_fixed_text`, `power_even_split`, `per_pair_only`, `pause_lag`, `pairs_on_analysis`, `metrics_listed_phrases`, `full_record_no_text`, `fdr_scope`, `estimate_assumptions`, `d_made_of`, `cost_not_measured`, `analysis_csv_blank_means`.
+Experiments: `system_prompt_required`, `estimate_after_create`, `hh_not_probes`, `batch_conditions_autostart`, `draft_without_keys`, `cell_definition`, `run_stops_on_close`, `interrupted_run`, `unlabelled`, `negotiated_counts`, `report_markdown_only`, `win_rate_meaning`, `t_vs_u`, `responses_cap`, `rater_criteria`, `prompts_fixed`, `prolific_once`, `prereg_fixed_text`, `power_even_split`, `per_pair_only`, `pause_lag`, `pairs_on_analysis`, `metrics_listed_phrases`, `full_record_no_text`, `fdr_scope`, `estimate_assumptions`, `d_made_of`, `cost_not_measured`, `analysis_csv_blank_means`, `done_with_pending`, `prolific_three` (the last two sit in experiment.md's §5 tables marked "(Term)"; they are registered as caveats and also get glossary entries).
 
 Benchmarks: `bench_estimate`, `bench_subset_paired`, `bench_judge_swap`, `bench_local_cost`, `swebench_contested`, `bench_not_leaderboard`, `bench_judge_drift`, `bench_resource_limits`, `bench_resumed`, `bench_local_model`, `bench_gpqa_recipe`, `bench_gated_text`, `bench_judge_label`.
 

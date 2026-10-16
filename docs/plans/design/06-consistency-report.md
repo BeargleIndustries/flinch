@@ -114,6 +114,8 @@ The union across all specs and `benchmarks.md` §11 is 144 ids. The full id → 
 
 ## (i) Visible strings
 
+(The dashes quoted in F41 and F42 below, and the "—" cell marker quoted in F38 and the inventory note in (c), are evidence copied from the files; this report itself contains no other dash.)
+
 **F40 (M)** Draft marking is uneven. Five specs carry the global line "All visible strings in this spec are drafts (draft; brad-voice pass)" (`home.md:10`, `probe-workbench.md:10`, `dialog-new-session.md:10`, `dialog-probes-add-import.md:10`, `probe-sessions.md:10`). The other 25 mark strings individually: quoted visible sentences vs "(draft" marks: benchmark-new-run 54/3, benchmark-run 61/5, benchmark-suite 36/4, benchmarks-catalog 32/4, experiment 78/14, experiment-new 25/12, experiments-list 17/9, library-coach 19/3, library-policies 15/3, library-probes 33/3, library-strategies 13/3, library-variants 34/3, overlays 27/6, results 26/3, results-publication 38/3, results-scorecard 27/3, settings 38/4, splash 37/6, studies-list 15/12, studies-new 44/15, study-context 49/8, study-framing 28/7, study-models 18/6, study-over-time 19/7, study-repeat 23/10. Fix: add the global line at line 10 of each of the 25 (the per-string marks can stay).
 
 **F41 (M)** An en dash in a visible string: `overlays-help-shortcuts-toasts.md:95` the Shortcuts dialog row "`1`–`6`" (also `:152` "1–4 toasts", `:139` "R2–R4" and `:221`, which are spec prose). Fix: "1 to 6" at line 95 (tokens §7.2).

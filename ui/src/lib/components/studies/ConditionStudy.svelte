@@ -1,11 +1,14 @@
 <!--
   One conditions study (brief 8.2.3): header with name, status and
   description, the research question, "Delete this study", then the tabs Run,
-  Results, Raters and Export. Results, Raters and Export arrive in T23.
+  Results, Raters and Export (T23).
 
-  The study's data loads here so the header and the Run tab agree; it reloads
+  The study's data loads here so the header and the tabs agree; it reloads
   whenever the study's run asks (`run.version`: throttled while streaming,
-  and once when the stream ends).
+  and once when the stream ends). The condition comparison (Results, and the
+  Export tab's report gate) loads on its own, so a failure there leaves the
+  other tabs working; it reloads with the study, when the metrics job ends
+  and when the Results tab asks.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -13,7 +16,7 @@
   import { ArrowLeft } from 'lucide-svelte';
   import { request } from '$lib/api/client';
   import { ROUTES } from '$lib/api/endpoints';
-  import type { ExperimentDetail, StudyProgress } from '$lib/api/types';
+  import type { ConditionComparison, ExperimentDetail, StudyProgress } from '$lib/api/types';
   import ConfirmButton from '$lib/components/ConfirmButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import StatusChip from '$lib/components/StatusChip.svelte';
@@ -23,7 +26,11 @@
   import { CONDITIONS } from '$lib/copy/studies';
   import { friendlyError } from '$lib/errors';
   import { status } from '$lib/stores/status.svelte';
+  import ConditionExport from './ConditionExport.svelte';
+  import ConditionRaters from './ConditionRaters.svelte';
+  import ConditionResults from './ConditionResults.svelte';
   import ConditionRun from './ConditionRun.svelte';
+  import { studyJobs } from './condition-jobs.svelte';
   import type { StudyEstimate, StudyPrompt, StudyResponse } from './conditions';
   import { studyRuns } from './conditions.svelte';
 
@@ -35,12 +42,16 @@
 
   // The page keys this component on the id, so it never changes here.
   const run = untrack(() => studyRuns.of(id));
+  const metricsJob = untrack(() => studyJobs.of('metrics', id));
+  const rateJob = untrack(() => studyJobs.of('rate', id));
 
   let detail = $state<ExperimentDetail | null>(null);
   let prompts = $state<StudyPrompt[]>([]);
   let progress = $state<StudyProgress | null>(null);
   let responses = $state<StudyResponse[]>([]);
   let estimate = $state<StudyEstimate | null>(null);
+  let comparison = $state<ConditionComparison | null>(null);
+  let comparisonError = $state<string | null>(null);
   let loadError = $state<string | null>(null);
   let sourcesOpen = $state(false);
   let deleting = $state(false);
@@ -82,6 +93,33 @@
     }
   }
 
+  let cmpSeq = 0;
+
+  /** GET /condition-comparison (B31: the newest statistics of each kind). */
+  async function loadComparison() {
+    const mine = ++cmpSeq;
+    try {
+      const c = await status.track(
+        request<ConditionComparison>(ROUTES.getConditionComparison, {
+          params: { experiment_id: id },
+        }),
+      );
+      if (mine !== cmpSeq) return;
+      comparison = c;
+      comparisonError = null;
+    } catch (e) {
+      if (mine !== cmpSeq) return;
+      // Keep the last comparison on screen; the Results tab shows why it is stale.
+      comparisonError = friendlyError(e).message;
+    }
+  }
+
+  /** The Results tab changed something (Classify, statistics): read everything again. */
+  function refresh() {
+    void load();
+    void loadComparison();
+  }
+
   /** POST /estimate (B02: nested, multiplied by repeats). */
   async function loadEstimate() {
     try {
@@ -103,6 +141,13 @@
     untrack(() => void loadEstimate());
   });
 
+  // The comparison follows the run and the metrics job.
+  $effect(() => {
+    void run.version;
+    void metricsJob.version;
+    untrack(() => void loadComparison());
+  });
+
   async function remove() {
     if (!detail) return;
     deleting = true;
@@ -118,8 +163,6 @@
       deleting = false;
     }
   }
-
-  const tabLabel = (t: string) => tabs.find((x) => x.id === t)?.label ?? t;
 </script>
 
 <section
@@ -154,7 +197,7 @@
         label={CONDITIONS.deleteStudy}
         confirmLabel={CONDITIONS.deleteConfirm}
         danger
-        disabled={deleting || run.live}
+        disabled={deleting || run.live || metricsJob.live || rateJob.live}
         onConfirm={remove}
       />
     </header>
@@ -173,13 +216,28 @@
               {run}
               onAddPrompts={() => (sourcesOpen = true)}
             />
+          {:else if current === 'results'}
+            <ConditionResults
+              experiment={exp}
+              conditions={detail?.conditions ?? []}
+              {prompts}
+              {responses}
+              {comparison}
+              {comparisonError}
+              {run}
+              metrics={metricsJob}
+              onChanged={refresh}
+            />
+          {:else if current === 'raters'}
+            <ConditionRaters
+              experiment={exp}
+              conditions={detail?.conditions ?? []}
+              {prompts}
+              {responses}
+              rate={rateJob}
+            />
           {:else}
-            <div class="rounded-xl border border-dashed border-border" data-testid="tab-later">
-              <EmptyState
-                title={CONDITIONS.tabLaterTitle}
-                body={CONDITIONS.tabLaterBody(tabLabel(current))}
-              />
-            </div>
+            <ConditionExport experiment={exp} hasAnalysis={comparison?.has_analysis ?? false} />
           {/if}
         </div>
       {/snippet}

@@ -15,8 +15,25 @@ import { SAVE_CANCELLED, saveFile } from '$lib/tauri';
 
 export async function saveDownload(path: string, fallbackName: string): Promise<string | null> {
   const { blob, filename } = await status.track(download(path));
+  return saveBlob(blob, filename ?? fallbackName);
+}
+
+/**
+ * Saves text the app built from a JSON answer (a study's preregistration or
+ * report, which the sidecar returns as a field rather than a file), with the
+ * same cancel and R10 handling as saveDownload.
+ */
+export function saveText(
+  text: string,
+  name: string,
+  type = 'text/markdown',
+): Promise<string | null> {
+  return saveBlob(new Blob([text], { type: `${type};charset=utf-8` }), name);
+}
+
+async function saveBlob(blob: Blob, name: string): Promise<string | null> {
   try {
-    return await saveFile(blob, filename ?? fallbackName);
+    return await saveFile(blob, name);
   } catch (e) {
     if (isSaveCancelled(e)) throw e;
     throw new Error(ERROR_COPY.saveOutsideScope, { cause: e });

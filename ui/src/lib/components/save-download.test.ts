@@ -20,7 +20,7 @@ vi.mock('$lib/tauri', () => ({
 
 import { ERROR_COPY } from '$lib/copy/errors-copy';
 import { friendlyError } from '$lib/errors';
-import { isSaveCancelled, saveDownload } from './save-download';
+import { isSaveCancelled, saveDownload, saveText } from './save-download';
 
 beforeEach(() => {
   state.filename = 'flinch-a-2026-10-19.json';
@@ -56,6 +56,28 @@ describe('saveDownload', () => {
     });
     const err = await saveDownload('/x', 'f').catch((e: unknown) => e);
     expect(isSaveCancelled(err)).toBe(false);
+    expect(friendlyError(err).message).toBe(ERROR_COPY.saveOutsideScope);
+  });
+});
+
+describe('saveText', () => {
+  it('saves the text under the given name as Markdown', async () => {
+    await expect(saveText('# Hi', 'study-3-report.md')).resolves.toBeNull();
+    const [blob, name] = state.save.mock.calls[0];
+    expect(name).toBe('study-3-report.md');
+    expect(blob.type).toContain('text/markdown');
+    expect(await blob.text()).toBe('# Hi');
+  });
+
+  it('keeps the cancel and R10 handling', async () => {
+    state.save.mockImplementation(async () => {
+      throw new Error('Save cancelled.');
+    });
+    expect(isSaveCancelled(await saveText('x', 'a.md').catch((e: unknown) => e))).toBe(true);
+    state.save.mockImplementation(async () => {
+      throw new Error('forbidden path');
+    });
+    const err = await saveText('x', 'a.md').catch((e: unknown) => e);
     expect(friendlyError(err).message).toBe(ERROR_COPY.saveOutsideScope);
   });
 });

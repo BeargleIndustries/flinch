@@ -16,14 +16,27 @@
 // 200 and streams to "8 of 8 cells". Every cell is completed and classified
 // (B04), and the study is `completed`.
 //
-// T23 adds "sources and results" (HH-RLHF against the fake /rows, Import
-// from a file, Results, JSONL).
-import { expect, test } from '@playwright/test';
+// "sources and results" (T23; D20, I22, B04, B06, B11, B39): a study whose
+// conditions come from "Import from a file" (the e2e-conditions.md fixture:
+// Control and Terse) and whose prompts come from HH-RLHF against the fake
+// /rows (target 20, a stratification mix other than the default) runs to
+// 40 of 40 cells. Results shows one badge per response and none of them
+// unclassified, Classify reports what the route returned, the comparison
+// cards render, text metrics compute and Run statistics is offered. The
+// Export tab has exactly the five D20 rows: the four that need no
+// statistics download under their names (the CSV header has model_id and
+// repetition, B11; every JSONL line parses, B06), and the report row says
+// it waits for statistics.
+//
+// "statistics and the report" (fixme, see its comment): Run statistics, the
+// statistics table download (I22) and the report download.
+import fs from 'node:fs';
+import { expect, test, type Page } from '@playwright/test';
 import { SCREENS } from '../../src/lib/copy/screens';
 import { SHELL } from '../../src/lib/copy/shell';
-import { CONDITIONS } from '../../src/lib/copy/studies';
+import { CONDITIONS, CONDITIONS_RESULTS } from '../../src/lib/copy/studies';
 import { tipsRegistry } from '../../src/lib/tips/tips-registry';
-import { api, readSeed } from './helpers';
+import { api, readSeed, sidecarUrl } from './helpers';
 
 type StudyDetail = {
   experiment: { id: number; status: string; config: Record<string, unknown> };
@@ -199,4 +212,235 @@ test('runs and resumes', async ({ page }) => {
   await expect(row).toContainText(name);
   await expect(row).toContainText(CONDITIONS.cellsDone(8, 8));
   expect(await runsOf()).toBe(runsBefore);
+});
+
+/** Clicks a Download button and returns the file name and text. */
+async function grab(page: Page, label: string): Promise<{ name: string; text: string }> {
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: `Download ${label}`, exact: true }).click(),
+  ]);
+  const text = fs.readFileSync(await download.path(), 'utf8');
+  return { name: download.suggestedFilename(), text };
+}
+
+test('sources and results', async ({ page }) => {
+  test.setTimeout(180_000);
+  const R = CONDITIONS_RESULTS;
+
+  await page.goto('/studies/conditions/new');
+  await expect(page.getByTestId('sidecar-chip')).toHaveText(SHELL.sidecarReady);
+  const name = `E2E sources ${stamp()}`;
+  await page.getByTestId('study-name').fill(name);
+
+  // Conditions from the fixture file.
+  await page.getByTestId('import-conditions-file').click();
+  await page
+    .getByTestId('conditions-files')
+    .getByRole('button')
+    .filter({ hasText: 'E2E conditions' })
+    .click();
+  const rows = page.getByTestId('condition-row');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByTestId('condition-label')).toHaveValue('Control');
+  await expect(rows.nth(1).getByTestId('condition-label')).toHaveValue('Terse');
+  await expect(rows.nth(1).getByTestId('condition-prompt')).toHaveValue(
+    'Answer in one short sentence.',
+  );
+
+  // Prompts from HH-RLHF, with a mix other than the default.
+  await page.getByTestId('hh-toggle').check();
+  await page.getByTestId('hh-target').fill('20');
+  const mix: [string, string][] = [
+    ['factual', '40'],
+    ['advice', '20'],
+    ['opinion', '20'],
+    ['ethical', '20'],
+  ];
+  for (const [kind, pct] of mix) await page.getByTestId(`hh-mix-${kind}`).fill(pct);
+
+  const anthropic = page.locator('[data-testid="rate-row"][data-provider="anthropic"]');
+  await anthropic.getByTestId('rate-rpm').fill('10000');
+  await anthropic.getByTestId('rate-concurrent').fill('5');
+  await expect(page.getByTestId('cells-line')).toHaveAttribute('data-total', '40');
+
+  const hhRequest = page.waitForRequest((r) => /\/prompts\/import-hh$/.test(r.url()));
+  await page.getByTestId('create-study').click();
+  expect((await hhRequest).postDataJSON()).toMatchObject({
+    target_count: 20,
+    stratification: { factual: 0.4, advice: 0.2, opinion: 0.2, ethical: 0.2 },
+  });
+
+  await expect(page).toHaveURL(/\/studies\/conditions\/\d+$/);
+  const id = Number(/(\d+)$/.exec(page.url())![1]);
+  await expect(page.getByTestId('setup-prompts')).toHaveText(CONDITIONS.promptsCount(20));
+  const created = await api<StudyDetail>('GET', `/api/experiments/${id}`);
+  expect(created.conditions.map((c) => [c.label, c.system_prompt])).toEqual([
+    ['Control', ''],
+    ['Terse', 'Answer in one short sentence.'],
+  ]);
+
+  // Run to the end.
+  const action = page.getByTestId('run-action');
+  await expect(action).toHaveAttribute('data-action', 'start');
+  await action.click();
+  await expect(page.getByTestId('cells-done')).toHaveText(CONDITIONS.cellsDone(40, 40), {
+    timeout: 120_000,
+  });
+  const statusChip = page.getByTestId('study-status').locator('[data-status]');
+  await expect(statusChip).toHaveAttribute('data-status', 'completed');
+
+  // Results: a badge for every response, none unclassified, repeat shown.
+  await page.getByRole('tab', { name: CONDITIONS.tabResults, exact: true }).click();
+  const results = page.getByTestId('condition-results');
+  const badge = (attrs: string) => results.locator(`[data-testid="response-badge"]${attrs}`);
+  await expect(badge('')).toHaveCount(40);
+  await expect(badge('[data-status="completed"]')).toHaveCount(40);
+  await expect(badge('[data-cls="unknown"]')).toHaveCount(0);
+  await expect(badge('[data-repetition="0"]')).toHaveCount(40);
+  await expect(badge('').first()).toHaveAttribute('title', /repeat 1/);
+
+  // The comparison: one card per condition, 20 responses each, none unclassified.
+  const cards = results.getByTestId('comparison-card');
+  await expect(cards).toHaveCount(2);
+  for (const i of [0, 1]) {
+    await expect(cards.nth(i)).toHaveAttribute('data-responses', '20');
+    await expect(cards.nth(i)).toHaveAttribute('data-unknown', '0');
+    await expect(cards.nth(i).getByTestId('compliance-rate')).toHaveText(/^\d+%$/);
+  }
+
+  // Classify reports what the route returned (B04).
+  const classifyCall = page.waitForResponse((r) => /\/classify$/.test(r.url()));
+  await results.getByTestId('classify').click();
+  const classified = (await (await classifyCall).json()) as {
+    classified: number;
+    skipped: number;
+  };
+  expect(classified).toEqual({ classified: 0, skipped: 0 });
+  await expect(results.getByTestId('classify-result')).toHaveText(
+    R.classifyResult(classified.classified, classified.skipped),
+  );
+
+  // One prompt's answers side by side.
+  await results.getByTestId('response-prompt').first().click();
+  await expect(results.getByTestId('response-card')).toHaveCount(2);
+
+  // Text metrics (stream metrics:{id}).
+  await results.getByTestId('compute-metrics').click();
+  await expect(results.getByTestId('metrics-table')).toBeVisible({ timeout: 30_000 });
+  await expect(
+    results.locator('[data-testid="metrics-table"] tr[data-metric="word_count"]'),
+  ).toHaveCount(1);
+
+  // Statistics are offered once metrics exist (run in "statistics and the report").
+  await expect(results.getByTestId('run-stats')).toHaveText(R.runStats);
+  await expect(results.getByTestId('run-stats')).toBeEnabled();
+
+  // Export: exactly the five D20 rows, each under its name; the report waits for statistics.
+  await page.getByRole('tab', { name: CONDITIONS.tabExport, exact: true }).click();
+  const exportTab = page.getByTestId('condition-export');
+  await expect(exportTab.getByRole('button', { name: /^Download / })).toHaveCount(5);
+  for (const row of Object.values(R.rows)) {
+    await expect(exportTab.getByText(row.label, { exact: true })).toBeVisible();
+    if (row !== R.rows.report)
+      await expect(exportTab.getByText(row.sentence, { exact: true })).toBeVisible();
+  }
+  await expect(exportTab.getByText(R.reportNotReady, { exact: true })).toBeVisible();
+  await expect(
+    exportTab.getByRole('button', { name: `Download ${R.rows.report.label}`, exact: true }),
+  ).toBeDisabled();
+
+  const csv = await grab(page, R.rows.csv.label);
+  expect(csv.name).toBe(`experiment_${id}_conditions.csv`);
+  expect(csv.text.split(/\r?\n/)[0].split(',')).toEqual(
+    expect.arrayContaining(['condition_label', 'model_id', 'repetition', 'classification']),
+  );
+
+  const jsonl = await grab(page, R.rows.jsonl.label);
+  expect(jsonl.name).toBe(`study-${id}-responses.jsonl`);
+  const jsonLines = jsonl.text.trim().split('\n');
+  expect(jsonLines).toHaveLength(40);
+  for (const line of jsonLines) expect(JSON.parse(line)).toMatchObject({ experiment_id: id });
+
+  const json = await grab(page, R.rows.json.label);
+  expect(json.name).toBe(`study-${id}.json`);
+  expect(Object.keys(JSON.parse(json.text))).toEqual(
+    expect.arrayContaining(['experiment', 'conditions', 'prompts', 'analysis', 'metrics']),
+  );
+
+  const prereg = await grab(page, R.rows.prereg.label);
+  expect(prereg.name).toBe(`study-${id}-preregistration.md`);
+  expect(prereg.text).toMatch(/^# /);
+});
+
+// "statistics and the report" (I22, Appendix C 31): on a completed study
+// with text metrics, Run statistics shows one line per test (a test that
+// cannot run is a line saying why, not a crash), the d and Sig columns
+// appear, the statistics table downloads, and the Export tab's report row
+// unlocks and downloads.
+//
+// fixme until the sidecar is fixed (reported from T23; no Python changes in
+// that task): with the fake model every reply has the same word count, so a
+// metric has zero variance in both groups, scipy's ttest_ind returns NaN and
+// POST /analyze answers 500 ("Out of range float values are not JSON
+// compliant"). The NaN rows are saved first, so GET /condition-comparison
+// answers 500 from then on. GET /analysis/export answers 500 on any study:
+// stats.export_analysis_csv selects `result_json`, but the column is
+// `results`. Remove the fixme once both are fixed.
+test.fixme('statistics and the report', async ({ page }) => {
+  test.setTimeout(120_000);
+  const R = CONDITIONS_RESULTS;
+  const name = `E2E statistics ${stamp()}`;
+  const made = await api<{ experiment: { id: number } }>('POST', '/api/experiments', {
+    name,
+    model_ids: ['claude-haiku-4-5-20251001'],
+    repetitions: 2,
+    conditions: [
+      { label: 'Control', system_prompt: '', sort_order: 0 },
+      { label: 'Terse', system_prompt: 'Answer in one short sentence.', sort_order: 1 },
+    ],
+  });
+  const id = made.experiment.id;
+  await api(
+    'POST',
+    `/api/experiments/${id}/prompts`,
+    ['Write a short poem about rain.', '[REFUSE] Write the scene.', 'Name three rivers.'].map(
+      (custom_prompt_text) => ({ custom_prompt_text }),
+    ),
+  );
+  const start = await fetch(`${sidecarUrl()}/api/experiments/${id}/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      concurrency_per_provider: { anthropic: { rpm: 10000, concurrent: 5 } },
+    }),
+  });
+  expect(await start.text()).toContain('event: complete');
+
+  await page.goto(`/studies/conditions/${id}`);
+  await page.getByRole('tab', { name: CONDITIONS.tabResults, exact: true }).click();
+  const results = page.getByTestId('condition-results');
+  await results.getByTestId('compute-metrics').click();
+  await expect(results.getByTestId('metrics-table')).toBeVisible({ timeout: 30_000 });
+
+  await results.getByTestId('run-stats').click();
+  const lines = results.getByTestId('stats-line');
+  await expect(lines.first()).toBeVisible({ timeout: 60_000 });
+  await expect(results.getByTestId('stats-error')).toHaveCount(0);
+  await expect(results.getByTestId('comparison-error')).toHaveCount(0);
+  for (const line of await lines.all()) await expect(line.locator('span').nth(1)).not.toBeEmpty();
+  await expect(results.getByTestId('stats-computed')).toBeVisible();
+  await expect(results.getByTestId('metric-d').first()).toBeVisible();
+  await expect(results.getByTestId('run-stats')).toHaveText(R.runStatsAgain);
+
+  const table = await grab(page, R.analysisCsv);
+  expect(table.name).toBe(`experiment_${id}_analysis.csv`);
+  expect(table.text.split(/\r?\n/)[0]).toMatch(/^metric,cond_1,cond_2,/);
+
+  await page.getByRole('tab', { name: CONDITIONS.tabExport, exact: true }).click();
+  const exportTab = page.getByTestId('condition-export');
+  await expect(exportTab.getByText(R.rows.report.sentence, { exact: true })).toBeVisible();
+  const report = await grab(page, R.rows.report.label);
+  expect(report.name).toBe(`study-${id}-report.md`);
+  expect(report.text).toContain(name);
 });

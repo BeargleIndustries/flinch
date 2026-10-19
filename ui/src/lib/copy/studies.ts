@@ -1,7 +1,8 @@
 // Studies section copy (brief 8). The research-question readouts brief A.6
 // names live in screens.ts; everything else a Studies screen says lives here
-// (brief 5.7 rule 9) and is in COPY_FILES. T21 adds Framings (8.1); later
-// Studies tasks add their own objects.
+// (brief 5.7 rule 9) and is in COPY_FILES. T21 adds Framings (8.1), T22
+// Conditions (8.2) and T23 the study's Results, Raters and Export tabs;
+// later Studies tasks add their own objects.
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -260,9 +261,6 @@ export const CONDITIONS = {
   tabRatersWhy: 'Blinded rankings from rater models and from people.',
   tabExport: 'Export',
   tabExportWhy: 'The responses and the study design as files.',
-  tabLaterTitle: 'Not built yet',
-  tabLaterBody: (tab: string) =>
-    `The ${tab} tab arrives in the next update. The Run tab works now, and the study keeps its responses.`,
   deleteStudy: 'Delete this study',
   deleteConfirm: 'Delete it',
   deletedNotice: (name: string) => `Deleted ${name}`,
@@ -336,4 +334,190 @@ export const CONDITIONS = {
   sourcesAdd: 'Add prompts',
   sourcesAdding: 'Adding…',
   sourcesNeed: 'Pick probes, paste CSV or import from HH-RLHF.',
+} as const;
+
+/** A conditions study's Results, Raters and Export tabs (brief 8.2.3, D20, D21, I11, I22). */
+export const CONDITIONS_RESULTS = {
+  // Shared
+  noRate: 'n/a',
+  loadFailed: 'These results could not be loaded.',
+  reload: 'Load again',
+  runningNote: 'The study is running. The results fill in as cells land.',
+
+  // Results: comparison (8.2.3)
+  comparisonTitle: 'Condition comparison',
+  comparisonReadout:
+    'Every completed response, counted by badge, one card per condition. The rate counts Complied and Negotiated together.',
+  responsesCount: (n: number) => `${n} ${plural(n, 'response', 'responses')}`,
+  compliedOrNegotiated: 'Complied or Negotiated',
+  noResponses: 'No responses yet. Start the study on the Run tab.',
+  classify: (n: number) => `Classify ${n} unclassified ${plural(n, 'response', 'responses')}`,
+  classifyCheck: 'Check for unclassified responses',
+  classifyWhy:
+    'Runs the classifier over completed responses that have no badge yet, such as rows from an older version.',
+  classifying: 'Classifying…',
+  classifyResult: (classified: number, skipped: number) =>
+    `Classified ${classified} ${plural(classified, 'response', 'responses')}. Skipped ${skipped} whose prompt has no text.`,
+
+  // Results: text metrics and statistics (8.2.3, I22, B31)
+  metricsTitle: 'Text metrics',
+  computeMetrics: 'Compute text metrics',
+  measureNew: 'Measure new responses',
+  measureNewWhy: 'Measures any completed response that has no metrics yet.',
+  metricsStream: (name: string) => `Measuring the responses in ${name}`,
+  metricsLabel: 'Measured',
+  metricsNothing: 'Every completed response already has its metrics.',
+  metricsStopped: 'Stopped. The responses measured so far are saved.',
+  metricsNeedResponses: 'Metrics need completed responses.',
+  colMetric: 'Metric',
+  colD: 'd',
+  colSig: 'Sig',
+  colDWhy: "The largest Cohen's d between any two conditions.",
+  colSigWhy: 'Stars from the smallest FDR-corrected p value between any two conditions.',
+  legend: '* p < .05, ** p < .01, *** p < .001. d: small 0.2, medium 0.5, large 0.8.',
+  runStats: 'Run statistics',
+  runStatsAgain: 'Run statistics again',
+  runningStats: 'Running statistics…',
+  statsNeedExtras:
+    'Statistics need the experiment extras (numpy, scipy, krippendorff) on the sidecar.',
+  statsTitle: 'Statistics',
+  statsComputed: (date: string) => `Statistics computed ${date}`,
+  statsFailed: (msg: string) => `Statistics did not run: ${msg}`,
+  statsErrorCount: (n: number) =>
+    `${n} ${plural(n, 'test', 'tests')} could not run. The reasons are listed below.`,
+  nothingToCompare: 'Nothing to compare yet',
+  pairsDone: (n: number) => `${n} ${plural(n, 'comparison', 'comparisons')}`,
+  winRatesDone: 'From the AI ratings',
+  powerLine: (power: number, need: number) =>
+    `Power ${power.toFixed(2)}; ${need} per group for d = 0.3`,
+  aiRaters: 'AI raters',
+  humanRaters: 'people',
+  alphaPart: (who: string, alpha: number) => `${who}: alpha ${alpha.toFixed(2)}`,
+  moreErrors: (n: number) => ` (and ${n} more)`,
+  analysisCsv: 'Download the statistics table (CSV)',
+  analysisCsvSentence:
+    "One row per metric and pair of conditions: means, Cohen's d with its interval, Mann-Whitney U and corrected p values.",
+
+  // Results: responses (8.2.3)
+  responsesTitle: 'Responses',
+  responsesReadout:
+    'One badge per response, by prompt, grouped by condition. Pick a prompt to read its answers side by side.',
+  searchPrompts: 'Search prompts',
+  noPromptMatch: 'No prompt matches.',
+  pickPrompt: 'Pick a prompt to read its responses.',
+  readingResponses: 'Loading the responses…',
+  badgeTitle: (condition: string, model: string, repeat: number, word: string) =>
+    `${condition} · ${model} · repeat ${repeat} · ${word}`,
+  responseHead: (model: string, repeat: number) => `${model} · repeat ${repeat}`,
+  failedLine: (msg: string) => `Failed: ${msg || 'no reason given'}`,
+  notRunYet: 'Not run yet',
+  showAll: 'Show all',
+  showLess: 'Show less',
+  emptyText: 'The model sent no text.',
+  limitLine: 'Showing the first 1,000 responses for this prompt. Download the CSV for all of them.',
+
+  // Raters: AI (8.2.3, B14)
+  aiTitle: 'AI raters',
+  raterN: (n: number) => `Rater ${n}`,
+  addRater: 'Add rater',
+  removeRater: (id: string) => `Remove ${id || 'this rater'}`,
+  rate: 'Rate responses',
+  rating: 'Rating…',
+  rateStream: (name: string) => `Rating the responses in ${name}`,
+  rateLabel: 'This rating run',
+  rateNeedsCompleted: 'Rating needs completed responses under every condition.',
+  rateNeedsTwo: 'Rating compares conditions, so the study needs at least two.',
+  rateUniqueRaters: 'Each rater model can be added once.',
+  rateDone: (n: number) => `Rated ${n} prompt and model ${plural(n, 'pair', 'pairs')}.`,
+  rateNothing: 'Every prompt already has a rating from these raters.',
+  rateStopped: 'Stopped. The ratings made so far are saved.',
+  rateFailed: (n: number) => `${n} ${plural(n, 'rating', 'ratings')} failed.`,
+  winTitle: 'Win rates',
+  winReadout:
+    'How often each condition was ranked first, and its average rank, over every completed rating.',
+  colCondition: 'Condition',
+  colFirst: 'First place',
+  colMeanRank: 'Mean rank',
+  colRated: 'Rated',
+  winCell: (wins: number, rated: number) => `${wins} of ${rated}`,
+  agreement: (agreed: number, shared: number) =>
+    `Raters picked the same winner on ${agreed} of ${shared} ${plural(shared, 'prompt', 'prompts')} rated by more than one rater.`,
+  agreementNone: 'Each prompt has one rater so far, so there is no agreement to measure.',
+  ratingsTitle: 'Ratings',
+  colRater: 'Rater',
+  colPrompt: 'Prompt',
+  colModel: 'Model',
+  colStatus: 'Status',
+  noRatings: 'No ratings yet.',
+  rankOf: (rank: number) => `#${rank}`,
+  ratingsMore: (n: number) => `Showing the first 200 of ${n} ratings.`,
+
+  // Raters: Prolific (8.2.3, I11, B14)
+  humanTitle: 'Human raters (Prolific)',
+  prolificNotAllowed: (n: number) =>
+    `Prolific tasks compare two or three conditions. This study has ${n}.`,
+  prolificPrompts: 'Prompts to sample',
+  prolificPromptsHint: 'Prompts with a completed first repeat under every condition.',
+  prolificModels: 'Models',
+  prolificRaters: 'Raters per task',
+  prolificBatch: 'Batch id',
+  prolificBatchPlaceholder: 'Optional. Made from the date when empty.',
+  makeTasks: 'Make tasks',
+  making: 'Making…',
+  prolificResult: (tasks: number, prompts: number, batch: string) =>
+    `${tasks} new ${plural(tasks, 'task', 'tasks')} for ${prompts} ${plural(prompts, 'prompt', 'prompts')} in batch ${batch}.`,
+  prolificNoneNew: 'These prompts already have their tasks, so nothing new was made.',
+  prolificPromptsBad: 'Prompts to sample is a whole number from 1.',
+  prolificRatersBad: 'Raters per task is a whole number from 1.',
+  prolificModelsBad: 'Tick at least one model.',
+  taskCsv: 'Download the task CSV',
+  taskCsvSentence: 'Each download lists the tasks not downloaded before and marks them exported.',
+  pasteResults: 'Paste the results CSV',
+  pasteHint: 'Columns: tracking_id, rater_id, rank_a, rank_b, rank_c, reasoning, completion_time_s',
+  chooseFile: 'Read a CSV file…',
+  fileRead: (name: string) => `Read ${name}`,
+  fileFailed: 'That file could not be read.',
+  importResults: 'Import results',
+  importing: 'Importing…',
+  importResult: (imported: number, skipped: number, errors: number) =>
+    `${imported} imported, ${skipped} already there, ${errors} ${plural(errors, 'error', 'errors')}`,
+  importNeedsText: 'Paste the results CSV or read a file first.',
+  tasksTitle: 'Tasks',
+  colBatch: 'Batch',
+  colTracking: 'Tracking id',
+  noTasks: 'No tasks yet.',
+  tasksMore: (n: number) => `Showing the first 200 of ${n} tasks.`,
+
+  // Export (D20)
+  exportTitle: 'Files',
+  dataGroup: 'Data',
+  documentsGroup: 'Documents',
+  exportReadout:
+    'The responses and the study design as files. The Prolific task CSV is on the Raters tab and the statistics table on the Results tab.',
+  rows: {
+    csv: {
+      label: 'Responses (CSV)',
+      sentence:
+        'One row per response with its condition, model, repeat, classification and text metrics.',
+    },
+    jsonl: {
+      label: 'Responses (JSONL)',
+      sentence: 'One JSON object per response, every column, for scripts.',
+    },
+    json: {
+      label: 'Everything (JSON)',
+      sentence:
+        "The study's settings, conditions, prompts, progress, ratings, human evaluations, analysis and metrics. Response text is in the CSV and JSONL files.",
+    },
+    prereg: {
+      label: 'Preregistration (Markdown)',
+      sentence: "A preregistration document built from this study's design, for OSF or similar.",
+    },
+    report: {
+      label: 'Report (Markdown)',
+      sentence: 'Methods and results written up from the analysis.',
+    },
+  },
+  reportNotReady: 'Finish the study and run statistics first.',
+  exportEmpty: 'The sidecar sent an empty document.',
 } as const;

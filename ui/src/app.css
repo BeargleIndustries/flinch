@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens (brief 5.1). Values are RGB channels so Tailwind can apply
+ * alpha: tailwind.config.js maps each one as rgb(var(--name) / <alpha-value>).
+ * Dark only for now; a light theme later redefines these under
+ * :root[data-theme='light'] without touching components.
+ */
+:root {
+  --bg: 9 9 11; /* zinc-950, window */
+  --surface: 24 24 27; /* zinc-900, header, cards, drawer */
+  --surface-2: 39 39 42; /* zinc-800, hover rows */
+  --border: 39 39 42; /* zinc-800 */
+  --border-strong: 63 63 70; /* zinc-700, inputs */
+  --text: 244 244 245; /* zinc-100 */
+  --text-2: 212 212 216; /* zinc-300 */
+  --text-3: 161 161 170; /* zinc-400 */
+  --text-4: 113 113 122; /* zinc-500, labels, hints */
+  --accent: 99 102 241; /* indigo-500, primary buttons */
+  --accent-hover: 129 140 248; /* indigo-400 */
+  --accent-soft: 49 46 129; /* indigo-900, selected rows */
+  --accent-text: 165 180 252; /* indigo-300 */
+  --brand-dot: 220 38 38; /* Flinch red #dc2626, brand mark only */
+  --danger: 239 68 68; /* red-500 */
+  --danger-soft: 69 10 10; /* red-950 */
+  --ok: 52 211 153; /* emerald-400 */
+  --warn: 251 191 36; /* amber-400 */
+  --cls-refused: 249 115 22; /* orange-500 */
+  --cls-collapsed: 253 186 116; /* orange-300 */
+  --cls-negotiated: 125 211 252; /* sky-300 */
+  --cls-complied: 59 130 246; /* blue-500 */
+  --cls-unknown: 113 113 122; /* zinc-500 */
+
+  color-scheme: dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}

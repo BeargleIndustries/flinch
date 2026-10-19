@@ -21,7 +21,7 @@
     }
   },
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui/legacy"
   },
   "bundle": {
     "active": true,

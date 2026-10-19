@@ -54,6 +54,16 @@ describe('status store', () => {
     for (let i = 0; i < 8; i++) status.error(`e${i}`);
     expect(status.errors.map((e) => e.message)).toEqual(['e3', 'e4', 'e5', 'e6', 'e7']);
   });
+
+  it('keeps one notice; a newer notice survives clearing an older id', () => {
+    const first = status.note('Loaded 3 probes');
+    expect(status.notice).toMatchObject({ id: first, message: 'Loaded 3 probes' });
+    const second = status.note('Deleted 1.');
+    status.clearNotice(first);
+    expect(status.notice).toMatchObject({ id: second, message: 'Deleted 1.' });
+    status.clearNotice(second);
+    expect(status.notice).toBeNull();
+  });
 });
 
 describe('status busy', () => {

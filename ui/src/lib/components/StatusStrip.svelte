@@ -2,7 +2,8 @@
   Status strip (brief 5.4, 5.6, 6.4): fixed to the bottom of the window, 36px,
   z-45. Left, the newest running job from the status store: its label, counts,
   a "Show" link back to the screen that started it, and "Cancel" when it can
-  stop. Right, the newest error with a "Details" disclosure and "Dismiss".
+  stop; with no job, the latest one-line notice ("Loaded 12 probes"), which
+  clears itself after 6 s. Right, the newest error with a "Details" disclosure and "Dismiss".
   Errors dismiss themselves after 8 s unless the pointer is over them or the
   details are open. The strip registers its rect so popups never cover it.
 -->
@@ -12,6 +13,7 @@
   import { progressLine, progressPct } from './stream-progress';
 
   const ERROR_MS = 8000;
+  const NOTICE_MS = 6000;
 
   let strip: HTMLDivElement | null = $state(null);
   let hovered = $state(false);
@@ -20,6 +22,7 @@
 
   const job = $derived(status.current);
   const err = $derived(status.lastError);
+  const notice = $derived(status.notice);
   const uid = $props.id();
 
   $effect(() => {
@@ -38,6 +41,13 @@
     if (!err || hovered || detailsOpen) return;
     const id = err.id;
     const t = setTimeout(() => status.dismissError(id), ERROR_MS);
+    return () => clearTimeout(t);
+  });
+
+  $effect(() => {
+    if (!notice) return;
+    const id = notice.id;
+    const t = setTimeout(() => status.clearNotice(id), NOTICE_MS);
     return () => clearTimeout(t);
   });
 
@@ -96,6 +106,9 @@
           {cancelling ? 'Cancelling…' : 'Cancel'}
         </button>
       {/if}
+    {:else if notice}
+      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" aria-hidden="true"></span>
+      <span class="truncate text-text2" data-testid="status-notice">{notice.message}</span>
     {/if}
   </div>
 

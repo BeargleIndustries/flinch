@@ -14,7 +14,7 @@
   import { friendlyError } from '$lib/errors';
   import { truncate } from '$lib/session';
   import { status } from '$lib/stores/status.svelte';
-  import { sessions } from './sessions.svelte';
+  import { session } from '$lib/stores/session.svelte';
   import { shell } from './shell.svelte';
 
   const MAX = 28;
@@ -23,20 +23,20 @@
   let root: HTMLDivElement | null = $state(null);
   const uid = $props.id();
 
-  const current = $derived(sessions.current);
+  const current = $derived(session.current);
 
   onMount(() => {
-    if (!sessions.loaded) void sessions.load();
+    if (!session.loaded) void session.load();
   });
 
   function toggle() {
     open = !open;
     // Run counts move while you work; read them again each time the menu opens.
-    if (open) void sessions.load();
+    if (open) void session.load();
   }
 
   function pick(id: number) {
-    sessions.select(id);
+    session.select(id);
     open = false;
   }
 
@@ -48,7 +48,7 @@
   async function deleteCurrent() {
     if (!current) return;
     try {
-      await sessions.remove(current.id);
+      await session.remove(current.id);
       open = false;
     } catch (e) {
       const f = friendlyError(e);
@@ -109,7 +109,7 @@
       </button>
       <div class="my-1 border-t border-border" role="separator"></div>
       <div class="max-h-72 overflow-y-auto">
-        {#each sessions.list as s (s.id)}
+        {#each session.list as s (s.id)}
           {@const on = s.id === current?.id}
           <button
             type="button"
@@ -127,7 +127,7 @@
           </button>
         {:else}
           <p class="px-3 py-1.5 text-xs text-text4">
-            {sessions.loaded ? SHELL.sessionsEmpty : SHELL.sessionsLoading}
+            {session.loaded ? SHELL.sessionsEmpty : SHELL.sessionsLoading}
           </p>
         {/each}
       </div>

@@ -12,10 +12,10 @@
   import SessionSwitcher from './SessionSwitcher.svelte';
   import SidecarChip from './SidecarChip.svelte';
   import TabStrip from './TabStrip.svelte';
-  import { sessions } from './sessions.svelte';
+  import { session } from '$lib/stores/session.svelte';
   import { shell } from './shell.svelte';
 
-  const hasSession = $derived(sessions.current !== null);
+  const hasSession = $derived(session.current !== null);
   // The dot asks for a key until there is one or Settings has been opened (brief 6.1 item 5).
   const keyDot = $derived(capabilities.health?.keys_set === 0 && !shell.settingsSeen);
 

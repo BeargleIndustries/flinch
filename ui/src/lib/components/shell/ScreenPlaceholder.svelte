@@ -8,7 +8,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { SHELL } from '$lib/copy/shell';
   import NoSession from './NoSession.svelte';
-  import { sessions } from './sessions.svelte';
+  import { session } from '$lib/stores/session.svelte';
 
   interface Props {
     title: string;
@@ -26,7 +26,7 @@
     {question}
   </p>
   <div class="mt-6 rounded-xl border border-dashed border-border">
-    {#if needsSession && sessions.loaded && !sessions.current}
+    {#if needsSession && session.loaded && !session.current}
       <NoSession />
     {:else}
       <EmptyState title={SHELL.notBuiltTitle} body={SHELL.notBuiltBody} />

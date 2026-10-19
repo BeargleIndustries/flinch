@@ -9,9 +9,10 @@
   topmost layer). The drawer, menus and dialogs close themselves on Escape.
   The Probe keys (S, P, K, N, R, Up, Down) belong to T17's shortcuts.ts.
 
-  Mount points for later tasks: T16 puts ProbeRail inside RailFrame and the
-  NewSessionDialog on `shell.newSessionOpen`; T20 puts the ExportDialog on
-  `shell.exportOpen`; T19 fills components/settings/SettingsSections.svelte.
+  ProbeRail renders the rail inside RailFrame; NewSessionDialog opens on
+  `shell.newSessionOpen` (T16). Mount points for later tasks: T20 puts the
+  ExportDialog on `shell.exportOpen`; T19 fills
+  components/settings/SettingsSections.svelte.
 -->
 <script lang="ts">
   import '../app.css';
@@ -23,11 +24,10 @@
   import SettingsSections from '$lib/components/settings/SettingsSections.svelte';
   import CrashBanner from '$lib/components/shell/CrashBanner.svelte';
   import Header from '$lib/components/shell/Header.svelte';
-  import RailFrame from '$lib/components/shell/RailFrame.svelte';
+  import NewSessionDialog from '$lib/components/dialogs/NewSessionDialog.svelte';
+  import ProbeRail from '$lib/components/rail/ProbeRail.svelte';
   import ShortcutsOverlay from '$lib/components/shell/ShortcutsOverlay.svelte';
-  import { sessions } from '$lib/components/shell/sessions.svelte';
   import { shell } from '$lib/components/shell/shell.svelte';
-  import { SHELL } from '$lib/copy/shell';
   import { capabilities } from '$lib/stores/capabilities.svelte';
   import { status } from '$lib/stores/status.svelte';
 
@@ -88,11 +88,7 @@
     <CrashBanner />
     <div class="flex min-h-0 flex-1">
       {#if railVisible}
-        <RailFrame>
-          {#if sessions.loaded && !sessions.current}
-            <p class="px-3 py-4 text-xs leading-relaxed text-text4">{SHELL.railNoSession}</p>
-          {/if}
-        </RailFrame>
+        <ProbeRail />
       {/if}
       <main class="min-w-0 flex-1 overflow-y-auto p-4" data-testid="workspace">
         {@render children()}
@@ -104,5 +100,6 @@
     <SettingsSections />
   </SettingsDrawer>
   <ShortcutsOverlay open={shell.shortcutsOpen} onClose={() => (shell.shortcutsOpen = false)} />
+  <NewSessionDialog open={shell.newSessionOpen} onClose={() => (shell.newSessionOpen = false)} />
   <FirstTimeTip />
 {/if}

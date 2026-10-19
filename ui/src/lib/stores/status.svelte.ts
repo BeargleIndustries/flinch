@@ -30,9 +30,16 @@ export interface StatusError {
   details: string | null;
 }
 
+/** A one-line result ("Loaded 12 probes"), shown when no job is running. */
+export interface StatusNotice {
+  id: number;
+  message: string;
+}
+
 class StatusStore {
   jobs = $state<Record<string, ProgressEntry>>({});
   errors = $state<StatusError[]>([]);
+  notice = $state<StatusNotice | null>(null);
   /** Requests in flight that a screen marked with `track`. */
   pending = $state(0);
   #nextError = 1;
@@ -81,6 +88,18 @@ class StatusStore {
 
   dismissError(id: number): void {
     this.errors = this.errors.filter((e) => e.id !== id);
+  }
+
+  /** Post a one-line result; it replaces the previous one. Returns its id for `clearNotice`. */
+  note(message: string): number {
+    const id = this.#nextError++;
+    this.notice = { id, message };
+    return id;
+  }
+
+  /** Clears the notice when it is still `id` (a newer one stays). */
+  clearNotice(id: number): void {
+    if (this.notice?.id === id) this.notice = null;
   }
 
   /** Whether a tracked request is pending (the root's data-busy). */

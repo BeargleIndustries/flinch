@@ -76,6 +76,15 @@ class SessionListItem(Session):
     run_count: int
 
 
+# The decoded coach suggestion (CoachSuggestion.model_dump(), stored as JSON).
+class CoachSuggestion(Shape):
+    pattern_detected: str
+    move_suggested: str
+    pushback_draft: str
+    confidence: float
+    reasoning: str
+
+
 # POST /api/sessions/{id}/run, POST /api/runs/{id}/pushback, GET /api/runs/{id}
 class Run(Shape):
     id: int
@@ -84,7 +93,7 @@ class Run(Shape):
     target_model: str
     initial_response: str | None
     initial_classification: str | None
-    coach_suggestion: str | None
+    coach_suggestion: CoachSuggestion | None
     coach_pattern_detected: str | None
     coach_move_suggested: str | None
     pushback_text: str | None

@@ -110,18 +110,15 @@ describe('coach draft and the D13 source rule', () => {
     pushback_draft: 'What specifically about this is problematic?',
   };
 
-  it('reads the suggestion as an object or a JSON string', () => {
+  it('reads the decoded suggestion object', () => {
     expect(coachSuggestion({ coach_suggestion: suggestion })?.move_suggested).toBe(
       'specificity_challenge',
     );
-    expect(coachDraft({ coach_suggestion: JSON.stringify(suggestion) })).toBe(
-      suggestion.pushback_draft,
-    );
+    expect(coachDraft({ coach_suggestion: suggestion })).toBe(suggestion.pushback_draft);
   });
 
-  it('is empty without a suggestion, with bad JSON or with a blank draft', () => {
+  it('is empty without a suggestion or with a blank draft', () => {
     expect(coachSuggestion({ coach_suggestion: null })).toBeNull();
-    expect(coachSuggestion({ coach_suggestion: '{nope' })).toBeNull();
     expect(coachSuggestion({ coach_suggestion: { pushback_draft: '  ' } })).toBeNull();
     expect(coachDraft(null)).toBe('');
   });

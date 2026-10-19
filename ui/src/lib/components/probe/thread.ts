@@ -2,7 +2,7 @@
 // mapping, which badge is editable, the coach's draft and the pushback source
 // rule (D13), the readout and teach-hint keys, and the events that open a
 // saved run in the machine. No Svelte, no requests; thread.test.ts covers it.
-import type { Run, RunTurn, UpdateClassificationBody } from '$lib/api/types';
+import type { Run, RunCoachSuggestion, RunTurn, UpdateClassificationBody } from '$lib/api/types';
 import { latestClass, type MachineEvent, type MachineRun } from '$lib/probe-machine';
 
 export interface ThreadItem {
@@ -82,22 +82,14 @@ export interface CoachSuggestion {
 
 /**
  * The coach's suggestion on a run. GET /api/runs/{id} and the run routes
- * return it decoded (an object, `flinch/db.py` get_run); types.ts names it a
- * string, so a JSON string is read too. Null when absent or without a draft.
+ * return it decoded (an object, `flinch/db.py` get_run). Null when absent or
+ * without a draft.
  */
 export function coachSuggestion(
-  run: { coach_suggestion?: unknown } | null,
+  run: { coach_suggestion?: Partial<RunCoachSuggestion> | null } | null,
 ): CoachSuggestion | null {
-  let raw: unknown = run?.coach_suggestion ?? null;
-  if (typeof raw === 'string') {
-    try {
-      raw = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-  if (!raw || typeof raw !== 'object') return null;
-  const o = raw as Record<string, unknown>;
+  const o = run?.coach_suggestion;
+  if (!o || typeof o !== 'object') return null;
   const draft = typeof o.pushback_draft === 'string' ? o.pushback_draft : '';
   if (draft.trim() === '') return null;
   return {
@@ -108,7 +100,7 @@ export function coachSuggestion(
 }
 
 /** The coach's draft text, or '' with no suggestion. */
-export function coachDraft(run: { coach_suggestion?: unknown } | null): string {
+export function coachDraft(run: Parameters<typeof coachSuggestion>[0]): string {
   return coachSuggestion(run)?.pushback_draft ?? '';
 }
 

@@ -73,6 +73,15 @@ export interface SessionListItem extends Session {
   run_count: number;
 }
 
+/** The decoded coach suggestion on a run (CoachSuggestion.model_dump()). */
+export interface RunCoachSuggestion {
+  pattern_detected: string;
+  move_suggested: string;
+  pushback_draft: string;
+  confidence: number;
+  reasoning: string;
+}
+
 /** POST /api/sessions/{id}/run, POST /api/runs/{id}/pushback, GET /api/runs/{id} */
 export interface Run {
   id: number;
@@ -81,7 +90,7 @@ export interface Run {
   target_model: string;
   initial_response: string | null;
   initial_classification: string | null;
-  coach_suggestion: string | null;
+  coach_suggestion: RunCoachSuggestion | null;
   coach_pattern_detected: string | null;
   coach_move_suggested: string | null;
   pushback_text: string | null;

@@ -12,9 +12,36 @@ from flinch.coach import NARRATIVE_ENGINE_SYSTEM_PROMPT, Coach, NarrativeCoach
 from flinch.llm import LLMBackend
 from flinch.models import Classification, PushbackSource
 from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
-from flinch.target import BaseModelTarget, TargetModel
+from flinch.target import EMPTY_RESPONSE, BaseModelTarget, TargetModel
 
 logger = logging.getLogger(__name__)
+
+# Stored turn roles, mapped to the roles a target conversation uses (I6).
+_RUN_TURN_ROLES = {"probe": "user", "pushback": "user", "user": "user",
+                   "response": "assistant", "assistant": "assistant"}
+_SEQUENCE_TURN_ROLES = {"coach": "user", "probe": "user", "target": "assistant"}
+
+
+def _target_history(turns: list[dict], roles: dict[str, str]) -> list[dict[str, str]]:
+    """Stored turns, in order, as user/assistant messages for `TargetModel.seed`.
+
+    An empty provider reply is never fed back as an assistant turn.
+    """
+    history = []
+    for t in turns:
+        role = roles.get(t["role"])
+        if role is None or (role == "assistant" and t["content"] in (EMPTY_RESPONSE, "", None)):
+            continue
+        history.append({"role": role, "content": t["content"]})
+    return history
+
+
+def _after_pushback(classification: Classification, run: dict) -> Classification:
+    """Complied after pushback on a run first Refused is stored as Collapsed (I7)."""
+    if (classification == Classification.COMPLIED
+            and run.get("initial_classification") == Classification.REFUSED.value):
+        return Classification.COLLAPSED
+    return classification
 
 
 class Runner:
@@ -22,7 +49,6 @@ class Runner:
         self._conn = conn
         self._client = client  # Keep for ClaudeTarget backward compat
         self._backend = backend  # For classifier + coach
-        self._targets: dict[int, TargetModel] = {}  # session_id -> target
 
     @property
     def backend(self) -> LLMBackend | None:
@@ -36,17 +62,15 @@ class Runner:
         """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
         return flinch_target.make_target(model_name, system_prompt, anthropic_client=self._client)
 
-    def _get_target(self, session_id: int) -> TargetModel:
-        """Get or create a target model for a session."""
-        if session_id not in self._targets:
-            session = db.get_session(self._conn, session_id)
-            if session is None:
-                raise ValueError(f"Session {session_id} not found")
-            self._targets[session_id] = self._make_target(
-                session["target_model"],
-                session.get("system_prompt", ""),
-            )
-        return self._targets[session_id]
+    def _target_for_run(self, run: dict) -> TargetModel:
+        """A fresh target for the run's own model, seeded with its stored conversation (I6)."""
+        session = db.get_session(self._conn, run["session_id"]) or {}
+        model = run.get("target_model") or session.get("target_model")
+        if not model:
+            raise ValueError(f"Run {run['id']} has no target model")
+        target = self._make_target(model, session.get("system_prompt") or "")
+        target.seed(_target_history(db.list_run_turns(self._conn, run["id"]), _RUN_TURN_ROLES))
+        return target
 
     def _get_coach(self, session_id: int) -> Coach:
         """Create a coach for a session, using the configured backend provider."""
@@ -89,8 +113,8 @@ class Runner:
         if session is None:
             raise ValueError(f"Session {session_id} not found")
 
-        target = self._get_target(session_id)
-        target.reset()  # Fresh conversation for each probe
+        # A fresh target per run, never shared across runs (I6)
+        target = self._make_target(session["target_model"], session.get("system_prompt") or "")
 
         # Send probe
         response_text = (await target.send(probe["prompt_text"])).text
@@ -134,14 +158,15 @@ class Runner:
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
-        target = self._get_target(run["session_id"])
-
-        # Send pushback in same conversation
+        # Rebuild the run's conversation from the database, then continue it
+        target = self._target_for_run(run)
         response_text = (await target.reply(pushback_text)).text
 
         # Classify the response after pushback
         probe = db.get_probe(self._conn, run["probe_id"])
-        classification = await classify(response_text, probe["prompt_text"], self._backend)
+        classification = _after_pushback(
+            await classify(response_text, probe["prompt_text"], self._backend), run
+        )
 
         update_fields = {
             "pushback_text": pushback_text,
@@ -165,12 +190,14 @@ class Runner:
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
-        target = self._get_target(run["session_id"])
-        # Don't reset — continue the existing conversation
+        # Rebuild the run's conversation from the database, then continue it
+        target = self._target_for_run(run)
         response_text = (await target.reply(text)).text
 
         probe = db.get_probe(self._conn, run["probe_id"])
-        classification = await classify(response_text, probe["prompt_text"], self._backend)
+        classification = _after_pushback(
+            await classify(response_text, probe["prompt_text"], self._backend), run
+        )
 
         # Overwrite final_response/final_classification with the latest
         db.update_run(self._conn, run_id,
@@ -186,7 +213,12 @@ class Runner:
         return db.get_run(self._conn, run_id)
 
     async def run_batch(self, session_id: int, probe_ids: list[int], delay_ms: int = 2000):
-        """Async generator that yields SSE events as each probe completes."""
+        """Async generator that yields SSE events as each probe completes.
+
+        Cancel is the batch row's `cancelled` status, read before every probe, so
+        it does not depend on the client or on runner state. A generator closed
+        early (client disconnect, `aclose()`) also leaves the row `cancelled`.
+        """
         session = db.get_session(self._conn, session_id)
         if not session:
             raise ValueError("Session not found")
@@ -195,60 +227,82 @@ class Runner:
         total = len(probe_ids)
         completed = 0
         failed = 0
+        cancelled = False
+        finished = False
 
-        for probe_id in probe_ids:
-            try:
-                run = await self.send_probe(session_id, probe_id)
-                completed += 1
-                db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+        try:
+            yield {"event": "start", "data": {"batch_id": batch_id, "total": total}}
 
-                probe = db.get_probe(self._conn, probe_id)
-                yield {
-                    "event": "progress",
-                    "data": {
-                        "batch_id": batch_id,
-                        "probe_id": probe_id,
-                        "probe_name": probe["name"] if probe else f"probe-{probe_id}",
-                        "run_id": run["id"],
-                        "classification": run.get("initial_classification", "unknown"),
-                        "completed": completed,
-                        "total": total,
-                    },
-                }
-            except Exception as e:
-                failed += 1
-                completed += 1
-                db.update_batch_run(self._conn, batch_id, probes_completed=completed)
-                yield {
-                    "event": "error",
-                    "data": {
-                        "probe_id": probe_id,
-                        "error": str(e),
-                        "completed": completed,
-                        "total": total,
-                    },
-                }
+            for probe_id in probe_ids:
+                row = db.get_batch_run(self._conn, batch_id)
+                if row and row["status"] == "cancelled":
+                    cancelled = True
+                    break
+                try:
+                    run = await self.send_probe(session_id, probe_id)
+                    completed += 1
+                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
 
-            # Delay between probes (skip after last one)
-            if completed < total:
-                await asyncio.sleep(delay_ms / 1000)
+                    probe = db.get_probe(self._conn, probe_id)
+                    yield {
+                        "event": "progress",
+                        "data": {
+                            "batch_id": batch_id,
+                            "probe_id": probe_id,
+                            "probe_name": probe["name"] if probe else f"probe-{probe_id}",
+                            "run_id": run["id"],
+                            "classification": run.get("initial_classification", "unknown"),
+                            "completed": completed,
+                            "total": total,
+                        },
+                    }
+                except Exception as e:
+                    failed += 1
+                    completed += 1
+                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+                    yield {
+                        "event": "error",
+                        "data": {
+                            "batch_id": batch_id,
+                            "probe_id": probe_id,
+                            "error": str(e),
+                            "completed": completed,
+                            "total": total,
+                        },
+                    }
 
-        db.update_batch_run(
-            self._conn,
-            batch_id,
-            status="complete",
-            probes_completed=completed,
-            completed_at=datetime.now(UTC).isoformat(),
-        )
-        yield {
-            "event": "complete",
-            "data": {
-                "batch_id": batch_id,
-                "total": total,
-                "completed": completed,
-                "failed": failed,
-            },
-        }
+                # Delay between probes (skip after last one)
+                if completed < total:
+                    await asyncio.sleep(delay_ms / 1000)
+
+            db.update_batch_run(
+                self._conn,
+                batch_id,
+                status="cancelled" if cancelled else "complete",
+                probes_completed=completed,
+                completed_at=datetime.now(UTC).isoformat(),
+            )
+            finished = True
+            yield {
+                "event": "complete",
+                "data": {
+                    "batch_id": batch_id,
+                    "total": total,
+                    "completed": completed,
+                    "failed": failed,
+                    "cancelled": cancelled,
+                },
+            }
+        finally:
+            if not finished:
+                # Closed early. A synchronous write: there is no await here to cancel.
+                db.update_batch_run(
+                    self._conn,
+                    batch_id,
+                    status="cancelled",
+                    probes_completed=completed,
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
 
     async def run_batch_conditions(
         self,
@@ -388,13 +442,15 @@ class Runner:
         return db.get_run(self._conn, run_id)
 
     def _get_sequence_target(self, session_id: int, use_narrative_engine: bool) -> TargetModel:
-        """Get a target for a sequence, optionally with narrative engine system prompt."""
-        if use_narrative_engine:
-            session = db.get_session(self._conn, session_id)
-            if session is None:
-                raise ValueError(f"Session {session_id} not found")
-            return self._make_target(session["target_model"], NARRATIVE_ENGINE_SYSTEM_PROMPT)
-        return self._get_target(session_id)
+        """A fresh target for a sequence, optionally with the narrative engine system prompt."""
+        session = db.get_session(self._conn, session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        system_prompt = (
+            NARRATIVE_ENGINE_SYSTEM_PROMPT if use_narrative_engine
+            else session.get("system_prompt") or ""
+        )
+        return self._make_target(session["target_model"], system_prompt)
 
     # ── Narrative Momentum Methods ─────────────────────────────────
 
@@ -465,16 +521,14 @@ class Runner:
         coach_turn_count = sum(1 for t in existing_turns if t["role"] == "coach") + 1
         warmup_text = await coach.generate_warmup_turn(conversation_history, coach_turn_count, warmup_count)
 
-        # Get or create target (fresh for first turn)
+        # Fresh target, seeded with this run's stored turns (I6)
         target = self._get_sequence_target(seq["session_id"], use_ne)
-        if not existing_turns:
-            target.reset()
-
-        # Send warmup to target
-        if not existing_turns:
-            response_text = (await target.send(warmup_text)).text
-        else:
+        target_history = _target_history(existing_turns, _SEQUENCE_TURN_ROLES)
+        if target_history:
+            target.seed(target_history)
             response_text = (await target.reply(warmup_text)).text
+        else:
+            response_text = (await target.send(warmup_text)).text
 
         # Classify the response (use warmup text as probe_text context for classification)
         classification = await classify(response_text, warmup_text, self._backend)
@@ -522,7 +576,11 @@ class Runner:
             elif t["role"] == "target":
                 conversation_history.append({"role": "assistant", "content": t["content"]})
 
+        # Fresh target, seeded with this run's stored turns (I6)
         target = self._get_sequence_target(seq["session_id"], use_ne)
+        target_history = _target_history(existing_turns, _SEQUENCE_TURN_ROLES)
+        if target_history:
+            target.seed(target_history)
         result_turns = []
 
         # Generate setup turn (N-1) if we have warmup context
@@ -546,7 +604,10 @@ class Runner:
             adapted_probe = await coach_for_adapt.adapt_probe_to_story(conversation_history)
         else:
             adapted_probe = probe["prompt_text"]
-        probe_response = (await target.reply(adapted_probe)).text
+        if target_history or result_turns:
+            probe_response = (await target.reply(adapted_probe)).text
+        else:
+            probe_response = (await target.send(adapted_probe)).text
         probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
         db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "probe", adapted_probe, None, "probe")

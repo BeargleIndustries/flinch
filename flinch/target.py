@@ -19,6 +19,11 @@ class TargetResponse:
     raw_model: str | None = None
 
 
+# Stored when a provider returns no content. It is never sent back to a model
+# as an assistant turn (seed and the Claude conversation both skip it).
+EMPTY_RESPONSE = "[empty response]"
+
+
 class TargetModelError(Exception):
     pass
 
@@ -44,6 +49,11 @@ class TargetModel(ABC):
 
     @abstractmethod
     def reset(self) -> None: ...
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        """Replace the conversation with `messages` (alternating user and assistant
+        dicts), so the next `reply` continues it."""
+        raise NotImplementedError(f"{type(self).__name__} cannot seed a conversation")
 
     @property
     def is_base_model(self) -> bool:
@@ -72,6 +82,9 @@ class ClaudeTarget(TargetModel):
     def reset(self) -> None:
         self._messages = []
 
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        self._messages = [dict(m) for m in messages]
+
     async def _call(self) -> TargetResponse:
         try:
             kwargs = dict(
@@ -84,8 +97,9 @@ class ClaudeTarget(TargetModel):
             t0 = time.monotonic()
             response = await self._client.messages.create(**kwargs)
             latency_ms = int((time.monotonic() - t0) * 1000)
-            text = response.content[0].text if response.content else "[empty response]"
-            self._messages.append({"role": "assistant", "content": text})
+            text = response.content[0].text if response.content else EMPTY_RESPONSE
+            if text != EMPTY_RESPONSE:
+                self._messages.append({"role": "assistant", "content": text})
             return TargetResponse(
                 text=text,
                 input_tokens=response.usage.input_tokens,
@@ -134,6 +148,10 @@ class OpenAITarget(TargetModel):
 
     def reset(self) -> None:
         self._messages = []
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        system = [{"role": "system", "content": self._system_prompt}] if self._system_prompt else []
+        self._messages = system + [dict(m) for m in messages]
 
     async def send(self, prompt: str) -> TargetResponse:
         self._messages = []
@@ -195,12 +213,27 @@ class GeminiTarget(TargetModel):
     def reset(self) -> None:
         self._chat = None
 
-    async def send(self, prompt: str) -> TargetResponse:
+    def _config(self):
         from google.genai import types
-        config = types.GenerateContentConfig(**{"system_instruction": self._system_prompt}) if self._system_prompt else None
+        return types.GenerateContentConfig(**{"system_instruction": self._system_prompt}) if self._system_prompt else None
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        from google.genai import types
+        history = [
+            types.Content(
+                role="model" if m["role"] == "assistant" else "user",
+                parts=[types.Part(text=m["content"])],
+            )
+            for m in messages
+        ]
+        self._chat = self._client.aio.chats.create(
+            model=self._model_name, config=self._config(), history=history
+        )
+
+    async def send(self, prompt: str) -> TargetResponse:
         self._chat = self._client.aio.chats.create(
             model=self._model_name,
-            config=config,
+            config=self._config(),
         )
         try:
             t0 = time.monotonic()
@@ -277,6 +310,13 @@ class BaseModelTarget(OpenAITarget):
         else:
             full_prompt = prompt
         return await super().send(full_prompt)
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        """The first user message carries the context prefix, as `send` sent it."""
+        seeded = [dict(m) for m in messages]
+        if self._context_prefix and seeded and seeded[0]["role"] == "user":
+            seeded[0]["content"] = f"{self._context_prefix}\n\n{seeded[0]['content']}"
+        super().seed(seeded)
 
 
 class OllamaTarget(OpenAITarget):

@@ -15,7 +15,7 @@ import json
 import logging
 import random
 import string
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class ProlificExporter:
         from flinch.db import create_eval_tasks, list_conditions
 
         if not batch_id:
-            batch_id = f"batch_{experiment_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+            batch_id = f"batch_{experiment_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
 
         conditions = await list_conditions(self.db, experiment_id)
         condition_ids = [c["id"] for c in conditions]
@@ -258,7 +258,7 @@ class ProlificExporter:
                     "rank": rank,
                     "reasoning": reasoning,
                     "completion_time_s": completion_time,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "completed_at": datetime.now(UTC).isoformat(),
                 })
 
             # Update task status

@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sqlite3
+from datetime import UTC
 from pathlib import Path
 
 try:
@@ -931,7 +932,7 @@ def delete_session(conn, session_id: int) -> None:
         conn.execute(f"DELETE FROM run_turns WHERE run_id IN ({placeholders})", run_ids)
         conn.execute(f"DELETE FROM coach_examples WHERE run_id IN ({placeholders})", run_ids)
         conn.execute(f"DELETE FROM annotations WHERE run_id IN ({placeholders})", run_ids)
-        conn.execute(f"DELETE FROM runs WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
     conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     conn.commit()
 
@@ -3549,11 +3550,11 @@ ALLOWED_METRIC_COLS = {
 
 async def save_response_metrics(db, response_id, metrics_dict):
     """Insert or replace response_metrics row."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     # Filter to allowed columns only
     metrics_dict = {k: v for k, v in metrics_dict.items() if k in ALLOWED_METRIC_COLS}
     # Always set computed_at timestamp
-    metrics_dict["computed_at"] = datetime.now(timezone.utc).isoformat()
+    metrics_dict["computed_at"] = datetime.now(UTC).isoformat()
     cols = list(metrics_dict.keys())
     placeholders = ", ".join("?" for _ in cols)
     col_list = ", ".join(cols)

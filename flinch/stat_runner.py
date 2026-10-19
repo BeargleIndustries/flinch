@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from flinch import db
 from flinch.classifier import classify
@@ -127,7 +127,7 @@ async def run_statistical(
         conn,
         stat_run_id,
         status="complete",
-        completed_at=datetime.now(timezone.utc).isoformat(),
+        completed_at=datetime.now(UTC).isoformat(),
     )
 
     summary = db.get_stat_run_summary(conn, stat_run_id)

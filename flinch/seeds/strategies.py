@@ -1,6 +1,5 @@
 """Seed builtin narrative momentum strategy templates from research data."""
 
-from flinch import db
 
 BUILTIN_STRATEGIES = [
     {

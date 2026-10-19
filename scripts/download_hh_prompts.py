@@ -150,17 +150,17 @@ def main(target: int, seed: int, output: Path) -> None:
     # Summary stats
     final_domain = Counter(p["domain"] for p in sampled)
 
-    print(f"\n--- Summary ---")
+    print("\n--- Summary ---")
     print(f"Dataset rows:            {len(ds):,}")
     print(f"Extracted prompts:       {raw_count:,}")
     print(f"After filtering + dedup: {len(all_prompts):,}")
     print(f"Full library:            {len(library_records):,} prompts -> {library_path}")
     print(f"Sampled probe set:       {len(sampled)} prompts -> {output}")
-    print(f"Per-domain counts (sample):")
+    print("Per-domain counts (sample):")
     for domain, count in sorted(final_domain.items()):
         print(f"  {domain}: {count}")
-    print(f"\nImport probe set in Flinch via 'Load Defaults' or import_probes_from_markdown()")
-    print(f"Re-sample from library anytime: change --target or --seed")
+    print("\nImport probe set in Flinch via 'Load Defaults' or import_probes_from_markdown()")
+    print("Re-sample from library anytime: change --target or --seed")
 
 
 if __name__ == "__main__":

@@ -1,17 +1,19 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from flinch import db
+from flinch.classifier import classify
+from flinch.coach import NARRATIVE_ENGINE_SYSTEM_PROMPT, Coach, NarrativeCoach
+from flinch.llm import LLMBackend
+from flinch.models import Classification, PushbackSource
+from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
+from flinch.target import ClaudeTarget, GeminiTarget, OllamaTarget, OpenAITarget, TargetModel
 
 logger = logging.getLogger(__name__)
-from flinch import db
-from flinch.llm import LLMBackend
-from flinch.models import Classification, PushbackSource, CoachSuggestion, PushbackMove
-from flinch.target import TargetModel, ClaudeTarget, OpenAITarget, GeminiTarget, OllamaTarget
-from flinch.classifier import classify
-from flinch.coach import Coach, NarrativeCoach, NARRATIVE_ENGINE_SYSTEM_PROMPT
-from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
 
 
 class Runner:
@@ -84,7 +86,7 @@ class Runner:
 
     def _get_coach(self, session_id: int) -> Coach:
         """Create a coach for a session, using the configured backend provider."""
-        from flinch.llm import AnthropicBackend, OpenAICompatibleBackend, get_backend_for_provider
+        from flinch.llm import OpenAICompatibleBackend, get_backend_for_provider
 
         session = db.get_session(self._conn, session_id)
         profile = db.get_coach_profile(self._conn, session.get("coach_profile", "standard")) if session else None
@@ -272,7 +274,7 @@ class Runner:
             batch_id,
             status="complete",
             probes_completed=completed,
-            completed_at=datetime.now(timezone.utc).isoformat(),
+            completed_at=datetime.now(UTC).isoformat(),
         )
         yield {
             "event": "complete",
@@ -400,7 +402,7 @@ class Runner:
             batch_id,
             status="complete",
             probes_completed=completed,
-            completed_at=datetime.now(timezone.utc).isoformat(),
+            completed_at=datetime.now(UTC).isoformat(),
         )
         yield {
             "event": "complete",
@@ -421,7 +423,7 @@ class Runner:
         db.update_run(self._conn, run_id, pushback_source=PushbackSource.SKIP.value)
         return db.get_run(self._conn, run_id)
 
-    def _get_sequence_target(self, session_id: int, use_narrative_engine: bool) -> "TargetModel":
+    def _get_sequence_target(self, session_id: int, use_narrative_engine: bool) -> TargetModel:
         """Get a target for a sequence, optionally with narrative engine system prompt."""
         if use_narrative_engine:
             session = db.get_session(self._conn, session_id)
@@ -462,10 +464,15 @@ class ExperimentRunner:
 
     async def run_experiment(self, experiment_id: int):
         """Execute full matrix, yielding SSE progress events."""
-        from flinch.db import get_pending_responses, update_experiment_response, update_experiment, get_experiment_progress
+        from flinch.db import (
+            get_experiment_progress,
+            get_pending_responses,
+            update_experiment,
+            update_experiment_response,
+        )
 
         # Mark experiment as running
-        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(timezone.utc).isoformat())
+        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(UTC).isoformat())
 
         # Group pending cells by provider for parallel execution
         pending = await get_pending_responses(self.db, experiment_id, limit=50000)
@@ -518,7 +525,7 @@ class ExperimentRunner:
             try:
                 event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
                 yield event
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if all(t.done() for t in tasks):
                     break
                 yield {"type": "heartbeat"}
@@ -526,16 +533,15 @@ class ExperimentRunner:
         await asyncio.gather(*tasks, return_exceptions=True)
 
         # Final status
-        progress = await get_experiment_progress(self.db, experiment_id)
+        progress = await get_experiment_progress(self.db, experiment_id)  # noqa: F841
         final_status = "completed"
-        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(timezone.utc).isoformat())
+        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(UTC).isoformat())
 
         yield {"type": "complete", "completed": completed, "failed": failed, "total": total}
 
     async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
         """Execute one matrix cell with retry logic."""
         from flinch.db import update_experiment_response
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget
 
         model_id = cell["model_id"]
         system_prompt = cell.get("condition_system_prompt", "")
@@ -569,7 +575,7 @@ class ExperimentRunner:
                     finish_reason=resp.finish_reason,
                     status="completed",
                     attempt_count=attempt + 1,
-                    completed_at=datetime.now(timezone.utc).isoformat(),
+                    completed_at=datetime.now(UTC).isoformat(),
                 )
                 return
 
@@ -589,7 +595,13 @@ class ExperimentRunner:
 
     def _create_target(self, model_id: str, system_prompt: str):
         """Create appropriate TargetModel instance."""
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, BaseModelTarget, OllamaTarget
+        from flinch.target import (
+            BaseModelTarget,
+            ClaudeTarget,
+            GeminiTarget,
+            OllamaTarget,
+            OpenAITarget,
+        )
 
         provider = self._get_provider(model_id)
         # Check if it's a known base model
@@ -676,7 +688,7 @@ class ExperimentRunner:
 
         strategy = db.get_strategy_template(self._conn, seq["strategy_id"])
         probe = db.get_probe(self._conn, seq["probe_id"])
-        session = db.get_session(self._conn, seq["session_id"])
+        session = db.get_session(self._conn, seq["session_id"])  # noqa: F841
 
         # Get existing turns to build conversation history
         existing_turns = db.list_sequence_turns(self._conn, sequence_run_id)
@@ -816,7 +828,7 @@ class ExperimentRunner:
 
         strategy = db.get_strategy_template(self._conn, seq["strategy_id"])
         probe = db.get_probe(self._conn, seq["probe_id"])
-        session = db.get_session(self._conn, seq["session_id"])
+        session = db.get_session(self._conn, seq["session_id"])  # noqa: F841
         warmup_count = seq["max_warmup_turns"]
         use_ne = bool(seq.get("use_narrative_engine"))
 
@@ -903,7 +915,7 @@ class ExperimentRunner:
                 "turns": all_turns,
             }
 
-        except Exception as e:
+        except Exception:
             db.update_sequence_run(self._conn, run_id, status="failed")
             raise
 
@@ -1172,7 +1184,7 @@ class ExperimentRunner:
 
         return {"probe_classification": probe_classification.value}
 
-    def estimate_cost(self, probe_count: int, max_turns: int, mode: str = "whittle") -> dict:
+    def estimate_cost(self, probe_count: int, max_turns: int, mode: str = "whittle") -> dict:  # noqa: F811
         """Estimate cost for a batch sequence run.
 
         Rough estimates per turn:

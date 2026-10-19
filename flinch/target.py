@@ -116,7 +116,7 @@ class OpenAITarget(TargetModel):
 
     def __init__(self, model: str, system_prompt: str = "", api_key: str | None = None, base_url: str | None = None) -> None:
         try:
-            import openai
+            import openai  # noqa: F401 (availability check)
         except ImportError:
             raise ImportError("openai package required. Install with: pip install openai")
         self._model = model

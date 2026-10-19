@@ -7,12 +7,10 @@ Requires: pip install -e ".[experiment]" (matplotlib, numpy)
 """
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +78,9 @@ class ExperimentReporter:
                     ax.set_visible(False)
                     continue
                 labels = list(data.keys())
-                rates = [data[l].get("win_rate", 0) for l in labels]
+                rates = [data[label].get("win_rate", 0) for label in labels]
                 colors = {"honest": "#4CAF50", "deceptive": "#f44336", "neutral": "#2196F3", "high_effort_honest": "#FF9800"}
-                bar_colors = [colors.get(l, "#9E9E9E") for l in labels]
+                bar_colors = [colors.get(label, "#9E9E9E") for label in labels]
 
                 ax.bar(labels, rates, color=bar_colors, edgecolor="white", linewidth=0.5)
                 ax.set_ylabel("Win Rate")
@@ -154,8 +152,6 @@ class ExperimentReporter:
             metrics = [m for m in metrics if m in ALLOWED_METRICS]
             fig, axes = plt.subplots(1, len(metrics), figsize=(4 * len(metrics), 5))
 
-            colors = {"honest": "#4CAF50", "deceptive": "#f44336", "neutral": "#2196F3", "high_effort_honest": "#FF9800"}
-
             for ax, metric in zip(axes, metrics):
                 data_by_cond = []
                 labels = []
@@ -172,7 +168,7 @@ class ExperimentReporter:
                         labels.append(cond["label"])
 
                 if data_by_cond:
-                    parts = ax.violinplot(data_by_cond, showmeans=True, showmedians=True)
+                    ax.violinplot(data_by_cond, showmeans=True, showmedians=True)
                     ax.set_xticks(range(1, len(labels) + 1))
                     ax.set_xticklabels(labels, rotation=45, fontsize=8)
                 ax.set_title(metric.replace("_", " ").title(), fontsize=9)
@@ -241,13 +237,13 @@ class ExperimentReporter:
 
     async def generate_full_report(self, experiment_id: int, format: str = "markdown") -> str:
         """Complete publication report with embedded charts and tables."""
-        from flinch.db import get_experiment, list_analysis_results
+        from flinch.db import get_experiment
 
         exp = await get_experiment(self.db, experiment_id)
         tables = await self.generate_tables(experiment_id)
 
         report = f"# {exp['name']} — Results Report\n\n"
-        report += f"**Generated:** {datetime.now(timezone.utc).isoformat()}\n\n"
+        report += f"**Generated:** {datetime.now(UTC).isoformat()}\n\n"
         report += f"## Experiment Description\n{exp.get('description', '')}\n\n"
 
         report += "## Win Rates\n\n"

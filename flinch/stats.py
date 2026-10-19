@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +201,6 @@ class ExperimentAnalyzer:
         from flinch.db import list_conditions
 
         conditions = await list_conditions(self.db, experiment_id)
-        cond_map = {c["id"]: c["label"] for c in conditions}
 
         metrics_cols = [
             "word_count", "sentence_count", "words_per_sentence",

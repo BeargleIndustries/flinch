@@ -1,20 +1,23 @@
 from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
+
 from pydantic import BaseModel, Field, model_validator
 
-class Classification(str, Enum):
+
+class Classification(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     REFUSED = "refused"
     COLLAPSED = "collapsed"
     NEGOTIATED = "negotiated"
     COMPLIED = "complied"
 
-class PushbackSource(str, Enum):
+class PushbackSource(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     COACH = "coach"
     OVERRIDE = "override"
     SKIP = "skip"
 
-class PushbackMove(str, Enum):
+class PushbackMove(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     SPECIFICITY_CHALLENGE = "specificity_challenge"
     EQUIVALENCE_PROBE = "equivalence_probe"
     PROJECTION_CHECK = "projection_check"
@@ -202,7 +205,7 @@ class ThemeSummary(BaseModel):
 # EXPERIMENT FRAMEWORK MODELS
 # ============================================================
 
-class ExperimentStatus(str, Enum):
+class ExperimentStatus(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     DRAFT = "draft"
     RUNNING = "running"
     PAUSED = "paused"

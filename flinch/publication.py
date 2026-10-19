@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape as html_escape
 
 from flinch.themes import get_theme, render_theme_css, render_theme_header
@@ -237,7 +236,7 @@ def generate_comparison_table(
 
     if format == "html":
         return (
-            f"<h2>Model Comparison</h2>\n"
+            "<h2>Model Comparison</h2>\n"
             + _format_table(headers, rows, "html")
         )
     return _format_table(headers, rows, format)
@@ -412,7 +411,7 @@ def generate_full_report(
       5. Pushback effectiveness
     """
     stats = _summary_stats(conn, filters)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     # Build section bodies (csv/markdown format; html/pdf branch regenerates as html below)
     _section_fmt = format if format not in ("html", "pdf") else "html"

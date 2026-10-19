@@ -1,44 +1,70 @@
 from __future__ import annotations
+
 import asyncio
-import os
-import json
 import csv
 import html as html_mod
 import io
+import json
+import logging
+import os
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
+
 import anthropic
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
 from flinch import db
 from flinch.classifier import classify
-from flinch.models import (
-    PushbackSource,
-    StartStatRunRequest, GenerateScorecardRequest, PublicationExportRequest,
-    CreateExperimentRequest, StartExperimentRequest, RunAIRatersRequest,
-    GenerateProlificExportRequest, BulkPromptImportRequest, RunAnalysisRequest,
-    GenerateReportRequest, ConditionCreate, ExperimentPromptCreate,
-    ThemeSummary, HHImportRequest,
+from flinch.db import (
+    add_experiment_prompts,
+    bulk_import_prompts,
+    create_condition,
+    create_experiment,
+    create_experiment_responses,
+    find_experiment_response,
+    get_async_db,
+    get_condition_comparison,
+    get_experiment,
+    get_experiment_progress,
+    get_response_metrics,
+    list_ai_ratings,
+    list_analysis_results,
+    list_conditions,
+    list_eval_tasks,
+    list_experiment_prompts,
+    list_experiments,
+    update_experiment,
+    update_experiment_response,
 )
 from flinch.hh_import import HHRLHFImporter
-from flinch.db import (
-    get_async_db, create_experiment, get_experiment, list_experiments,
-    update_experiment, create_condition, list_conditions,
-    add_experiment_prompts, bulk_import_prompts, list_experiment_prompts,
-    create_experiment_responses, get_experiment_progress, get_pending_responses,
-    list_ai_ratings, list_eval_tasks, list_analysis_results, get_response_metrics,
-    find_experiment_response, update_experiment_response, get_condition_comparison,
+from flinch.models import (
+    BulkPromptImportRequest,
+    ConditionCreate,
+    CreateExperimentRequest,
+    ExperimentPromptCreate,
+    GenerateProlificExportRequest,
+    GenerateReportRequest,
+    GenerateScorecardRequest,
+    HHImportRequest,
+    PublicationExportRequest,
+    PushbackSource,
+    RunAIRatersRequest,
+    RunAnalysisRequest,
+    StartExperimentRequest,
+    StartStatRunRequest,
+    ThemeSummary,
 )
 from flinch.runner import Runner
 from flinch.seed import seed_default_profile, seed_examples
 from flinch.seeds.policies import seed_policies
 from flinch.seeds.strategies import seed_strategies
-from pydantic import BaseModel, Field
 
 
 class UpdateExperimentRequest(BaseModel):
@@ -323,7 +349,7 @@ async def import_probe_file(request: Request):
     path = PROBES_DIR / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
-    if not path.suffix in (".md", ".yaml", ".yml"):
+    if path.suffix not in (".md", ".yaml", ".yml"):
         raise HTTPException(status_code=400, detail="Only .md and .yaml files supported")
     # Security: ensure path stays within probes dir
     if not path.resolve().is_relative_to(PROBES_DIR.resolve()):
@@ -571,7 +597,7 @@ async def run_batch(session_id: int, req: BatchRequest):
 
 @app.post("/api/sessions/{session_id}/batch-conditions")
 async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
-    from datetime import datetime, timezone as _tz
+    from datetime import datetime
 
     session = db.get_session(_conn, session_id)
     if not session:
@@ -592,7 +618,7 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
 
         try:
             async with get_async_db() as db_conn:
-                ts = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 experiment_id = await create_experiment(
                     db_conn,
                     name=f"Condition run: {session_id} @ {ts}",
@@ -661,7 +687,7 @@ async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
                                         row["id"],
                                         response_text=resp_text,
                                         status="completed",
-                                        completed_at=datetime.now(_tz.utc).isoformat(),
+                                        completed_at=datetime.now(UTC).isoformat(),
                                     )
                         except Exception as write_err:
                             logging.getLogger("flinch").warning(
@@ -1240,7 +1266,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
 
     # --- HTML / PDF format ---
     if format in ("html", "pdf"):
-        from flinch.themes import get_theme, render_theme_css, html_to_pdf
+        from flinch.themes import get_theme, html_to_pdf, render_theme_css
         enriched = db.export_session_enriched(_conn, session_id, include_turns=include_turns,
                                                include_annotations=True, include_policy=True,
                                                include_variants=True)
@@ -1369,7 +1395,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
         export_obj = {
             "flinch_version": "0.2",
             "export_type": "session",
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "session": enriched.get("session", {}),
             "summary": enriched.get("summary", {}),
             "findings": enriched.get("findings", []),
@@ -1488,7 +1514,7 @@ async def export_compare(session_ids: str, format: str = "json"):
         export_obj = {
             "flinch_version": "0.2",
             "export_type": "cross_session_comparison",
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             **cross_data,
         }
         json_content = json.dumps(export_obj, indent=2, default=str)
@@ -1855,7 +1881,7 @@ async def export_comparison(comparison_id: int, format: str = "json"):
     export_obj = {
         "flinch_version": "0.2",
         "export_type": "multi_model_comparison",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "comparison": {
             "id": comp['id'],
             "name": comp['name'],
@@ -2475,7 +2501,7 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
         )
 
     if format in ("html", "pdf"):
-        from flinch.themes import get_theme, render_theme_css, html_to_pdf
+        from flinch.themes import get_theme, html_to_pdf, render_theme_css
         theme_obj = get_theme(theme)
         css = render_theme_css(theme_obj)
         _esc = html_mod.escape
@@ -2516,7 +2542,7 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
     export_obj = {
         "flinch_version": "0.2",
         "export_type": "sequence",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "sequence": data,
     }
     json_content = json.dumps(export_obj, indent=2, default=str)
@@ -2545,7 +2571,7 @@ async def clear_all_data_endpoint(req: ClearAllRequest):
 async def export_all():
     """Bulk export all data as a single JSON download."""
     data = db.export_all_data(_conn)
-    data["exported_at"] = datetime.now(timezone.utc).isoformat()
+    data["exported_at"] = datetime.now(UTC).isoformat()
     date_str = date.today().isoformat()
     json_content = json.dumps(data, indent=2, default=str)
     return Response(
@@ -2646,8 +2672,10 @@ async def create_publication_export(req: PublicationExportRequest):
     """Generate a publication-ready export."""
     try:
         from flinch.publication import (
-            generate_comparison_table, generate_consistency_matrix,
-            generate_pushback_summary, generate_full_report,
+            generate_comparison_table,
+            generate_consistency_matrix,
+            generate_full_report,
+            generate_pushback_summary,
         )
 
         generators = {
@@ -2901,9 +2929,10 @@ async def api_estimate_experiment(experiment_id: int):
 @app.post("/api/experiments/{experiment_id}/start")
 async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
     """Start experiment execution with SSE progress stream."""
-    from flinch.runner import ExperimentRunner
-    from flinch.rate_limiter import RateLimiterPool
     import json as json_mod
+
+    from flinch.rate_limiter import RateLimiterPool
+    from flinch.runner import ExperimentRunner
 
     async def event_stream():
         async with get_async_db() as db_conn:
@@ -2928,9 +2957,10 @@ async def api_pause_experiment(experiment_id: int):
 @app.post("/api/experiments/{experiment_id}/resume")
 async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
     """Resume experiment execution."""
-    from flinch.runner import ExperimentRunner
-    from flinch.rate_limiter import RateLimiterPool
     import json as json_mod
+
+    from flinch.rate_limiter import RateLimiterPool
+    from flinch.runner import ExperimentRunner
 
     async def event_stream():
         async with get_async_db() as db_conn:
@@ -2969,8 +2999,8 @@ async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
     import json as json_mod
 
     async def event_stream():
-        from flinch.rater import AIRaterPipeline
         from flinch.rate_limiter import RateLimiterPool
+        from flinch.rater import AIRaterPipeline
         async with get_async_db() as db_conn:
             pool = RateLimiterPool()
             pipeline = AIRaterPipeline(db_conn, req.rater_models, pool)
@@ -3221,7 +3251,7 @@ async def api_resume_conditions(experiment_id: int):
     model_id = pending[0]["model_id"]
 
     async def event_generator():
-        from datetime import datetime, timezone as _tz_resume
+        from datetime import datetime
         completed = 0
         failed = 0
         current_target = None
@@ -3257,7 +3287,7 @@ async def api_resume_conditions(experiment_id: int):
                                 item["id"],
                                 response_text=response_text,
                                 status="completed",
-                                completed_at=datetime.now(_tz_resume.utc).isoformat(),
+                                completed_at=datetime.now(UTC).isoformat(),
                             )
 
                             completed += 1
@@ -3449,7 +3479,6 @@ def _read_stdin_keys() -> None:
 
 def main():
     import argparse
-    import sys
     parser = argparse.ArgumentParser(description="Flinch sidecar server")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
     parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")

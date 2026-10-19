@@ -63,3 +63,8 @@ crash-*.log
 
 # Launcher state (per-clone, lives in %LOCALAPPDATA%)
 .flinch-bootstrap.json
+
+# Worktree provisioning (scripts/new-worktree.ps1); per-worktree, never committed
+.worktree-env.ps1
+.cargo/
+ui/.e2e-ports.json

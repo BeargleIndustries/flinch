@@ -1,0 +1,602 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/annotations/tags"
+  },
+  {
+    "method": "POST",
+    "path": "/api/batch/{batch_id}/cancel"
+  },
+  {
+    "method": "GET",
+    "path": "/api/coach-examples"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/coach-examples/{example_id}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/coach-examples/{example_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/coach-profiles"
+  },
+  {
+    "method": "GET",
+    "path": "/api/compare"
+  },
+  {
+    "method": "POST",
+    "path": "/api/compare/run"
+  },
+  {
+    "method": "GET",
+    "path": "/api/comparisons"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/comparisons/{comparison_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/comparisons/{comparison_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/comparisons/{comparison_id}/export"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/dashboard/clear-all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/dashboard/comparisons"
+  },
+  {
+    "method": "GET",
+    "path": "/api/dashboard/export-all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/dashboard/sequences"
+  },
+  {
+    "method": "GET",
+    "path": "/api/dashboard/sessions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/dashboard/stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/experiments/{experiment_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/experiments/{experiment_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/analysis"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/analysis/export"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/analyze"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/condition-comparison"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/condition-export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/conditions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/conditions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/estimate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/human-evals"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/human-evals/import"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/metrics"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/metrics"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/pause"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/preregistration"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/progress"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/prolific"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/prolific/csv"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/prompts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/prompts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/prompts/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/prompts/import-hh"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/rate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/ratings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/report"
+  },
+  {
+    "method": "GET",
+    "path": "/api/experiments/{experiment_id}/responses"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/resume"
+  },
+  {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/start"
+  },
+  {
+    "method": "GET",
+    "path": "/api/export/compare"
+  },
+  {
+    "method": "GET",
+    "path": "/api/models"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ollama/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/policies"
+  },
+  {
+    "method": "GET",
+    "path": "/api/policies/{provider}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/probe-groups"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/probe-groups/{group_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/probe-groups/{group_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/probes"
+  },
+  {
+    "method": "POST",
+    "path": "/api/probes"
+  },
+  {
+    "method": "POST",
+    "path": "/api/probes/bulk-delete"
+  },
+  {
+    "method": "GET",
+    "path": "/api/probes/files"
+  },
+  {
+    "method": "POST",
+    "path": "/api/probes/import-file"
+  },
+  {
+    "method": "POST",
+    "path": "/api/probes/load-defaults"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/probes/{probe_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/probes/{probe_id}/claims"
+  },
+  {
+    "method": "POST",
+    "path": "/api/probes/{probe_id}/claims"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/probes/{probe_id}/claims/{claim_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/publication/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/publication/exports"
+  },
+  {
+    "method": "GET",
+    "path": "/api/publication/exports/{export_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/publication/exports/{export_id}/download"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/runs/{run_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/runs/{run_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/runs/{run_id}/annotations"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/runs/{run_id}/annotations"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/runs/{run_id}/classification"
+  },
+  {
+    "method": "POST",
+    "path": "/api/runs/{run_id}/continue"
+  },
+  {
+    "method": "POST",
+    "path": "/api/runs/{run_id}/promote"
+  },
+  {
+    "method": "POST",
+    "path": "/api/runs/{run_id}/pushback"
+  },
+  {
+    "method": "POST",
+    "path": "/api/runs/{run_id}/skip"
+  },
+  {
+    "method": "GET",
+    "path": "/api/runs/{run_id}/turns"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scorecard/generate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scorecard/{snapshot_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scorecards"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sequence-batches/{batch_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sequence-batches/{batch_id}/estimate"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sequence-batches/{batch_id}/start"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sequence-runs/{run_id}/turns"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/sequences/{sequence_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sequences/{sequence_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sequences/{sequence_id}/drop-probe"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sequences/{sequence_id}/export"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sequences/{sequence_id}/run-auto"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sequences/{sequence_id}/run-turn"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sequences/{sequence_id}/turn-classifications"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sequences/{sequence_id}/whittle"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sequences/{sequence_id}/whittling"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/sessions/{session_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/{session_id}/batch"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/compliance"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/consistency"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/export/summary"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/findings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/{session_id}/run"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/{session_id}/sequence-batch"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/sequences"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/{session_id}/sequences"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/snapshots"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/{session_id}/snapshots"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/{session_id}/stat-run"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/stat-runs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/strategy-effectiveness"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/thresholds"
+  },
+  {
+    "method": "GET",
+    "path": "/api/settings/coach-default"
+  },
+  {
+    "method": "POST",
+    "path": "/api/settings/coach-default"
+  },
+  {
+    "method": "GET",
+    "path": "/api/settings/keys"
+  },
+  {
+    "method": "POST",
+    "path": "/api/settings/keys"
+  },
+  {
+    "method": "GET",
+    "path": "/api/settings/ollama"
+  },
+  {
+    "method": "POST",
+    "path": "/api/settings/ollama"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/settings/set-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/settings/set-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/settings/test-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/settings/validate-key"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/snapshots/{snapshot_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/snapshots/{snapshot_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/snapshots/{snapshot_id}/diff"
+  },
+  {
+    "method": "GET",
+    "path": "/api/stat-runs/{stat_run_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/stat-runs/{stat_run_id}/distribution"
+  },
+  {
+    "method": "GET",
+    "path": "/api/strategies"
+  },
+  {
+    "method": "POST",
+    "path": "/api/strategies"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/strategies/{strategy_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/strategies/{strategy_id}"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/strategies/{strategy_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/themes"
+  },
+  {
+    "method": "GET",
+    "path": "/api/themes/{name}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/themes/{name}/preview-css"
+  },
+  {
+    "method": "GET",
+    "path": "/api/variants/files"
+  },
+  {
+    "method": "POST",
+    "path": "/api/variants/files"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/variants/files/{group_id}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/variants/files/{group_id}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/variants/generate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/version"
+  },
+  {
+    "method": "GET",
+    "path": "/health"
+  }
+]

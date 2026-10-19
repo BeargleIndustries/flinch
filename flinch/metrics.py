@@ -9,7 +9,7 @@ Requires: pip install -e ".[experiment]" (textstat, textblob, lexical-diversity)
 from __future__ import annotations
 
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from flinch.lexical import LexicalAnalyzer
 

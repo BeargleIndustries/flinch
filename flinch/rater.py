@@ -9,8 +9,8 @@ import json
 import logging
 import random
 import string
-from datetime import datetime, timezone
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +107,7 @@ class AIRaterPipeline:
         """Rate all (prompt, target_model) pairs across conditions.
         Yields SSE progress events.
         """
-        from flinch.db import save_ai_rating, list_conditions, list_experiment_prompts
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, TargetResponse
+        from flinch.db import list_conditions
 
         # Get experiment structure
         conditions = await list_conditions(self.db, experiment_id)
@@ -133,8 +132,6 @@ class AIRaterPipeline:
             row = await cursor.fetchone()
             if row[0] >= len(condition_ids):
                 valid_pairs.append((pair[0], pair[1]))
-
-        total_evals = len(valid_pairs) * len(self.rater_models)
 
         # Check for already-completed ratings to skip
         cursor = await self.db.execute("""
@@ -216,7 +213,7 @@ class AIRaterPipeline:
             "rater_reasoning": resp.text if resp else None,
             "raw_response": resp.text if resp else None,
             "status": "completed" if ranking else "failed",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
         }
 
         items_data = []
@@ -234,7 +231,7 @@ class AIRaterPipeline:
 
     def _create_rater_target(self, rater_model: str):
         """Create a TargetModel for the rater."""
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget
+        from flinch.target import ClaudeTarget, GeminiTarget, OpenAITarget
 
         model_lower = rater_model.lower()
         if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):

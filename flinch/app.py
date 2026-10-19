@@ -1,64 +1,118 @@
 from __future__ import annotations
+
 import asyncio
-import os
-import json
+import contextlib
 import csv
+import dataclasses
+import functools
 import html as html_mod
+import importlib.util
 import io
+import json
+import logging
+import os
+import sqlite3
+import uuid
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
+
 import anthropic
+import anyio
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from flinch import db
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
+
+from flinch import __version__, db
 from flinch.classifier import classify
-from flinch.models import (
-    PushbackSource,
-    StartStatRunRequest, GenerateScorecardRequest, PublicationExportRequest,
-    CreateExperimentRequest, StartExperimentRequest, RunAIRatersRequest,
-    GenerateProlificExportRequest, BulkPromptImportRequest, RunAnalysisRequest,
-    GenerateReportRequest, ConditionCreate, ExperimentPromptCreate,
-    ThemeSummary, HHImportRequest,
+from flinch.db import (
+    add_experiment_prompts,
+    bulk_import_prompts,
+    create_condition,
+    create_experiment,
+    create_experiment_responses,
+    get_async_db,
+    get_condition_comparison,
+    get_experiment,
+    get_experiment_progress,
+    get_response_metrics,
+    list_ai_ratings,
+    list_analysis_results,
+    list_conditions,
+    list_eval_tasks,
+    list_experiment_prompts,
+    list_experiments,
+    update_experiment,
 )
 from flinch.hh_import import HHRLHFImporter
-from flinch.db import (
-    get_async_db, create_experiment, get_experiment, list_experiments,
-    update_experiment, create_condition, list_conditions,
-    add_experiment_prompts, bulk_import_prompts, list_experiment_prompts,
-    create_experiment_responses, get_experiment_progress, get_pending_responses,
-    list_ai_ratings, list_eval_tasks, list_analysis_results, get_response_metrics,
-    find_experiment_response, update_experiment_response, get_condition_comparison,
+from flinch.models import (
+    BulkPromptImportRequest,
+    ConditionCreate,
+    CreateExperimentRequest,
+    ExperimentPromptCreate,
+    GenerateProlificExportRequest,
+    GenerateReportRequest,
+    GenerateScorecardRequest,
+    HHImportRequest,
+    ProviderLimit,
+    PublicationExportRequest,
+    PushbackSource,
+    RunAIRatersRequest,
+    RunAnalysisRequest,
+    StartExperimentRequest,
+    StartStatRunRequest,
+    ThemeSummary,
 )
 from flinch.runner import Runner
 from flinch.seed import seed_default_profile, seed_examples
 from flinch.seeds.policies import seed_policies
 from flinch.seeds.strategies import seed_strategies
-from pydantic import BaseModel, Field
 
 
 class UpdateExperimentRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     config: dict | None = None
+    repetitions: int | None = Field(default=None, ge=1, le=50)  # merged into config (B11)
     # status is NOT allowed here - managed by pipeline
 
 # App state
 _conn = None
 _runner = None
 
-STATIC_DIR = Path(__file__).parent / "static"
+
+@dataclasses.dataclass
+class _StudyEntry:
+    """The owner of a running study stream (I33): its token and the event set on release."""
+
+    token: object
+    released: asyncio.Event
+
+
+# Study id -> the stream that owns it. Released by the response's shielded
+# `finally` (ClosingStreamingResponse), never by a clock.
+_active_studies: dict[int, _StudyEntry] = {}
+
+# How long /start and /resume wait for the previous owner to release (K6).
+_STUDY_RELEASE_WAIT_S = 5.0
+
 PROBES_DIR = Path(__file__).parent / "probes"
-VARIANTS_DIR = Path(__file__).parent / "variants"
+# FLINCH_VARIANTS_DIR lets the e2e sidecar save groups into a temp folder (I32).
+VARIANTS_DIR = Path(os.environ.get("FLINCH_VARIANTS_DIR") or Path(__file__).parent / "variants")
+
+
+def _env_file() -> Path:
+    """The .env path: `FLINCH_ENV_FILE`, else the project root (read at call time, I14)."""
+    return Path(os.environ.get("FLINCH_ENV_FILE") or Path(__file__).parent.parent / ".env")
 
 
 def _load_dotenv():
-    """Load .env file from project root if it exists."""
-    env_file = Path(__file__).parent.parent / ".env"
+    """Load the .env file if it exists; variables already set win (B07)."""
+    env_file = _env_file()
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             line = line.strip()
@@ -68,37 +122,56 @@ def _load_dotenv():
             key = key.strip()
             value = value.strip().strip('"').strip("'")
             if key:
-                os.environ[key] = value
+                os.environ.setdefault(key, value)
+
+
+def _rebuild_runner() -> None:
+    """Build the runner from the keys in os.environ (B29).
+
+    Called at startup and after every key or Ollama change, so a new key
+    reaches the target, the classifier and the coach. Running streams keep
+    the runner they started with.
+    """
+    global _runner
+    from flinch.llm import get_best_available_backend
+
+    client = anthropic.AsyncAnthropic() if os.environ.get("ANTHROPIC_API_KEY") else None
+    _runner = Runner(_conn, client=client, backend=get_best_available_backend())
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _conn, _runner
+    # A restarted server (live_server in one pytest session) starts with no owners (I33).
+    _active_studies.clear()
     # Load .env before anything else
     _load_dotenv()
     # Init DB
     _conn = db.init_db()
+    # Settle rows a crashed sidecar left running (I16)
+    db.sweep_interrupted_runs(_conn)
+    # Apply the persisted Settings Ollama URL (I9); an explicit env var wins
+    ollama_base_url = db.get_setting(_conn, "ollama_base_url")
+    if ollama_base_url:
+        os.environ.setdefault("OLLAMA_BASE_URL", ollama_base_url)
     # Seed default coach profile and examples
     seed_default_profile(_conn)
     seed_examples(_conn)
     seed_policies(_conn)
     seed_strategies(_conn)
+    # Shipped framing files become runnable probes, once per group (B13)
+    db.sync_all_variant_files(_conn, VARIANTS_DIR)
     # Load strategies from markdown files
     strategies_dir = Path(__file__).parent / "strategies"
     if strategies_dir.exists():
         db.import_all_strategies(_conn, str(strategies_dir))
     # Probes are loaded on-demand via /api/probes/load-defaults
-    # Create runner
-    from flinch.llm import get_best_available_backend
-
+    # Create runner (target client plus the classification/coach backend)
+    await asyncio.to_thread(_rebuild_runner)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    client = None
     if api_key:
-        client = anthropic.AsyncAnthropic()
         print(f"[flinch] Anthropic API key loaded ({len(api_key)} chars)")
-
-    # Get the best available backend for classification/coach
-    backend = get_best_available_backend()
+    backend = _runner.backend
     if backend:
         print(f"[flinch] Classification backend: {type(backend).__name__}")
     else:
@@ -108,7 +181,6 @@ async def lifespan(app: FastAPI):
             "Set any API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama."
         )
 
-    _runner = Runner(_conn, client=client, backend=backend)
     yield
     # Cleanup
     if _conn:
@@ -127,8 +199,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+class NoStoreMiddleware:
+    """Adds `Cache-Control: no-store` to /api/* and /health responses (B32).
+
+    Pure ASGI on purpose: BaseHTTPMiddleware wraps streaming responses and
+    interferes with client disconnects. A response that sets its own
+    Cache-Control (SSE sets no-cache) keeps it.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not (
+            scope["path"].startswith("/api/") or scope["path"] == "/health"
+        ):
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                if not any(k.lower() == b"cache-control" for k, _ in headers):
+                    headers.append((b"cache-control", b"no-store"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
+app.add_middleware(NoStoreMiddleware)
+
+
+# ─── Server-sent events (B05, I2, I27) ───────────────────────────────────────
+
+def _sse(name: str, data: dict) -> str:
+    """One SSE block. Every streaming route emits only through this."""
+    return f"event: {name}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _dict_event(e: dict) -> tuple[str, dict]:
+    """Name a flat event dict by its `type` or `event` key; the whole dict is the data."""
+    return (e.get("type") or e.get("event") or "message", e)
+
+
+async def _sse_stream(
+    agen: AsyncIterator[dict],
+    name_of: Callable[[dict], tuple[str, dict]] = lambda e: (e.get("event") or "message", e.get("data", {})),
+) -> AsyncIterator[str]:
+    """Turn a runner generator's events into `_sse` blocks, closing the source on exit."""
+    try:
+        async with contextlib.aclosing(agen) as g:
+            async for item in g:
+                name, data = name_of(item)
+                yield _sse(name, data)
+    except Exception as e:
+        logging.getLogger("flinch").exception("SSE stream failed")
+        yield _sse("error", {"error": f"{type(e).__name__}: {e}"})
+
+
+class ClosingStreamingResponse(StreamingResponse):
+    """A StreamingResponse that closes its body generator when the response ends.
+
+    Starlette never calls `aclose()` on `body_iterator` (starlette 0.50.0
+    `responses.py` `stream_response`), so a generator suspended at a `yield`
+    when the client disconnects would only be finalized by the garbage
+    collector, after its database connection is gone. The shielded `finally`
+    closes it deterministically, also when the body never started (a no-op
+    then). `release`, when set, is called after the close in the same shielded
+    block (run ownership, T07).
+    """
+
+    release: Callable[[], None] | None = None
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    aclose = getattr(self.body_iterator, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
+                finally:
+                    if self.release is not None:
+                        self.release()
+
+
+def _sse_response(gen: AsyncIterator[str], release: Callable[[], None] | None = None) -> ClosingStreamingResponse:
+    response = ClosingStreamingResponse(
+        gen,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+    response.release = release
+    return response
+
 
 
 # --- Request models ---
@@ -141,6 +307,7 @@ class CreateProbeRequest(BaseModel):
     tags: list[str] = []
     narrative_opening: str | None = None
     narrative_target: str | None = None
+    session_id: int | None = None
 
 class CreateSessionRequest(BaseModel):
     name: str = Field(max_length=200)
@@ -167,16 +334,6 @@ class UpdateClassificationRequest(BaseModel):
 class BatchRequest(BaseModel):
     probe_ids: list[int] | None = None
     delay_ms: int = 2000
-
-class ConditionItem(BaseModel):
-    label: str = Field(max_length=200)
-    system_prompt: str = Field(default="", max_length=10000)
-
-class BatchConditionsRequest(BaseModel):
-    probe_ids: list[int]
-    conditions: list[ConditionItem]
-    delay_ms: int = 2000
-    concurrency: int = 1  # parallel API calls per condition (1=sequential, 5=fast for API models)
 
 class AnnotationRequest(BaseModel):
     note_text: str | None = Field(default=None, max_length=2000)
@@ -242,8 +399,9 @@ class ClearAllRequest(BaseModel):
 # --- Routes ---
 
 @app.get("/")
-async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+async def root():
+    """The sidecar is API-only; the app lives in ui/ (B35)."""
+    return {"name": "flinch", "version": __version__, "docs": "/docs"}
 
 
 # Version
@@ -267,12 +425,10 @@ async def delete_probe(probe_id: int):
     probe = db.get_probe(_conn, probe_id)
     if not probe:
         raise HTTPException(404, "Probe not found")
-    # Check if any runs reference this probe
-    runs = _conn.execute("SELECT COUNT(*) as c FROM runs WHERE probe_id = ?", (probe_id,)).fetchone()
-    if runs["c"] > 0:
-        raise HTTPException(400, f"Probe has {runs['c']} run(s) — delete those first")
-    _conn.execute("DELETE FROM probes WHERE id = ?", (probe_id,))
-    _conn.commit()
+    blocker = db.probe_delete_blocker(_conn, probe_id)
+    if blocker:
+        raise HTTPException(409, blocker)
+    db.delete_probe(_conn, probe_id)
     return {"deleted": True}
 
 
@@ -283,10 +439,17 @@ async def api_bulk_delete_probes(request: Request):
     probe_ids = data.get("probe_ids", [])
     if not probe_ids:
         raise HTTPException(status_code=400, detail="No probe IDs provided")
-    placeholders = ",".join("?" for _ in probe_ids)
-    _conn.execute(f"DELETE FROM probes WHERE id IN ({placeholders})", probe_ids)
-    _conn.commit()
-    return {"deleted": len(probe_ids)}
+    deleted = 0
+    skipped = []
+    for probe_id in probe_ids:
+        if not db.get_probe(_conn, probe_id):
+            continue
+        if db.probe_delete_blocker(_conn, probe_id):
+            skipped.append(probe_id)
+            continue
+        db.delete_probe(_conn, probe_id)
+        deleted += 1
+    return {"deleted": deleted, "skipped": skipped}
 
 
 @app.post("/api/probes/load-defaults")
@@ -323,7 +486,7 @@ async def import_probe_file(request: Request):
     path = PROBES_DIR / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
-    if not path.suffix in (".md", ".yaml", ".yml"):
+    if path.suffix not in (".md", ".yaml", ".yml"):
         raise HTTPException(status_code=400, detail="Only .md and .yaml files supported")
     # Security: ensure path stays within probes dir
     if not path.resolve().is_relative_to(PROBES_DIR.resolve()):
@@ -337,10 +500,15 @@ async def import_probe_file(request: Request):
 
 @app.post("/api/probes")
 async def create_probe(req: CreateProbeRequest):
-    probe_id = db.create_probe(
-        _conn, req.name, req.domain, req.prompt_text, req.description, req.tags,
-        narrative_opening=req.narrative_opening, narrative_target=req.narrative_target,
-    )
+    try:
+        probe_id = db.create_probe(
+            _conn, req.name, req.domain, req.prompt_text, req.description, req.tags,
+            narrative_opening=req.narrative_opening, narrative_target=req.narrative_target,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "A probe with that name exists.")
+    if req.session_id is not None:
+        db.add_probe_to_session(_conn, req.session_id, probe_id)
     return db.get_probe(_conn, probe_id)
 
 
@@ -377,13 +545,14 @@ async def send_probe_run(session_id: int, req: SendProbeRequest):
         probe_id = req.probe_id
         if not probe_id and req.custom_text:
             probe_id = db.create_probe(
-                _conn, f"custom-{int(__import__('time').time())}",
+                _conn, f"custom-{session_id}-{uuid.uuid4().hex[:8]}",
                 "custom", req.custom_text, "Ad-hoc custom probe",
             )
+            db.add_probe_to_session(_conn, session_id, probe_id)
         run = await _runner.send_probe(session_id, probe_id)
         return run
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Error sending probe: {e}")
 
@@ -397,7 +566,7 @@ async def send_pushback(run_id: int, req: SendPushbackRequest):
         run = await _runner.send_pushback(run_id, req.text, source)
         return run
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Error sending pushback: {e}")
 
@@ -420,7 +589,7 @@ async def continue_pushback_endpoint(run_id: int, req: SendPushbackRequest):
         run = await _runner.continue_pushback(run_id, req.text, source)
         return run
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Error continuing pushback: {e}")
 
@@ -493,8 +662,8 @@ async def promote_to_example(run_id: int):
 
 # Coach examples
 @app.get("/api/coach-examples")
-async def list_coach_examples(profile: str = "standard"):
-    return db.list_coach_examples(_conn, profile)
+async def list_coach_examples(profile: str = "standard", limit: int = 500):
+    return db.list_coach_examples(_conn, profile, limit=limit)
 
 
 class UpdateCoachExampleRequest(BaseModel):
@@ -553,148 +722,18 @@ async def run_batch(session_id: int, req: BatchRequest):
     if not probe_ids:
         raise HTTPException(400, "No probes available to run")
 
-    async def event_generator():
+    async def event_stream():
         try:
-            async for event in _runner.run_batch(session_id, probe_ids, req.delay_ms):
-                event_type = event["event"]
-                event_data = json.dumps(event["data"])
-                yield f"event: {event_type}\ndata: {event_data}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(_runner.run_batch(session_id, probe_ids, req.delay_ms))
+            ) as s:
+                async for chunk in s:
+                    yield chunk
         except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            # Raised before a batch row exists (no runner), so no batch_id.
+            yield _sse("error", {"error": str(e)})
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/api/sessions/{session_id}/batch-conditions")
-async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
-    from datetime import datetime, timezone as _tz
-
-    session = db.get_session(_conn, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if not req.probe_ids:
-        raise HTTPException(400, "probe_ids required")
-    if not req.conditions:
-        raise HTTPException(400, "conditions required")
-
-    conditions = [c.model_dump() for c in req.conditions]
-
-    async def event_generator():
-        # --- Setup experiment tables before streaming ---
-        experiment_id = None
-        condition_label_to_id: dict[str, int] = {}
-        probe_id_to_prompt_id: dict[int, int] = {}
-        target_model = session.get("target_model", "unknown")
-
-        try:
-            async with get_async_db() as db_conn:
-                ts = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                experiment_id = await create_experiment(
-                    db_conn,
-                    name=f"Condition run: {session_id} @ {ts}",
-                    description=f"Auto-created from batch-conditions run for session {session_id}",
-                    model_ids=[target_model],
-                )
-
-                for i, cond in enumerate(conditions):
-                    cid = await create_condition(
-                        db_conn,
-                        experiment_id,
-                        label=cond["label"],
-                        system_prompt=cond.get("system_prompt", ""),
-                        sort_order=i,
-                    )
-                    condition_label_to_id[cond["label"]] = cid
-
-                prompt_entries = []
-                for i, pid in enumerate(req.probe_ids):
-                    probe = db.get_probe(_conn, pid)
-                    prompt_entries.append({
-                        "probe_id": pid,
-                        "sort_order": i,
-                        "custom_prompt_text": probe["prompt_text"] if probe else "",
-                        "domain": probe.get("domain", "") if probe else "",
-                    })
-                await add_experiment_prompts(db_conn, experiment_id, prompt_entries)
-
-                exp_prompts = await list_experiment_prompts(db_conn, experiment_id)
-                for ep in exp_prompts:
-                    if ep.get("probe_id") is not None:
-                        probe_id_to_prompt_id[ep["probe_id"]] = ep["id"]
-
-                await create_experiment_responses(db_conn, experiment_id)
-                await update_experiment(db_conn, experiment_id, status="running")
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': f'experiment setup failed: {e}'})}\n\n"
-            return
-
-        # --- Stream runner events, writing into experiment tables as we go ---
-        try:
-            async with get_async_db() as exp_db:
-                async for event in _runner.run_batch_conditions(
-                    session_id, req.probe_ids, conditions, req.delay_ms,
-                    concurrency=req.concurrency,
-                ):
-                    event_type = event["event"]
-                    event_data = event["data"]
-
-                    if event_type == "progress" and experiment_id is not None:
-                        try:
-                            cond_label = event_data.get("condition", "")
-                            probe_id = event_data.get("probe_id")
-                            resp_text = event_data.get("response_text", "")
-
-                            cond_id = condition_label_to_id.get(cond_label)
-                            prompt_id = probe_id_to_prompt_id.get(probe_id)
-
-                            if cond_id is not None and prompt_id is not None:
-                                row = await find_experiment_response(
-                                    exp_db, experiment_id, cond_id, prompt_id, target_model
-                                )
-                                if row:
-                                    await update_experiment_response(
-                                        exp_db,
-                                        row["id"],
-                                        response_text=resp_text,
-                                        status="completed",
-                                        completed_at=datetime.now(_tz.utc).isoformat(),
-                                    )
-                        except Exception as write_err:
-                            logging.getLogger("flinch").warning(
-                                "Experiment write failed for probe %s condition %s: %s",
-                                event_data.get("probe_id"), event_data.get("condition"), write_err)
-
-                    elif event_type == "complete":
-                        if experiment_id is not None:
-                            try:
-                                await update_experiment(exp_db, experiment_id, status="completed")
-                            except Exception as complete_err:
-                                logging.getLogger("flinch").warning(
-                                    "Failed to mark experiment %s completed: %s", experiment_id, complete_err)
-                        event_data = dict(event_data, experiment_id=experiment_id)
-
-                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
-        except Exception as e:
-            if experiment_id is not None:
-                try:
-                    async with get_async_db() as fail_db:
-                        await update_experiment(fail_db, experiment_id, status="failed")
-                except Exception:
-                    pass
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            if exp_db:
-                await exp_db.close()
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_response(event_stream())
 
 
 @app.post("/api/batch/{batch_id}/cancel")
@@ -757,7 +796,7 @@ async def delete_probe_group(group_id: str):
 # Variant files (markdown-based variant groups)
 @app.get("/api/variants/files")
 async def list_variant_files_endpoint():
-    return db.list_variant_files(VARIANTS_DIR)
+    return db.list_variant_files(VARIANTS_DIR, _conn)
 
 @app.get("/api/variants/files/{group_id}")
 async def get_variant_file(group_id: str):
@@ -775,8 +814,6 @@ async def save_variant_file_endpoint(req: SaveVariantFileRequest):
         variant_type=req.variant_type,
     )
     result = db.sync_variant_file_to_db(_conn, VARIANTS_DIR, req.group_id)
-    # Reload probes so new variant probes appear in the probe list
-    db.import_all_probes(_conn, str(PROBES_DIR))
     return result or {"group_id": req.group_id, "synced": True}
 
 @app.delete("/api/variants/files/{group_id}")
@@ -796,11 +833,10 @@ async def generate_variants(req: GenerateVariantsRequest):
     if not api_key:
         raise HTTPException(400, "ANTHROPIC_API_KEY required for variant generation")
 
-    import anthropic as _anthropic
-    client = _anthropic.Anthropic()
+    client = anthropic.AsyncAnthropic()
     strategies_text = "\n".join(f"- {s}" for s in req.strategies)
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=4000,
         messages=[{
@@ -1007,7 +1043,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
 
         findings_export = {
             "$schema": "https://flinch.beargle.dev/schemas/findings-v1.json",
-            "flinch_version": "0.2",
+            "flinch_version": __version__,
             "schema_version": "1.0",
             "export_type": "findings",
             "schema_description": {
@@ -1150,7 +1186,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
                 finding_text = f.get("finding", "")
                 probe_name = f.get("probe_name", "")
                 domain = f.get("probe_domain", "")
-                lines.append(f"{i}. **{probe_name}** ({domain}) — {journey}")
+                lines.append(f"{i}. **{probe_name}** ({domain}): {journey}")
                 lines.append(f"   > {finding_text}")
                 lines.append("")
         else:
@@ -1229,7 +1265,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
         lines.append("- Multi-turn pushback: enabled")
         lines.append("")
         lines.append("---")
-        lines.append("*Generated by Flinch v0.2 — AI Content Restriction Consistency Research Tool*")
+        lines.append(f"*Generated by Flinch v{__version__}, an AI content restriction consistency research tool*")
 
         md_content = "\n".join(lines)
         return Response(
@@ -1240,7 +1276,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
 
     # --- HTML / PDF format ---
     if format in ("html", "pdf"):
-        from flinch.themes import get_theme, render_theme_css, html_to_pdf
+        from flinch.themes import get_theme, render_theme_css
         enriched = db.export_session_enriched(_conn, session_id, include_turns=include_turns,
                                                include_annotations=True, include_policy=True,
                                                include_variants=True)
@@ -1276,7 +1312,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
 </table>
 </body></html>"""
         if format == "pdf":
-            pdf_bytes = html_to_pdf(html_content)
+            pdf_bytes = _html_to_pdf_or_400(html_content)
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
@@ -1367,9 +1403,9 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
                                                include_policy=include_policy,
                                                include_variants=include_variants)
         export_obj = {
-            "flinch_version": "0.2",
+            "flinch_version": __version__,
             "export_type": "session",
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "session": enriched.get("session", {}),
             "summary": enriched.get("summary", {}),
             "findings": enriched.get("findings", []),
@@ -1486,9 +1522,9 @@ async def export_compare(session_ids: str, format: str = "json"):
         )
     else:
         export_obj = {
-            "flinch_version": "0.2",
+            "flinch_version": __version__,
             "export_type": "cross_session_comparison",
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             **cross_data,
         }
         json_content = json.dumps(export_obj, indent=2, default=str)
@@ -1581,7 +1617,7 @@ async def list_available_models():
             {"id": "gemini-2.0-flash-001", "name": "Gemini 2.0 Flash"},
         ],
         "available": google_key and google_sdk,
-        "hint": "" if (google_key and google_sdk) else ("Set GOOGLE_API_KEY" if google_sdk else "pip install google-generativeai"),
+        "hint": "" if (google_key and google_sdk) else ("Set GOOGLE_API_KEY" if google_sdk else "Install google-genai on the sidecar"),
     })
 
     # xAI / Grok
@@ -1688,7 +1724,7 @@ async def compare_sessions(session_ids: str):
 
 @app.post("/api/compare/run")
 async def run_multi_model_compare(req: MultiModelCompareRequest):
-    """Run the same probe(s) against multiple models — creates real sessions/runs for persistence."""
+    """Run the same probe(s) against multiple models; creates real sessions/runs for persistence."""
     if len(req.models) < 2:
         raise HTTPException(400, "Need at least 2 models")
     if len(req.models) > 5:
@@ -1711,7 +1747,7 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
         short = model_name.split("-")[0] if "-" in model_name else model_name
         sid = db.create_session(
             _conn,
-            name=f"Compare {timestamp} — {short}",
+            name=f"Compare {timestamp} · {short}",
             target_model=model_name,
             coach_profile="standard",
             notes=f"Auto-created by multi-model comparison with {len(req.models)} models, {len(probes)} probes",
@@ -1780,7 +1816,7 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
 
     # Save comparison to DB for history/review
     timestamp = datetime.now().strftime("%m/%d %H:%M")
-    comparison_name = f"Compare {timestamp} — {' vs '.join(m.split('-')[0] for m in req.models)}"
+    comparison_name = f"Compare {timestamp} · {' vs '.join(m.split('-')[0] for m in req.models)}"
     comparison_id = db.save_comparison(
         _conn,
         name=comparison_name,
@@ -1853,9 +1889,9 @@ async def export_comparison(comparison_id: int, format: str = "json"):
         )
 
     export_obj = {
-        "flinch_version": "0.2",
+        "flinch_version": __version__,
         "export_type": "multi_model_comparison",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "comparison": {
             "id": comp['id'],
             "name": comp['name'],
@@ -2007,8 +2043,10 @@ async def create_sequence(session_id: int, body: CreateSequenceRequest):
     if not strategy:
         raise HTTPException(404, "Strategy not found")
     seq_id = db.create_sequence(_conn, session_id, body.probe_id, body.strategy_id, body.mode, body.max_warmup_turns, use_narrative_engine=body.use_narrative_engine)
-    # Also create the first sequence_run
-    run_id = db.create_sequence_run(_conn, seq_id, body.max_warmup_turns)
+    # Interactive sequences get their first run now; automatic runs create their own.
+    run_id = None
+    if body.mode == "interactive":
+        run_id = db.create_sequence_run(_conn, seq_id, body.max_warmup_turns)
     seq = db.get_sequence(_conn, seq_id)
     seq["current_run_id"] = run_id
     return seq
@@ -2042,18 +2080,11 @@ async def run_sequence_auto(sequence_id: int):
         raise HTTPException(404, "Sequence not found")
 
     async def event_stream():
-        import traceback as _tb
-        try:
-            async for event in _runner.run_sequence_auto_stream(sequence_id):
-                evt_type = event.get("event", "message")
-                data = json.dumps(event.get("data", {}))
-                yield f"event: {evt_type}\ndata: {data}\n\n"
-        except Exception as e:
-            _tb.print_exc()
-            err_data = json.dumps({"error": f"{type(e).__name__}: {e}"})
-            yield f"event: error\ndata: {err_data}\n\n"
+        async with contextlib.aclosing(_sse_stream(_runner.run_sequence_auto_stream(sequence_id))) as s:
+            async for chunk in s:
+                yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 @app.post("/api/sequences/{sequence_id}/run-turn")
 async def run_sequence_turn(sequence_id: int):
@@ -2147,7 +2178,7 @@ async def create_sequence_batch(session_id: int, body: CreateSequenceBatchReques
 
     # Create sequences for each probe, linked to batch
     for pid in body.probe_ids:
-        warmup = body.fixed_n if body.mode == "fixed_n" and body.fixed_n else body.max_warmup_turns
+        warmup = body.fixed_n if body.mode == "fixed_n" and body.fixed_n is not None else body.max_warmup_turns
         db.create_sequence(_conn, session_id, pid, body.strategy_id, body.mode, warmup, batch_id=batch_id)
 
     return db.get_sequence_batch(_conn, batch_id)
@@ -2164,7 +2195,8 @@ async def estimate_sequence_batch(batch_id: int):
     b = db.get_sequence_batch(_conn, batch_id)
     if not b:
         raise HTTPException(404, "Batch not found")
-    estimate = _runner.estimate_cost(b["probes_total"], b["max_warmup_turns"], b["mode"])
+    turns = b["fixed_n"] if b["mode"] == "fixed_n" and b["fixed_n"] is not None else b["max_warmup_turns"]
+    estimate = _runner.estimate_sequence_cost(b["probes_total"], turns, b["mode"])
     # Save estimate to batch
     db.update_sequence_batch(_conn, batch_id, estimated_cost_usd=estimate["estimated_cost_usd"])
     return estimate
@@ -2177,11 +2209,12 @@ async def start_sequence_batch(batch_id: int):
     if b["status"] != "pending":
         raise HTTPException(400, f"Batch already {b['status']}")
 
-    async def generate():
-        async for event in _runner.run_sequence_batch(batch_id):
-            yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+    async def event_stream():
+        async with contextlib.aclosing(_sse_stream(_runner.run_sequence_batch(batch_id))) as s:
+            async for chunk in s:
+                yield chunk
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 # ── Narrative Momentum: Analysis ───────────────────────────────
@@ -2197,7 +2230,6 @@ async def get_strategy_effectiveness(session_id: int):
 
 # ── Settings: API Keys ─────────────────────────────────────────
 
-_ENV_FILE = Path(__file__).parent.parent / ".env"
 _SUPPORTED_KEYS = {
     "ANTHROPIC_API_KEY": {"provider": "anthropic", "label": "Anthropic (Claude)", "required": False},
     "OPENAI_API_KEY": {"provider": "openai", "label": "OpenAI (GPT)", "required": False},
@@ -2217,8 +2249,9 @@ def _mask_key(key: str) -> str:
 def _read_env_file() -> dict[str, str]:
     """Read current .env file into a dict (preserves comments on re-write)."""
     result = {}
-    if _ENV_FILE.exists():
-        for line in _ENV_FILE.read_text().splitlines():
+    env_file = _env_file()
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
@@ -2233,10 +2266,11 @@ def _read_env_file() -> dict[str, str]:
 def _write_env_file(keys: dict[str, str]):
     """Write keys to .env file, preserving comments and adding new keys."""
     lines = []
-    if _ENV_FILE.exists():
-        existing_lines = _ENV_FILE.read_text().splitlines()
+    env_file = _env_file()
+    if env_file.exists():
+        existing_lines = env_file.read_text().splitlines()
     else:
-        existing_lines = ["# Flinch — API Keys"]
+        existing_lines = ["# Flinch API keys"]
 
     written_keys = set()
     for line in existing_lines:
@@ -2257,7 +2291,7 @@ def _write_env_file(keys: dict[str, str]):
         if k not in written_keys:
             lines.append(f'{k}="{v}"' if v else f"{k}=")
 
-    _ENV_FILE.write_text("\n".join(lines) + "\n")
+    env_file.write_text("\n".join(lines) + "\n")
 
 
 @app.get("/api/settings/keys")
@@ -2298,12 +2332,7 @@ async def update_api_keys(body: dict):
             del os.environ[env_var]
 
     _write_env_file(current_env)
-
-    # Recreate the Anthropic client + runner if Anthropic key changed
-    if "ANTHROPIC_API_KEY" in body:
-        global _runner
-        client = anthropic.AsyncAnthropic()
-        _runner = Runner(_conn, client)
+    await asyncio.to_thread(_rebuild_runner)
 
     return {"ok": True, "keys": await get_api_keys()}
 
@@ -2327,7 +2356,7 @@ async def test_api_key(body: dict):
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            return {"ok": True, "message": f"Connected — {resp.model}"}
+            return {"ok": True, "message": f"Connected: {resp.model}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -2343,7 +2372,7 @@ async def test_api_key(body: dict):
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            return {"ok": True, "message": f"Connected — {resp.model}"}
+            return {"ok": True, "message": f"Connected: {resp.model}"}
         except ImportError:
             return {"ok": False, "error": "openai package not installed (pip install openai)"}
         except Exception as e:
@@ -2359,7 +2388,7 @@ async def test_api_key(body: dict):
             resp = await client.aio.models.generate_content(
                 model="gemini-2.5-flash", contents="Hi",
             )
-            return {"ok": True, "message": "Connected — Gemini"}
+            return {"ok": True, "message": "Connected: Gemini"}
         except ImportError:
             return {"ok": False, "error": "google-genai package not installed (pip install google-genai)"}
         except Exception as e:
@@ -2398,8 +2427,10 @@ async def get_ollama_settings():
 
 @app.post("/api/settings/ollama")
 async def update_ollama_settings(req: OllamaSettingsRequest):
-    """Update Ollama base URL."""
+    """Update Ollama base URL; persisted across restarts (I9)."""
     os.environ["OLLAMA_BASE_URL"] = req.base_url
+    db.set_setting(_conn, "ollama_base_url", req.base_url)
+    await asyncio.to_thread(_rebuild_runner)
     # Test connection with new URL
     available = await _check_ollama(req.base_url)
     models = await _list_ollama_models(req.base_url) if available else []
@@ -2410,23 +2441,25 @@ async def update_ollama_settings(req: OllamaSettingsRequest):
     }
 
 
-_coach_defaults = {"backend": "anthropic", "model": ""}
+_COACH_DEFAULT = {"backend": "anthropic", "model": ""}
 
 
 @app.get("/api/settings/coach-default")
 async def get_coach_default():
-    """Get the default coach backend/model for new sessions."""
-    return _coach_defaults
+    """Get the default coach backend/model for new sessions (persisted, I9)."""
+    return db.get_setting(_conn, "coach_default", dict(_COACH_DEFAULT))
 
 
 @app.post("/api/settings/coach-default")
 async def set_coach_default(req: dict):
     """Set the default coach backend/model for new sessions."""
+    current = db.get_setting(_conn, "coach_default", dict(_COACH_DEFAULT))
     if "backend" in req:
-        _coach_defaults["backend"] = req["backend"]
+        current["backend"] = req["backend"]
     if "model" in req:
-        _coach_defaults["model"] = req["model"]
-    return _coach_defaults
+        current["model"] = req["model"]
+    db.set_setting(_conn, "coach_default", current)
+    return current
 
 
 # ─── Dashboard endpoints ─────────────────────────────────────────────────────
@@ -2475,7 +2508,7 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
         )
 
     if format in ("html", "pdf"):
-        from flinch.themes import get_theme, render_theme_css, html_to_pdf
+        from flinch.themes import get_theme, render_theme_css
         theme_obj = get_theme(theme)
         css = render_theme_css(theme_obj)
         _esc = html_mod.escape
@@ -2501,7 +2534,7 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
 </table>
 </body></html>"""
         if format == "pdf":
-            pdf_bytes = html_to_pdf(html_content)
+            pdf_bytes = _html_to_pdf_or_400(html_content)
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
@@ -2514,9 +2547,9 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
         )
 
     export_obj = {
-        "flinch_version": "0.2",
+        "flinch_version": __version__,
         "export_type": "sequence",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "sequence": data,
     }
     json_content = json.dumps(export_obj, indent=2, default=str)
@@ -2537,7 +2570,10 @@ async def clear_all_data_endpoint(req: ClearAllRequest):
     return {
         "status": "cleared",
         "deleted": deleted,
-        "preserved": ["probes", "strategy_templates", "policy_claims", "coach_profiles"],
+        "preserved": [
+            "probes", "probe_variants", "probe_claim_links",
+            "strategy_templates", "policy_claims", "coach_profiles",
+        ],
     }
 
 
@@ -2545,7 +2581,7 @@ async def clear_all_data_endpoint(req: ClearAllRequest):
 async def export_all():
     """Bulk export all data as a single JSON download."""
     data = db.export_all_data(_conn)
-    data["exported_at"] = datetime.now(timezone.utc).isoformat()
+    data["exported_at"] = datetime.now(UTC).isoformat()
     date_str = date.today().isoformat()
     json_content = json.dumps(data, indent=2, default=str)
     return Response(
@@ -2559,31 +2595,33 @@ async def export_all():
 
 @app.post("/api/sessions/{session_id}/stat-run")
 async def start_stat_run(session_id: int, req: StartStatRunRequest):
-    """Start a statistical run — runs probes N times each, streaming progress via SSE."""
+    """Start a statistical run: runs probes N times each, streaming progress via SSE."""
     from flinch.stat_runner import run_statistical_batch
 
     session = db.get_session(_conn, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
 
-    async def event_generator():
-        try:
-            async for event in run_statistical_batch(
-                _conn, session_id, req.probe_ids, session["target_model"],
-                req.repeat_count, _runner.backend if _runner else None,
-                _runner.client if _runner else None,
-            ):
-                event_type = event["event"]
-                event_data = json.dumps(event["data"])
-                yield f"event: {event_type}\ndata: {event_data}\n\n"
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    runner = _runner
+    target_model = session["target_model"]
+    system_prompt = session.get("system_prompt") or ""
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    def make_session_target():
+        # Each iteration gets a fresh target with the session's model and system prompt.
+        return runner._make_target(target_model, system_prompt)
+
+    async def event_stream():
+        source = run_statistical_batch(
+            _conn, session_id, req.probe_ids, target_model,
+            req.repeat_count, runner.backend if runner else None,
+            make_target=make_session_target if runner else None,
+            system_prompt=system_prompt,
+        )
+        async with contextlib.aclosing(_sse_stream(source)) as s:
+            async for chunk in s:
+                yield chunk
+
+    return _sse_response(event_stream())
 
 
 @app.get("/api/sessions/{session_id}/stat-runs")
@@ -2646,8 +2684,10 @@ async def create_publication_export(req: PublicationExportRequest):
     """Generate a publication-ready export."""
     try:
         from flinch.publication import (
-            generate_comparison_table, generate_consistency_matrix,
-            generate_pushback_summary, generate_full_report,
+            generate_comparison_table,
+            generate_consistency_matrix,
+            generate_full_report,
+            generate_pushback_summary,
         )
 
         generators = {
@@ -2661,7 +2701,9 @@ async def create_publication_export(req: PublicationExportRequest):
         if not generator:
             raise HTTPException(400, f"Unknown template: {req.template}")
 
-        content = generator(_conn, req.filters, req.format, req.theme)
+        # PDF is stored as HTML and converted on download (B24, I13)
+        gen_format = "html" if req.format == "pdf" else req.format
+        content = generator(_conn, req.filters, gen_format, req.theme)
 
         export_id = db.save_publication_export(
             _conn, req.name, req.format, req.template, req.filters, content,
@@ -2710,8 +2752,7 @@ async def download_publication_export(export_id: int):
     filename = f"{exp['name'].replace(' ', '_')}.{ext}"
 
     if fmt == "pdf":
-        from flinch.themes import html_to_pdf
-        pdf_bytes = html_to_pdf(exp["content"])
+        pdf_bytes = _html_to_pdf_or_400(exp["content"])
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -2775,7 +2816,7 @@ async def api_create_experiment(req: CreateExperimentRequest):
         exp_id = await create_experiment(
             db_conn, req.name, req.description,
             model_ids=req.model_ids, base_model_ids=req.base_model_ids,
-            random_seed=req.random_seed, config=req.config,
+            random_seed=req.random_seed, config={**req.config, "repetitions": req.repetitions},
         )
         for cond in req.conditions:
             await create_condition(db_conn, exp_id, cond.label, cond.system_prompt, cond.description, cond.sort_order)
@@ -2806,6 +2847,14 @@ async def api_get_experiment(experiment_id: int):
 async def api_update_experiment(experiment_id: int, req: UpdateExperimentRequest):
     async with get_async_db() as db_conn:
         updates = {k: v for k, v in req.model_dump().items() if v is not None}
+        repetitions = updates.pop("repetitions", None)
+        if repetitions is not None:
+            if "config" not in updates:
+                exp = await get_experiment(db_conn, experiment_id)
+                if not exp:
+                    raise HTTPException(404, "Experiment not found")
+                updates["config"] = exp.get("config") or {}
+            updates["config"] = {**updates["config"], "repetitions": repetitions}
         if updates:
             await update_experiment(db_conn, experiment_id, **updates)
             await db_conn.commit()
@@ -2854,25 +2903,25 @@ async def api_bulk_import_prompts(experiment_id: int, req: BulkPromptImportReque
 @app.post("/api/experiments/{experiment_id}/prompts/import-hh")
 async def api_import_hh_prompts(experiment_id: int, req: HHImportRequest):
     """Import stratified sample from Anthropic HH-RLHF dataset."""
-    import json as json_mod
+
+    async def hh_import(db_conn):
+        result = await HHRLHFImporter().import_to_experiment(
+            db_conn=db_conn,
+            experiment_id=experiment_id,
+            target_count=req.target_count,
+            subsets=req.subsets,
+            stratification=req.stratification,
+            seed=req.seed,
+        )
+        yield {"type": "complete", **result}
 
     async def event_stream():
-        try:
-            importer = HHRLHFImporter()
-            async with get_async_db() as db_conn:
-                result = await importer.import_to_experiment(
-                    db_conn=db_conn,
-                    experiment_id=experiment_id,
-                    target_count=req.target_count,
-                    subsets=req.subsets,
-                    stratification=req.stratification,
-                    seed=req.seed,
-                )
-            yield f"data: {json_mod.dumps({'event': 'complete', **result})}\n\n"
-        except Exception as e:
-            yield f"data: {json_mod.dumps({'event': 'error', 'error': str(e)})}\n\n"
+        async with get_async_db() as db_conn:
+            async with contextlib.aclosing(_sse_stream(hh_import(db_conn), name_of=_dict_event)) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.get("/api/experiments/{experiment_id}/prompts")
@@ -2886,98 +2935,181 @@ async def api_estimate_experiment(experiment_id: int):
     """Cost/time estimate before running."""
     async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
+        if not exp:
+            raise HTTPException(404, "Experiment not found")
         conditions = await list_conditions(db_conn, experiment_id)
         prompts = await list_experiment_prompts(db_conn, experiment_id)
     model_ids = json.loads(exp.get("model_ids", "[]")) if isinstance(exp.get("model_ids"), str) else exp.get("model_ids", [])
     base_ids = json.loads(exp.get("base_model_ids", "[]")) if isinstance(exp.get("base_model_ids"), str) else exp.get("base_model_ids", [])
     total_models = len(model_ids) + len(base_ids)
-    total_cells = len(prompts) * len(conditions) * total_models
+    repetitions = int((exp.get("config") or {}).get("repetitions", 1))
+    total_cells = len(prompts) * len(conditions) * total_models * repetitions
     from flinch.runner import ExperimentRunner
     runner = ExperimentRunner(None, None)
     estimate = runner.estimate_cost(total_cells)
-    return {"estimate": estimate, "cells": total_cells, "prompts": len(prompts), "conditions": len(conditions), "models": total_models}
+    return {
+        "estimate": estimate, "cells": total_cells, "prompts": len(prompts),
+        "conditions": len(conditions), "models": total_models, "repetitions": repetitions,
+    }
+
+
+def _release(experiment_id: int, token: object) -> None:
+    """Drop the study's owner entry, only if `token` still owns it, and wake waiters (I33)."""
+    entry = _active_studies.get(experiment_id)
+    if entry is not None and entry.token is token:
+        del _active_studies[experiment_id]
+        entry.released.set()
+
+
+async def _claim_study(experiment_id: int) -> object:
+    """Make the caller the study's owner and return its token, else raise 409 (I33, K6).
+
+    A present owner gets up to `_STUDY_RELEASE_WAIT_S` to release (Resume right
+    after Pause). There is no await between the final check and the insert.
+    """
+    entry = _active_studies.get(experiment_id)
+    if entry is not None:
+        try:
+            await asyncio.wait_for(entry.released.wait(), _STUDY_RELEASE_WAIT_S)
+        except TimeoutError:
+            raise HTTPException(409, "This study is already running.") from None
+        if experiment_id in _active_studies:
+            raise HTTPException(409, "This study is already running.")
+    token = object()
+    _active_studies[experiment_id] = _StudyEntry(token=token, released=asyncio.Event())
+    return token
+
+
+def _rate_config(req: StartExperimentRequest) -> dict:
+    """The request's per-provider limits as plain ints and dicts for RateLimiterPool (B36)."""
+    return {
+        k: (v.model_dump() if isinstance(v, ProviderLimit) else v)
+        for k, v in req.concurrency_per_provider.items()
+    }
+
+
+async def _study_stream(
+    experiment_id: int, req: StartExperimentRequest, *, retry_failed: bool, create_cells: bool = False,
+) -> ClosingStreamingResponse:
+    """Claim the study and stream its run as SSE; the claim is released when the stream ends (I33).
+
+    `create_cells` adds the study's pending cells first (Start); `retry_failed`
+    sets failed cells back to pending first (Resume).
+    """
+    from flinch.rate_limiter import RateLimiterPool
+    from flinch.runner import ExperimentRunner
+
+    async with get_async_db() as db_conn:
+        if not await get_experiment(db_conn, experiment_id):
+            raise HTTPException(404, "Experiment not found")
+    backend = _runner.backend if _runner else None
+    token = await _claim_study(experiment_id)
+
+    async def event_stream():
+        async with get_async_db() as db_conn:
+            if create_cells:
+                await create_experiment_responses(db_conn, experiment_id)
+                await db_conn.commit()
+            if retry_failed:
+                await db.reset_failed_responses(db_conn, experiment_id)
+            pool = RateLimiterPool(_rate_config(req))
+            runner = ExperimentRunner(db_conn, pool, backend=backend)
+            async with contextlib.aclosing(
+                _sse_stream(runner.run_experiment(experiment_id), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
+
+    return _sse_response(event_stream(), release=functools.partial(_release, experiment_id, token))
 
 
 @app.post("/api/experiments/{experiment_id}/start")
 async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
     """Start experiment execution with SSE progress stream."""
-    from flinch.runner import ExperimentRunner
-    from flinch.rate_limiter import RateLimiterPool
-    import json as json_mod
-
-    async def event_stream():
-        async with get_async_db() as db_conn:
-            await create_experiment_responses(db_conn, experiment_id)
-            await db_conn.commit()
-            pool = RateLimiterPool(req.concurrency_per_provider)
-            runner = ExperimentRunner(db_conn, pool)
-            async for event in runner.run_experiment(experiment_id):
-                yield f"data: {json_mod.dumps(event)}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return await _study_stream(experiment_id, req, retry_failed=False, create_cells=True)
 
 
 @app.post("/api/experiments/{experiment_id}/pause")
 async def api_pause_experiment(experiment_id: int):
+    """Mark a running study paused; its workers stop before their next cell. Any other status stays."""
     async with get_async_db() as db_conn:
-        await update_experiment(db_conn, experiment_id, status="paused")
+        await db_conn.execute(
+            "UPDATE experiments SET status = 'paused' WHERE id = ? AND status = 'running'", (experiment_id,)
+        )
         await db_conn.commit()
     return {"paused": True}
 
 
 @app.post("/api/experiments/{experiment_id}/resume")
 async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
-    """Resume experiment execution."""
-    from flinch.runner import ExperimentRunner
-    from flinch.rate_limiter import RateLimiterPool
-    import json as json_mod
+    """Resume experiment execution; `retry_failed` sets failed cells back to pending first."""
+    return await _study_stream(experiment_id, req, retry_failed=req.retry_failed)
 
-    async def event_stream():
-        async with get_async_db() as db_conn:
-            pool = RateLimiterPool(req.concurrency_per_provider)
-            runner = ExperimentRunner(db_conn, pool)
-            async for event in runner.run_experiment(experiment_id):
-                yield f"data: {json_mod.dumps(event)}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+@app.post("/api/experiments/{experiment_id}/classify")
+async def api_classify_experiment(experiment_id: int):
+    """Classify completed cells that have none; cells whose prompt lost its text are skipped (B04)."""
+    backend = _runner.backend if _runner else None
+    classified = skipped = 0
+    async with get_async_db() as db_conn:
+        if not await get_experiment(db_conn, experiment_id):
+            raise HTTPException(404, "Experiment not found")
+        for row in await db.get_unclassified_responses(db_conn, experiment_id):
+            prompt_text = row["prompt_text"]
+            if not prompt_text:
+                skipped += 1
+                continue
+            response_text = row["response_text"] or ""
+            try:
+                cls = await classify(response_text, prompt_text, backend)
+            except Exception:
+                cls = await classify(response_text, prompt_text, None)
+            await db.update_experiment_response(db_conn, row["id"], classification=cls.value)
+            classified += 1
+    return {"classified": classified, "skipped": skipped}
 
 
 @app.get("/api/experiments/{experiment_id}/progress")
 async def api_experiment_progress(experiment_id: int):
     async with get_async_db() as db_conn:
-        return await get_experiment_progress(db_conn, experiment_id)
+        progress = await get_experiment_progress(db_conn, experiment_id)
+    return {**progress, "active": experiment_id in _active_studies}
 
 
 @app.post("/api/experiments/{experiment_id}/metrics")
 async def api_compute_metrics(experiment_id: int, force: bool = False):
     """Compute NLP metrics for all responses. SSE stream."""
-    import json as json_mod
 
     async def event_stream():
         from flinch.metrics import ResponseMetricsAnalyzer
         async with get_async_db() as db_conn:
             analyzer = ResponseMetricsAnalyzer()
-            async for event in analyzer.analyze_experiment(db_conn, experiment_id, force=force):
-                yield f"data: {json_mod.dumps(event)}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(analyzer.analyze_experiment(db_conn, experiment_id, force=force), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.post("/api/experiments/{experiment_id}/rate")
 async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
     """Run AI rater pipeline. SSE stream."""
-    import json as json_mod
 
     async def event_stream():
-        from flinch.rater import AIRaterPipeline
         from flinch.rate_limiter import RateLimiterPool
+        from flinch.rater import AIRaterPipeline
         async with get_async_db() as db_conn:
             pool = RateLimiterPool()
             pipeline = AIRaterPipeline(db_conn, req.rater_models, pool)
-            async for event in pipeline.rate_experiment(experiment_id):
-                yield f"data: {json_mod.dumps(event)}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(pipeline.rate_experiment(experiment_id), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.post("/api/experiments/{experiment_id}/prolific")
@@ -2986,9 +3118,12 @@ async def api_generate_prolific(experiment_id: int, req: GenerateProlificExportR
     from flinch.prolific import ProlificExporter
     async with get_async_db() as db_conn:
         exporter = ProlificExporter(db_conn)
-        result = await exporter.generate_tasks(
-            experiment_id, req.prompt_count, req.model_ids, req.raters_per_task, req.batch_id,
-        )
+        try:
+            result = await exporter.generate_tasks(
+                experiment_id, req.prompt_count, req.model_ids, req.raters_per_task, req.batch_id,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
     return result
 
 
@@ -3099,8 +3234,24 @@ async def api_get_metrics(experiment_id: int):
 
 
 @app.get("/api/experiments/{experiment_id}/export")
-async def api_export_experiment(experiment_id: int):
-    """Full experiment data export as JSON."""
+async def api_export_experiment(experiment_id: int, format: str = "json"):
+    """Full experiment data export as JSON, or every response row as JSON Lines (B06)."""
+    if format == "jsonl":
+        async def rows():
+            # Own connection: the handler's would be closed before the body streams.
+            async with get_async_db() as db_conn:
+                async with db_conn.execute(
+                    "SELECT * FROM experiment_responses WHERE experiment_id = ? ORDER BY id",
+                    (experiment_id,),
+                ) as cur:
+                    async for row in cur:
+                        yield json.dumps(dict(row), default=str) + "\n"
+
+        return ClosingStreamingResponse(
+            rows(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="study-{experiment_id}-responses.jsonl"'},
+        )
     async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
         conditions = await list_conditions(db_conn, experiment_id)
@@ -3110,11 +3261,16 @@ async def api_export_experiment(experiment_id: int):
         evals = await list_eval_tasks(db_conn, experiment_id)
         analysis = await list_analysis_results(db_conn, experiment_id)
         metrics = await get_response_metrics(db_conn, experiment_id)
-    return {
+    body = {
         "experiment": exp, "conditions": conditions, "prompts": prompts,
         "progress": progress, "ratings": ratings, "eval_tasks": evals,
         "analysis": analysis, "metrics": metrics,
     }
+    return Response(
+        content=json.dumps(body, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="study-{experiment_id}.json"'},
+    )
 
 
 @app.get("/api/experiments/{experiment_id}/preregistration")
@@ -3137,7 +3293,7 @@ async def api_condition_comparison(experiment_id: int):
 
 @app.get("/api/experiments/{experiment_id}/condition-export")
 async def api_condition_export_csv(experiment_id: int):
-    """Export all responses with metrics as CSV — one row per response."""
+    """Export all responses with metrics as CSV, one row per response."""
     async with get_async_db() as db_conn:
         async with db_conn.execute(
             """SELECT
@@ -3145,6 +3301,8 @@ async def api_condition_export_csv(experiment_id: int):
                 COALESCE(ep.custom_prompt_text, p.prompt_text) AS probe_text,
                 COALESCE(ep.domain, p.domain, '') AS domain,
                 ec.label      AS condition_label,
+                er.model_id,
+                er.repetition,
                 ec.system_prompt,
                 er.classification,
                 er.response_text,
@@ -3168,7 +3326,7 @@ async def api_condition_export_csv(experiment_id: int):
             LEFT JOIN response_metrics rm ON rm.response_id = er.id
             WHERE er.experiment_id = ?
               AND er.status = 'completed'
-            ORDER BY ec.sort_order, ec.id, ep.sort_order, ep.id""",
+            ORDER BY ec.sort_order, ec.id, ep.sort_order, ep.id, er.model_id, er.repetition""",
             (experiment_id,),
         ) as cur:
             rows = await cur.fetchall()
@@ -3188,128 +3346,65 @@ async def api_condition_export_csv(experiment_id: int):
     )
 
 
-@app.post("/api/experiments/{experiment_id}/resume-conditions")
-async def api_resume_conditions(experiment_id: int):
-    """Resume an incomplete condition experiment — re-runs only pending responses."""
-    async with get_async_db() as db_conn:
-        # Get experiment info
-        exp = await get_experiment(db_conn, experiment_id)
-        if not exp:
-            raise HTTPException(404, "Experiment not found")
-
-        # Find pending responses with their condition and probe info
-        async with db_conn.execute(
-            """SELECT er.id, er.condition_id, er.prompt_id, er.model_id,
-                      ec.label AS condition_label, ec.system_prompt,
-                      COALESCE(ep.custom_prompt_text, p.prompt_text) AS probe_text,
-                      COALESCE(p.name, 'probe-' || ep.id) AS probe_name,
-                      ep.probe_id
-               FROM experiment_responses er
-               JOIN experiment_conditions ec ON er.condition_id = ec.id
-               JOIN experiment_prompts ep ON er.prompt_id = ep.id
-               LEFT JOIN probes p ON ep.probe_id = p.id
-               WHERE er.experiment_id = ? AND er.status = 'pending'
-               ORDER BY ec.sort_order, ep.sort_order""",
-            (experiment_id,),
-        ) as cur:
-            pending = [dict(r) for r in await cur.fetchall()]
-
-    if not pending:
-        return {"message": "No pending responses — experiment is complete", "pending": 0}
-
-    total = len(pending)
-    model_id = pending[0]["model_id"]
-
-    async def event_generator():
-        from datetime import datetime, timezone as _tz_resume
-        completed = 0
-        failed = 0
-        current_target = None
-        current_sys_prompt = None
-
-        try:
-            yield f"event: info\ndata: {json.dumps({'message': f'Resuming {total} pending responses for model {model_id}'})}\n\n"
-            async with get_async_db() as resume_db:
-                for item in pending:
-                    cond_label = item["condition_label"]
-                    sys_prompt = item["system_prompt"] or ""
-                    probe_text = item["probe_text"] or ""
-                    probe_name = item["probe_name"] or ""
-
-                    # Create new target when condition changes
-                    if current_sys_prompt != sys_prompt or current_target is None:
-                        try:
-                            current_target = _runner._make_target(model_id, sys_prompt)
-                            current_sys_prompt = sys_prompt
-                        except Exception as target_err:
-                            yield f"event: error\ndata: {json.dumps({'error': f'Failed to create target: {target_err}'})}\n\n"
-                            return
-
-                    max_retries = 3
-                    last_error = None
-                    for attempt in range(max_retries):
-                        try:
-                            current_target.reset()
-                            response_text = (await current_target.send(probe_text)).text
-
-                            await update_experiment_response(
-                                resume_db,
-                                item["id"],
-                                response_text=response_text,
-                                status="completed",
-                                completed_at=datetime.now(_tz_resume.utc).isoformat(),
-                            )
-
-                            completed += 1
-                            last_error = None
-                            yield f"event: progress\ndata: {json.dumps({'probe_name': probe_name, 'condition': cond_label, 'completed': completed, 'total': total, 'response_text': response_text})}\n\n"
-                            break
-                        except Exception as e:
-                            last_error = e
-                            if attempt < max_retries - 1:
-                                await asyncio.sleep(2 ** attempt)
-
-                    if last_error:
-                        failed += 1
-                        completed += 1
-                        yield f"event: error\ndata: {json.dumps({'probe_name': probe_name, 'condition': cond_label, 'error': str(last_error), 'completed': completed, 'total': total})}\n\n"
-
-                    await asyncio.sleep(1)
-
-                # Mark experiment completed if no pending left
-                async with resume_db.execute(
-                    "SELECT COUNT(*) FROM experiment_responses WHERE experiment_id = ? AND status = 'pending'",
-                    (experiment_id,),
-                ) as cur:
-                    row = await cur.fetchone()
-                    still_pending = row[0] if row else 0
-
-                if still_pending == 0:
-                    await update_experiment(resume_db, experiment_id, status="completed")
-
-            yield f"event: complete\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': completed, 'failed': failed, 'still_pending': still_pending})}\n\n"
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
 # ---------------------------------------------------------------------------
 # Health endpoint
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
+    db_path = Path(os.environ.get("FLINCH_DB_PATH", str(db.DB_PATH))).resolve()
+    keys_set = sum(1 for env_var in _SUPPORTED_KEYS if os.environ.get(env_var))
+    return {
+        "status": "ok",
+        "version": __version__,
+        "db_path": str(db_path),
+        "keys_set": keys_set,
+    }
+
+
+PDF_UNAVAILABLE = "PDF export needs weasyprint on the sidecar."
+
+
+def _html_to_pdf_or_400(html_content: str) -> bytes:
+    """Convert HTML to PDF bytes; 400 with a reason when weasyprint cannot run (B24)."""
+    from flinch.themes import html_to_pdf
+
     try:
-        from importlib.metadata import version as pkg_version
-        ver = pkg_version("flinch")
-    except Exception:
-        ver = "0.8.0"
-    return {"status": "ok", "version": ver}
+        return html_to_pdf(html_content)
+    except (ImportError, OSError, AttributeError) as e:
+        # OSError / AttributeError: weasyprint is installed but its native
+        # (Pango/GTK) libraries are missing or too old.
+        raise HTTPException(400, PDF_UNAVAILABLE) from e
+
+
+def _has_module(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def _pdf_available() -> bool:
+    """weasyprint is importable and can render, so native libraries load too (B24)."""
+    if not _has_module("weasyprint"):
+        return False
+    try:
+        _html_to_pdf_or_400("<p>.</p>")
+    except HTTPException:
+        return False
+    return True
+
+
+@app.get("/api/settings/capabilities")
+async def get_capabilities():
+    """Optional features the sidecar can serve, from the installed packages (B21)."""
+    return {
+        "pdf": await asyncio.to_thread(_pdf_available),
+        "experiment_extras": all(_has_module(m) for m in ("numpy", "scipy", "krippendorff")),
+        "openai_sdk": _has_module("openai"),
+        "google_sdk": _has_module("google.genai"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -3353,6 +3448,7 @@ async def set_key_runtime(req: SetKeyRequest):
     if not key:
         return {"ok": False, "error": "Empty key"}
     os.environ[_PROVIDER_ENV_VARS[provider]] = key
+    await asyncio.to_thread(_rebuild_runner)
     return {"ok": True}
 
 
@@ -3362,6 +3458,7 @@ async def clear_key_runtime(provider: str):
     if provider not in _PROVIDER_ENV_VARS:
         return {"ok": False, "error": f"Unknown provider: {provider}"}
     os.environ.pop(_PROVIDER_ENV_VARS[provider], None)
+    await asyncio.to_thread(_rebuild_runner)
     return {"ok": True}
 
 
@@ -3371,23 +3468,26 @@ async def validate_key(req: ValidateKeyRequest):
     key = req.key.strip()
     if provider not in _PROVIDER_ENV_VARS:
         return {"valid": False, "error": f"Unknown provider: {provider}"}
-    try:
+
+    def check() -> None:
+        # The SDK clients here are synchronous; this runs in a worker thread (B30).
         if provider == "anthropic":
-            import anthropic as _anthropic
-            _anthropic.Anthropic(api_key=key).models.list()
+            anthropic.Anthropic(api_key=key).models.list()
         elif provider == "openai":
             import openai as _openai
             _openai.OpenAI(api_key=key).models.list()
         elif provider == "google":
-            import google.generativeai as genai
-            genai.configure(api_key=key)
-            list(genai.list_models())
+            from google import genai
+            list(genai.Client(api_key=key).models.list())
         elif provider == "xai":
             import openai as _openai
             _openai.OpenAI(api_key=key, base_url="https://api.x.ai/v1").models.list()
         elif provider in ("meta", "together"):
             import openai as _openai
             _openai.OpenAI(api_key=key, base_url="https://api.together.xyz/v1").models.list()
+
+    try:
+        await asyncio.to_thread(check)
         return {"valid": True, "error": None}
     except Exception as e:
         return {"valid": False, "error": str(e)}
@@ -3449,10 +3549,10 @@ def _read_stdin_keys() -> None:
 
 def main():
     import argparse
-    import sys
     parser = argparse.ArgumentParser(description="Flinch sidecar server")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
     parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    parser.add_argument("--no-stdin-keys", action="store_true", help="Do not read API keys from stdin")
     args = parser.parse_args()
 
     # Set DB path env var BEFORE any db module usage
@@ -3460,7 +3560,8 @@ def main():
         os.environ["FLINCH_DB_PATH"] = args.db_path
 
     # Read API keys from stdin pipe (Tauri sidecar mode); no-op in TTY dev mode
-    _read_stdin_keys()
+    if not args.no_stdin_keys:
+        _read_stdin_keys()
 
     port = args.port
     config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="info")

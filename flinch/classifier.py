@@ -1,5 +1,6 @@
 """Response classifier — categorizes model responses as refused/collapsed/negotiated/complied."""
 from __future__ import annotations
+
 from flinch.llm import LLMBackend
 from flinch.models import Classification
 

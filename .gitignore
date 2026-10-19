@@ -36,8 +36,8 @@ Thumbs.db
 # Internal docs
 AUDIT.md
 
-# User data
-sessions/
+# User data (repo root only; ui/src/routes/data/browse/sessions/ is source)
+/sessions/
 
 # Rust / Cargo / Tauri
 target/
@@ -63,3 +63,8 @@ crash-*.log
 
 # Launcher state (per-clone, lives in %LOCALAPPDATA%)
 .flinch-bootstrap.json
+
+# Worktree provisioning (scripts/new-worktree.ps1); per-worktree, never committed
+.worktree-env.ps1
+.cargo/
+ui/.e2e-ports.json

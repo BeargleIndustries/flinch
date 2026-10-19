@@ -24,12 +24,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shutil
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 RESOURCES_DIR = ROOT / "src-tauri" / "resources"
@@ -84,7 +82,7 @@ def download_pbs(target: Path, expected_sha: str) -> None:
     if target.exists():
         actual = sha256_of(target)
         if actual == expected_sha:
-            log(f"PBS tarball already present with correct SHA — skipping download")
+            log("PBS tarball already present with correct SHA — skipping download")
             return
         log(f"existing tarball SHA mismatch (got {actual[:12]}…, want {expected_sha[:12]}…) — redownloading")
         target.unlink()
@@ -160,7 +158,7 @@ _SHA_CONST_PATTERN = re.compile(
 )
 
 
-def update_pbs_rs_constant(expected_sha: str) -> Optional[bool]:
+def update_pbs_rs_constant(expected_sha: str) -> bool | None:
     if not PBS_RS_PATH.exists():
         log(f"pbs.rs not found at {PBS_RS_PATH} — skipping constant update")
         return None

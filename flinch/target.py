@@ -19,6 +19,11 @@ class TargetResponse:
     raw_model: str | None = None
 
 
+# Stored when a provider returns no content. It is never sent back to a model
+# as an assistant turn (seed and the Claude conversation both skip it).
+EMPTY_RESPONSE = "[empty response]"
+
+
 class TargetModelError(Exception):
     pass
 
@@ -44,6 +49,11 @@ class TargetModel(ABC):
 
     @abstractmethod
     def reset(self) -> None: ...
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        """Replace the conversation with `messages` (alternating user and assistant
+        dicts), so the next `reply` continues it."""
+        raise NotImplementedError(f"{type(self).__name__} cannot seed a conversation")
 
     @property
     def is_base_model(self) -> bool:
@@ -72,6 +82,9 @@ class ClaudeTarget(TargetModel):
     def reset(self) -> None:
         self._messages = []
 
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        self._messages = [dict(m) for m in messages]
+
     async def _call(self) -> TargetResponse:
         try:
             kwargs = dict(
@@ -84,8 +97,9 @@ class ClaudeTarget(TargetModel):
             t0 = time.monotonic()
             response = await self._client.messages.create(**kwargs)
             latency_ms = int((time.monotonic() - t0) * 1000)
-            text = response.content[0].text if response.content else "[empty response]"
-            self._messages.append({"role": "assistant", "content": text})
+            text = response.content[0].text if response.content else EMPTY_RESPONSE
+            if text != EMPTY_RESPONSE:
+                self._messages.append({"role": "assistant", "content": text})
             return TargetResponse(
                 text=text,
                 input_tokens=response.usage.input_tokens,
@@ -116,7 +130,7 @@ class OpenAITarget(TargetModel):
 
     def __init__(self, model: str, system_prompt: str = "", api_key: str | None = None, base_url: str | None = None) -> None:
         try:
-            import openai
+            import openai  # noqa: F401 (availability check)
         except ImportError:
             raise ImportError("openai package required. Install with: pip install openai")
         self._model = model
@@ -134,6 +148,10 @@ class OpenAITarget(TargetModel):
 
     def reset(self) -> None:
         self._messages = []
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        system = [{"role": "system", "content": self._system_prompt}] if self._system_prompt else []
+        self._messages = system + [dict(m) for m in messages]
 
     async def send(self, prompt: str) -> TargetResponse:
         self._messages = []
@@ -195,12 +213,27 @@ class GeminiTarget(TargetModel):
     def reset(self) -> None:
         self._chat = None
 
-    async def send(self, prompt: str) -> TargetResponse:
+    def _config(self):
         from google.genai import types
-        config = types.GenerateContentConfig(**{"system_instruction": self._system_prompt}) if self._system_prompt else None
+        return types.GenerateContentConfig(**{"system_instruction": self._system_prompt}) if self._system_prompt else None
+
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        from google.genai import types
+        history = [
+            types.Content(
+                role="model" if m["role"] == "assistant" else "user",
+                parts=[types.Part(text=m["content"])],
+            )
+            for m in messages
+        ]
+        self._chat = self._client.aio.chats.create(
+            model=self._model_name, config=self._config(), history=history
+        )
+
+    async def send(self, prompt: str) -> TargetResponse:
         self._chat = self._client.aio.chats.create(
             model=self._model_name,
-            config=config,
+            config=self._config(),
         )
         try:
             t0 = time.monotonic()
@@ -255,10 +288,12 @@ class BaseModelTarget(OpenAITarget):
     }
 
     def __init__(self, model: str, system_prompt: str = "", **kwargs):
-        # Base models use Together API
+        # Base models use Together API, with the Together key (never the OpenAI key)
+        api_key = kwargs.pop("api_key", None) or _provider_key("TOGETHER_API_KEY", "Together AI", model)
         super().__init__(
             model=model,
             system_prompt="",  # No system prompt for base models
+            api_key=api_key,
             base_url="https://api.together.xyz/v1",
             **kwargs
         )
@@ -276,6 +311,13 @@ class BaseModelTarget(OpenAITarget):
             full_prompt = prompt
         return await super().send(full_prompt)
 
+    def seed(self, messages: list[dict[str, str]]) -> None:
+        """The first user message carries the context prefix, as `send` sent it."""
+        seeded = [dict(m) for m in messages]
+        if self._context_prefix and seeded and seeded[0]["role"] == "user":
+            seeded[0]["content"] = f"{self._context_prefix}\n\n{seeded[0]['content']}"
+        super().seed(seeded)
+
 
 class OllamaTarget(OpenAITarget):
     """Target for local models via Ollama (or any OpenAI-compatible local server).
@@ -287,9 +329,16 @@ class OllamaTarget(OpenAITarget):
 
     DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
+    @staticmethod
+    def default_base_url() -> str:
+        """`LOCAL_MODEL_URL`, else the Settings Ollama URL (`OLLAMA_BASE_URL`) plus /v1."""
+        return os.environ.get("LOCAL_MODEL_URL") or (
+            os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1"
+        )
+
     def __init__(self, model: str, system_prompt: str = "",
                  base_url: str | None = None, **kwargs):
-        url = base_url or os.environ.get("LOCAL_MODEL_URL", self.DEFAULT_BASE_URL)
+        url = base_url or self.default_base_url()
         # Strip "ollama:" prefix if present — the server just wants the bare model name
         bare_model = model.removeprefix("ollama:")
         # OpenAI client requires an api_key; local servers don't need one
@@ -309,7 +358,7 @@ class OllamaTarget(OpenAITarget):
         OpenAI-compatible /v1/models.  Returns bare model name strings.
         Returns empty list if server is unreachable.
         """
-        url = base_url or os.environ.get("LOCAL_MODEL_URL", cls.DEFAULT_BASE_URL)
+        url = base_url or cls.default_base_url()
         ollama_base = url.rstrip("/").removesuffix("/v1")
 
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -336,7 +385,7 @@ class OllamaTarget(OpenAITarget):
     @classmethod
     async def is_available(cls, base_url: str | None = None) -> bool:
         """Check if the local model server is reachable."""
-        url = base_url or os.environ.get("LOCAL_MODEL_URL", cls.DEFAULT_BASE_URL)
+        url = base_url or cls.default_base_url()
         ollama_base = url.rstrip("/").removesuffix("/v1")
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
@@ -344,3 +393,84 @@ class OllamaTarget(OpenAITarget):
                 return resp.status_code == 200
         except Exception:
             return False
+
+
+XAI_BASE_URL = "https://api.x.ai/v1"
+TOGETHER_BASE_URL = "https://api.together.xyz/v1"
+
+_OPENAI_PREFIXES = ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")
+_TOGETHER_PREFIXES = ("meta-llama/", "llama-")
+
+
+def _provider_key(env_name: str, provider_label: str, model_name: str) -> str:
+    """Read a provider key; never fall back to another provider's key."""
+    key = os.environ.get(env_name)
+    if not key:
+        raise ValueError(
+            f"{provider_label} API key required to test '{model_name}'. "
+            f"Set {env_name} or choose a different target model."
+        )
+    return key
+
+
+def _provider_for_prefix(model_name: str) -> str | None:
+    if model_name.startswith("claude-"):
+        return "anthropic"
+    if model_name.startswith(_OPENAI_PREFIXES):
+        return "openai"
+    if model_name.startswith("gemini-"):
+        return "google"
+    if model_name.startswith("grok-"):
+        return "xai"
+    if model_name.startswith(_TOGETHER_PREFIXES):
+        return "together"
+    if model_name.startswith("ollama:"):
+        return "ollama"
+    return None
+
+
+def make_target(
+    model_name: str,
+    system_prompt: str = "",
+    anthropic_client: anthropic.AsyncAnthropic | None = None,
+    provider_hint: str | None = None,
+) -> TargetModel:
+    """The one target factory: pick the provider from the model id prefix.
+
+    When no prefix matches, `provider_hint` (anthropic, openai, google, xai,
+    together, ollama) decides. xAI and Together targets get their own keys and
+    never the OpenAI key.
+    """
+    provider = _provider_for_prefix(model_name) or provider_hint
+    if provider == "anthropic":
+        if anthropic_client is None and not os.environ.get("ANTHROPIC_API_KEY"):
+            raise ValueError(
+                "Anthropic API key required to test Claude models. "
+                "Set ANTHROPIC_API_KEY or choose a different target model."
+            )
+        return ClaudeTarget(model=model_name, client=anthropic_client, system_prompt=system_prompt)
+    if provider == "openai":
+        return OpenAITarget(model_name, system_prompt=system_prompt)
+    if provider == "google":
+        return GeminiTarget(model_name, system_prompt=system_prompt)
+    if provider == "xai":
+        return OpenAITarget(
+            model_name,
+            system_prompt=system_prompt,
+            api_key=_provider_key("XAI_API_KEY", "xAI", model_name),
+            base_url=XAI_BASE_URL,
+        )
+    if provider == "together":
+        return OpenAITarget(
+            model_name,
+            system_prompt=system_prompt,
+            api_key=_provider_key("TOGETHER_API_KEY", "Together AI", model_name),
+            base_url=TOGETHER_BASE_URL,
+        )
+    if provider == "ollama":
+        return OllamaTarget(model=model_name, system_prompt=system_prompt)
+    raise ValueError(
+        f"Unknown model prefix for '{model_name}'. "
+        "Supported: claude-*, gpt-*, o1-*, o3-*, o4-*, chatgpt-*, gemini-*, grok-*, "
+        "meta-llama/*, llama-*, ollama:*"
+    )

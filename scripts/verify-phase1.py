@@ -1,11 +1,13 @@
 """
 Smoke-test the Phase 1 (US-001) acceptance criteria: Flinch's Python
-sidecar runs in both dev mode and packaged mode, exposes /health and
-/api/settings/keys, honors FLINCH_DB_PATH, and accepts --port / --db-path.
+sidecar runs in both dev mode and packaged mode, prints the READY sentinel,
+exposes /health, /api/settings/keys and /api/settings/capabilities, honors
+--db-path, and accepts API keys over a stdin pipe (the packaged handoff).
 
-Does NOT exercise the stdin key handoff (that needs a pipe and would
-collide with a real API call). Leave that to manual test or US-003
-integration.
+The plain cases start the sidecar with stdin on DEVNULL, so they never wait
+on the handoff; only the stdin case keeps a pipe. `GET /` is checked for
+`{"name": "flinch"}` only when it answers JSON (it serves the legacy page
+until the switch-over).
 
 Usage:
     python scripts/verify-phase1.py
@@ -107,6 +109,7 @@ def run_case(label: str, port: int, db_path: Path | None) -> None:
     proc = subprocess.Popen(
         args,
         cwd=ROOT,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -156,6 +159,29 @@ def run_case(label: str, port: int, db_path: Path | None) -> None:
         if missing:
             fail(f"/api/settings/keys missing providers: {missing}. got={sorted(providers_seen)}")
         log(f"/api/settings/keys OK: {len(keys_payload)} entries, all booleans, no raw keys")
+
+        status, body = http_get(f"http://127.0.0.1:{port}/api/settings/capabilities")
+        if status != 200:
+            fail(f"/api/settings/capabilities returned {status}, body: {body}")
+        try:
+            caps = json.loads(body)
+        except json.JSONDecodeError:
+            fail(f"/api/settings/capabilities body is not JSON: {body!r}")
+        expected_caps = {"pdf", "experiment_extras", "openai_sdk", "google_sdk"}
+        if not isinstance(caps, dict) or set(caps) != expected_caps:
+            fail(f"/api/settings/capabilities expected keys {sorted(expected_caps)}, got {caps!r}")
+        if not all(isinstance(v, bool) for v in caps.values()):
+            fail(f"/api/settings/capabilities values must be booleans: {caps!r}")
+        log(f"/api/settings/capabilities OK: {caps}")
+
+        status, body = http_get(f"http://127.0.0.1:{port}/")
+        try:
+            root = json.loads(body)
+        except json.JSONDecodeError:
+            fail(f"GET / body is not JSON: {body[:200]!r}")
+        if status != 200 or not isinstance(root, dict) or root.get("name") != "flinch":
+            fail(f'GET / expected 200 with {{"name": "flinch"}}, got {status}: {root!r}')
+        log("GET / OK")
 
         if db_path is not None:
             if not db_path.exists():
@@ -230,7 +256,7 @@ def run_stdin_case() -> None:
             meta = by_provider.get("meta", {})
             if not meta.get("is_set"):
                 fail(f"stdin key was not picked up for meta: {meta!r}")
-            log(f"stdin handoff OK — anthropic.is_set={anth.get('is_set')}, meta.is_set={meta.get('is_set')}")
+            log(f"stdin handoff OK: anthropic.is_set={anth.get('is_set')}, meta.is_set={meta.get('is_set')}")
         finally:
             kill(proc)
     log(f"--- case passed: {label} ---")

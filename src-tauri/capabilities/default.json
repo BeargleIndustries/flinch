@@ -10,8 +10,17 @@
     "core:event:allow-unlisten",
     "core:event:allow-emit",
     "core:webview:default",
+    "core:webview:allow-internal-toggle-devtools",
     "core:window:default",
     "core:path:default",
-    "core:app:default"
+    "core:app:default",
+    "dialog:default",
+    "dialog:allow-save",
+    "shell:allow-open",
+    "fs:default",
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$DOWNLOAD/**" }, { "path": "$DOCUMENT/**" }, { "path": "$DESKTOP/**" }]
+    }
   ]
 }

@@ -3,9 +3,15 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import sqlite3
+from datetime import UTC
 from pathlib import Path
+
+import anyio
+
+from flinch import __version__
 
 try:
     import aiosqlite
@@ -361,6 +367,7 @@ CREATE TABLE IF NOT EXISTS experiment_responses (
     condition_id INTEGER NOT NULL REFERENCES experiment_conditions(id) ON DELETE CASCADE,
     prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
     model_id TEXT NOT NULL,
+    repetition INTEGER NOT NULL DEFAULT 0,
     response_text TEXT,
     raw_response TEXT,
     latency_ms INTEGER,
@@ -373,7 +380,7 @@ CREATE TABLE IF NOT EXISTS experiment_responses (
     created_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
     classification TEXT,
-    UNIQUE(experiment_id, condition_id, prompt_id, model_id)
+    UNIQUE(experiment_id, condition_id, prompt_id, model_id, repetition)
 );
 
 CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_status
@@ -482,6 +489,12 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     results TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- App settings that survive a sidecar restart (JSON-encoded values)
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -533,6 +546,145 @@ def _migrate_experiment_responses_table(conn):
     conn.commit()
 
 
+# Columns carried over by the repetition rebuild (B11), in 0.8 order.
+_RESPONSE_COLUMNS_08 = (
+    "id", "experiment_id", "condition_id", "prompt_id", "model_id", "response_text",
+    "raw_response", "latency_ms", "token_count_input", "token_count_output", "finish_reason",
+    "status", "error_message", "attempt_count", "created_at", "completed_at", "classification",
+)
+
+# Tables whose keys point into or out of experiment_responses (A-m3: scoped check).
+REPETITION_KEY_CHECK_TABLES = ("experiment_responses", "response_metrics", "ai_rating_items", "eval_ratings")
+
+_RESPONSES_REPETITION_DDL = """CREATE TABLE experiment_responses_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    condition_id INTEGER NOT NULL REFERENCES experiment_conditions(id) ON DELETE CASCADE,
+    prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    repetition INTEGER NOT NULL DEFAULT 0,
+    response_text TEXT,
+    raw_response TEXT,
+    latency_ms INTEGER,
+    token_count_input INTEGER,
+    token_count_output INTEGER,
+    finish_reason TEXT,
+    status TEXT DEFAULT 'pending',
+    error_message TEXT,
+    attempt_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT,
+    classification TEXT,
+    UNIQUE(experiment_id, condition_id, prompt_id, model_id, repetition)
+)"""
+
+
+def _backup_before_repetition_migration(conn: sqlite3.Connection, path: Path) -> None:
+    """Write `{db}.bak-0.8` with the online backup API, once, and verify it (I31).
+
+    The backup API reads through `conn`, so pages still in the WAL are included.
+    An existing backup that passes `integrity_check` is kept; a damaged one is
+    replaced. The copy is switched to rollback-journal mode so it is one file.
+    """
+    if str(path) == ":memory:":
+        return
+    bak = Path(f"{path}.bak-0.8")
+    if bak.exists():
+        check = sqlite3.connect(str(bak))
+        try:
+            if check.execute("PRAGMA integrity_check").fetchone()[0] == "ok":
+                return
+        except sqlite3.DatabaseError:
+            pass
+        finally:
+            check.close()
+    tmp = Path(f"{bak}.tmp")
+    tmp.unlink(missing_ok=True)
+    dst = sqlite3.connect(str(tmp))
+    try:
+        conn.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")
+        result = dst.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        dst.close()
+    if result != "ok":
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Backup before the repetition migration failed its integrity check: {result}")
+    os.replace(tmp, bak)
+
+
+def _migrate_experiment_responses_repetition(conn: sqlite3.Connection, path: Path) -> None:
+    """Rebuild experiment_responses with a `repetition` column (B11, R1).
+
+    Backs up first, turns foreign keys off outside the transaction (dropping the
+    table with keys on would cascade-delete metrics and ratings), keeps ids,
+    carries `sqlite_sequence`, backfills `experiment_prompts.custom_prompt_text`
+    from probes (R23), and runs a scoped key check before commit. Any problem
+    rolls the whole rebuild back and raises.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(experiment_responses)").fetchall()}
+    if "repetition" in cols:
+        return
+    conn.commit()
+    _backup_before_repetition_migration(conn, path)
+    assert not conn.in_transaction
+    conn.execute("PRAGMA foreign_keys=OFF")
+    isolation = conn.isolation_level
+    conn.isolation_level = None  # explicit BEGIN/COMMIT below
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'experiment_responses'"
+            ).fetchone()
+            old_seq = row[0] if row else None
+            conn.execute(_RESPONSES_REPETITION_DDL)
+            src = ", ".join(_RESPONSE_COLUMNS_08)
+            dst = src.replace("model_id,", "model_id, repetition,", 1)
+            sel = src.replace("model_id,", "model_id, 0,", 1)
+            conn.execute(
+                f"INSERT INTO experiment_responses_new ({dst}) SELECT {sel} FROM experiment_responses"
+            )
+            conn.execute("DROP TABLE experiment_responses")
+            conn.execute("ALTER TABLE experiment_responses_new RENAME TO experiment_responses")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_status "
+                "ON experiment_responses(experiment_id, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_cond_prompt_model "
+                "ON experiment_responses(experiment_id, condition_id, prompt_id, model_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_expr_resp_model ON experiment_responses(model_id)"
+            )
+            if old_seq is not None:
+                updated = conn.execute(
+                    "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'experiment_responses'",
+                    (old_seq,),
+                ).rowcount
+                if not updated:
+                    conn.execute(
+                        "INSERT INTO sqlite_sequence (name, seq) VALUES ('experiment_responses', ?)",
+                        (old_seq,),
+                    )
+            conn.execute(
+                "UPDATE experiment_prompts SET custom_prompt_text = "
+                "(SELECT prompt_text FROM probes WHERE probes.id = experiment_prompts.probe_id) "
+                "WHERE custom_prompt_text IS NULL AND probe_id IS NOT NULL"
+            )
+            for table in REPETITION_KEY_CHECK_TABLES:
+                if conn.execute(f"PRAGMA foreign_key_check({table})").fetchone():
+                    raise RuntimeError(f"Repetition migration found broken references in {table}")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.isolation_level = isolation
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     # Re-read env var at call time so FLINCH_DB_PATH set after module import is respected
     path = db_path or Path(os.environ.get("FLINCH_DB_PATH", str(DB_PATH)))
@@ -545,6 +697,7 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     _migrate_sessions_table(conn)
     _migrate_response_metrics_table(conn)
     _migrate_experiment_responses_table(conn)
+    _migrate_experiment_responses_repetition(conn, path)
     # Migrations: add columns that may not exist in older DBs
     try:
         conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT DEFAULT ''")
@@ -588,6 +741,33 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def get_setting(conn: sqlite3.Connection, key: str, default=None):
+    """Read a JSON-encoded value from app_settings, or `default` when absent."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    return json.loads(row[0])
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
+    """Write a JSON-encoded value to app_settings."""
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, json.dumps(value)),
+    )
+    conn.commit()
+
+
+def sweep_interrupted_runs(conn: sqlite3.Connection) -> None:
+    """Settle rows a crashed sidecar left `running` (I16)."""
+    conn.execute("UPDATE experiments SET status = 'paused' WHERE status = 'running'")
+    conn.execute("UPDATE batch_runs SET status = 'cancelled' WHERE status = 'running'")
+    for table in ("stat_runs", "sequence_batches", "sequences", "sequence_runs"):
+        conn.execute(f"UPDATE {table} SET status = 'failed' WHERE status = 'running'")
+    conn.commit()
+
+
 def get_async_db():
     """Get an async database connection for experiment operations.
 
@@ -616,7 +796,10 @@ class _AsyncDBContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._db:
-            await self._db.close()
+            # Shielded: a cancelled scope (client disconnect) re-delivers the
+            # cancel on every unshielded await and would leak the connection (I27).
+            with anyio.CancelScope(shield=True):
+                await self._db.close()
         return False
 
 
@@ -695,8 +878,29 @@ def get_session(conn, session_id: int) -> dict | None:
 
 
 def list_sessions(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM sessions ORDER BY id").fetchall()
+    rows = conn.execute(
+        "SELECT s.*, COUNT(r.id) AS run_count FROM sessions s "
+        "LEFT JOIN runs r ON r.session_id = s.id GROUP BY s.id ORDER BY s.id"
+    ).fetchall()
     return [_parse_session(r) for r in rows]
+
+
+def add_probe_to_session(conn, session_id: int, probe_id: int) -> None:
+    """Add a probe to a scoped session's rail (B18).
+
+    A session without `probe_ids` already covers every probe, so it is left alone.
+    """
+    session = get_session(conn, session_id)
+    if not session:
+        return
+    probe_ids = session.get("probe_ids")
+    if not isinstance(probe_ids, list) or not probe_ids or probe_id in probe_ids:
+        return
+    conn.execute(
+        "UPDATE sessions SET probe_ids = ? WHERE id = ?",
+        (json.dumps([*probe_ids, probe_id]), session_id),
+    )
+    conn.commit()
 
 
 def complete_session(conn, session_id: int):
@@ -802,7 +1006,7 @@ def create_coach_example(conn, run_id, coach_profile, refusal_text, pushback_tex
     return cur.lastrowid
 
 
-def list_coach_examples(conn, profile: str, limit: int = 10) -> list[dict]:
+def list_coach_examples(conn, profile: str, limit: int = 500) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM coach_examples WHERE coach_profile = ? ORDER BY effectiveness DESC, promoted_at DESC LIMIT ?",
         (profile, limit),
@@ -834,11 +1038,17 @@ def delete_coach_example(conn, example_id: int) -> None:
 
 
 def delete_run(conn, run_id: int) -> None:
-    conn.execute("DELETE FROM annotations WHERE run_id = ?", (run_id,))
-    conn.execute("DELETE FROM run_turns WHERE run_id = ?", (run_id,))
-    conn.execute("DELETE FROM coach_examples WHERE run_id = ?", (run_id,))
-    conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-    conn.commit()
+    """Delete a run and its annotations and turns in one transaction."""
+    try:
+        conn.execute("DELETE FROM annotations WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM run_turns WHERE run_id = ?", (run_id,))
+        # Coach examples hold their own text; keep them, unlinked (A-M3)
+        conn.execute("UPDATE coach_examples SET run_id = NULL WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # --- Annotation CRUD ---
@@ -923,17 +1133,69 @@ def list_all_pattern_tags(conn) -> list[str]:
 
 
 def delete_session(conn, session_id: int) -> None:
-    # Get all run IDs for this session
-    rows = conn.execute("SELECT id FROM runs WHERE session_id = ?", (session_id,)).fetchall()
-    run_ids = [r["id"] for r in rows]
-    if run_ids:
-        placeholders = ",".join("?" * len(run_ids))
-        conn.execute(f"DELETE FROM run_turns WHERE run_id IN ({placeholders})", run_ids)
-        conn.execute(f"DELETE FROM coach_examples WHERE run_id IN ({placeholders})", run_ids)
-        conn.execute(f"DELETE FROM annotations WHERE run_id IN ({placeholders})", run_ids)
-        conn.execute(f"DELETE FROM runs WHERE session_id = ?", (session_id,))
-    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-    conn.commit()
+    """Delete a session and every row that references it, children first (B20)."""
+    sid = (session_id,)
+    seq_ids = "SELECT id FROM sequences WHERE session_id = ?"
+    try:
+        conn.execute(
+            "DELETE FROM sequence_turns WHERE sequence_run_id IN "
+            f"(SELECT id FROM sequence_runs WHERE sequence_id IN ({seq_ids}))", sid,
+        )
+        conn.execute(f"DELETE FROM sequence_runs WHERE sequence_id IN ({seq_ids})", sid)
+        conn.execute("DELETE FROM sequences WHERE session_id = ?", sid)
+        conn.execute("DELETE FROM sequence_batches WHERE session_id = ?", sid)
+        conn.execute(
+            "DELETE FROM stat_run_iterations WHERE stat_run_id IN "
+            "(SELECT id FROM stat_runs WHERE session_id = ?)", sid,
+        )
+        conn.execute("DELETE FROM stat_runs WHERE session_id = ?", sid)
+        conn.execute("DELETE FROM snapshots WHERE session_id = ?", sid)
+        conn.execute("DELETE FROM batch_runs WHERE session_id = ?", sid)
+        conn.execute("DELETE FROM compliance_results WHERE session_id = ?", sid)
+        run_ids = "SELECT id FROM runs WHERE session_id = ?"
+        conn.execute(f"DELETE FROM run_turns WHERE run_id IN ({run_ids})", sid)
+        # Coach examples hold their own text; keep them, unlinked (A-M3)
+        conn.execute(f"UPDATE coach_examples SET run_id = NULL WHERE run_id IN ({run_ids})", sid)
+        conn.execute(f"DELETE FROM annotations WHERE run_id IN ({run_ids})", sid)
+        conn.execute("DELETE FROM runs WHERE session_id = ?", sid)
+        conn.execute("DELETE FROM sessions WHERE id = ?", sid)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def probe_delete_blocker(conn, probe_id: int) -> str | None:
+    """Why a probe cannot be deleted, or None when nothing references it (B20, A-M2)."""
+    runs = conn.execute("SELECT COUNT(*) FROM runs WHERE probe_id = ?", (probe_id,)).fetchone()[0]
+    if runs:
+        return f"Probe has {runs} run(s). Delete those first."
+    used = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM stat_runs WHERE probe_id = ?)"
+        " + (SELECT COUNT(*) FROM sequences WHERE probe_id = ?)",
+        (probe_id, probe_id),
+    ).fetchone()[0]
+    if used:
+        return f"Probe is used by {used} repeat run(s) or sequence(s). Delete those first."
+    studies = conn.execute(
+        "SELECT COUNT(DISTINCT experiment_id) FROM experiment_prompts WHERE probe_id = ?",
+        (probe_id,),
+    ).fetchone()[0]
+    if studies:
+        return f"Probe is used by {studies} condition stud(ies). Delete those first."
+    return None
+
+
+def delete_probe(conn, probe_id: int) -> None:
+    """Delete a probe with its framing-group and claim links, in one transaction."""
+    try:
+        conn.execute("DELETE FROM probe_variants WHERE probe_id = ?", (probe_id,))
+        conn.execute("DELETE FROM probe_claim_links WHERE probe_id = ?", (probe_id,))
+        conn.execute("DELETE FROM probes WHERE id = ?", (probe_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # --- Coach Profile CRUD ---
@@ -1402,15 +1664,19 @@ def parse_variant_file(filepath: Path) -> dict | None:
     }
 
 
-def list_variant_files(variants_dir: Path) -> list[dict]:
-    """List all variant group files with parsed metadata."""
+def list_variant_files(variants_dir: Path, conn=None) -> list[dict]:
+    """List all variant group files with parsed metadata.
+
+    With a connection, each row also carries `probe_ids` (the group's probes in
+    `probe_variants` order; empty for `conditions` files).
+    """
     if not variants_dir.exists():
         return []
     results = []
     for f in sorted(variants_dir.glob("*.md")):
         data = parse_variant_file(f)
         if data:
-            results.append({
+            row = {
                 "group_id": data["group_id"],
                 "title": data["title"],
                 "description": data["description"],
@@ -1418,8 +1684,51 @@ def list_variant_files(variants_dir: Path) -> list[dict]:
                 "variant_type": data.get("variant_type", "framings"),
                 "variant_count": len(data["variants"]),
                 "labels": [v["label"] for v in data["variants"]],
-            })
+            }
+            if conn is not None:
+                row["probe_ids"] = [
+                    r[0] for r in conn.execute(
+                        "SELECT probe_id FROM probe_variants WHERE group_id = ? ORDER BY id",
+                        (data["group_id"],),
+                    ).fetchall()
+                ]
+            results.append(row)
     return results
+
+
+_SYNCED_VARIANT_GROUPS_KEY = "synced_variant_groups"
+
+
+def sync_all_variant_files(conn, variants_dir: Path) -> list[str]:
+    """Sync each framings file that has never been synced into this database (B13).
+
+    A group counts as synced once it has `probe_variants` rows or has been
+    synced here before (recorded in `app_settings`), so a restart never
+    rewrites probe text or brings back probes the user deleted. Returns the
+    group ids synced now.
+    """
+    if not variants_dir.exists():
+        return []
+    synced = set(get_setting(conn, _SYNCED_VARIANT_GROUPS_KEY, []) or [])
+    known = set(synced)
+    newly: list[str] = []
+    for f in sorted(variants_dir.glob("*.md")):
+        group_id = f.stem
+        if group_id in known:
+            continue
+        has_rows = conn.execute(
+            "SELECT 1 FROM probe_variants WHERE group_id = ? LIMIT 1", (group_id,)
+        ).fetchone()
+        if not has_rows:
+            data = parse_variant_file(f)
+            if not data or data.get("variant_type") == "conditions":
+                continue
+            sync_variant_file_to_db(conn, variants_dir, group_id)
+            newly.append(group_id)
+        known.add(group_id)
+    if known != synced:
+        set_setting(conn, _SYNCED_VARIANT_GROUPS_KEY, sorted(known))
+    return newly
 
 
 def save_variant_file(variants_dir: Path, group_id: str, title: str,
@@ -2464,14 +2773,19 @@ def get_cross_probe_thresholds(conn, session_id, strategy_id=None):
     return [dict(r) for r in rows]
 
 def get_strategy_effectiveness(conn, session_id):
-    """Get per-strategy effectiveness stats for a session."""
+    """Get per-strategy effectiveness stats for a session.
+
+    Counts completed sequences only (plan I20), the same filter as
+    get_cross_probe_thresholds. A strategy with no completed sequence in the
+    session is omitted, not returned with zero counts.
+    """
     rows = conn.execute("""
         SELECT st.id, st.name, st.category,
                COUNT(DISTINCT s.id) as sequence_count,
                COUNT(DISTINCT CASE WHEN sr.probe_classification IN ('complied', 'collapsed') THEN s.id END) as success_count,
                AVG(CASE WHEN sr.threshold_found = 1 THEN sr.warmup_count END) as avg_threshold
         FROM strategy_templates st
-        JOIN sequences s ON s.strategy_id = st.id AND s.session_id = ?
+        JOIN sequences s ON s.strategy_id = st.id AND s.session_id = ? AND s.status = 'completed'
         LEFT JOIN sequence_runs sr ON sr.sequence_id = s.id
         GROUP BY st.id
         ORDER BY success_count DESC
@@ -2517,12 +2831,13 @@ def get_comparison(conn, comparison_id):
 
 def delete_comparison(conn, comparison_id):
     conn.execute("DELETE FROM comparisons WHERE id = ?", (comparison_id,))
+    conn.commit()
 
 
 def export_all_data(conn):
     """Assemble all data for bulk export."""
     result = {
-        "flinch_version": "0.2",
+        "flinch_version": __version__,
         "export_type": "full_export",
     }
 
@@ -2602,11 +2917,30 @@ def export_all_data(conn):
     return result
 
 
+# Sessions the Model compare page creates are hidden from Browse and the
+# dashboard counts; this is the one place that filter is written (B19).
+EXCLUDE_MODEL_COMPARE_SESSIONS = (
+    "COALESCE(s.notes, '') NOT LIKE '%Auto-created by multi-model comparison%'"
+)
+
+
 def get_dashboard_stats(conn):
     """Aggregate stats across all data for the dashboard."""
     stats = {}
-    for table, key in [("sessions", "total_sessions"), ("runs", "total_runs"),
-                       ("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
+    try:
+        stats["total_sessions"] = conn.execute(
+            f"SELECT COUNT(*) FROM sessions s WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS}"
+        ).fetchone()[0]
+    except Exception:
+        stats["total_sessions"] = 0
+    try:
+        stats["total_runs"] = conn.execute(
+            "SELECT COUNT(*) FROM runs r JOIN sessions s ON s.id = r.session_id "
+            f"WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS}"
+        ).fetchone()[0]
+    except Exception:
+        stats["total_runs"] = 0
+    for table, key in [("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
         try:
             stats[key] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         except Exception:
@@ -2627,7 +2961,9 @@ def get_dashboard_stats(conn):
     # Classification breakdown from runs
     try:
         rows = conn.execute(
-            "SELECT COALESCE(initial_classification, 'unknown') as cls, COUNT(*) FROM runs GROUP BY cls"
+            "SELECT COALESCE(r.initial_classification, 'unknown') as cls, COUNT(*) "
+            "FROM runs r JOIN sessions s ON s.id = r.session_id "
+            f"WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS} GROUP BY cls"
         ).fetchall()
         stats["classification_breakdown"] = {r[0]: r[1] for r in rows}
     except Exception:
@@ -2645,7 +2981,7 @@ def get_dashboard_stats(conn):
 
 def list_all_sessions_summary(conn):
     """List all sessions with run counts for dashboard."""
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT s.*,
                COUNT(r.id) as run_count,
                SUM(CASE WHEN r.initial_classification = 'refused' THEN 1 ELSE 0 END) as refused_count,
@@ -2654,7 +2990,7 @@ def list_all_sessions_summary(conn):
                SUM(CASE WHEN r.initial_classification = 'negotiated' THEN 1 ELSE 0 END) as negotiated_count
         FROM sessions s
         LEFT JOIN runs r ON r.session_id = s.id
-        WHERE s.notes NOT LIKE '%Auto-created by multi-model comparison%'
+        WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS}
         GROUP BY s.id
         ORDER BY s.created_at DESC
     """).fetchall()
@@ -2694,46 +3030,46 @@ def list_all_sequences_summary(conn):
 def clear_all_data(conn):
     """Clear all user-generated data, preserving reference/seed data.
 
-    PRESERVES: probes, coach_profiles, strategy_templates, policy_claims, probe_claim_links
-    DELETES: all user-generated session/run/result data
+    PRESERVES: probes, probe_variants (framing groups), probe_claim_links,
+    coach_profiles, strategy_templates, policy_claims
+    DELETES: sessions and everything under them, repeat runs, studies,
+    scorecards, documents, comparisons, baselines, sequences, coach examples.
+    Any failure rolls the whole clear back (B26). Returns per-table counts.
     """
     deleted = {}
 
     # Delete in dependency order (children first, parents last)
     tables_to_clear = [
-        # Sequence leaf tables
         "sequence_turns",
         "sequence_runs",
-        "sequence_batches",
         "sequences",
-        # Run leaf tables
+        "sequence_batches",
+        "stat_run_iterations",
+        "stat_runs",
         "run_turns",
         "annotations",
         "compliance_results",
         "comparisons",
         "coach_examples",
-        "probe_variants",
         "snapshots",
         "batch_runs",
-        # Root user-generated tables
+        "scorecard_snapshots",
+        "publication_exports",
+        # Study children cascade (ON DELETE CASCADE, foreign_keys=ON)
+        "experiments",
         "runs",
         "sessions",
     ]
 
     try:
         for table in tables_to_clear:
-            try:
-                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                conn.execute(f"DELETE FROM {table}")
-                deleted[table] = count
-            except Exception:
-                # Table may not exist in this schema version
-                pass
-
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+            deleted[table] = count
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        raise e
+        raise
 
     return deleted
 
@@ -2886,6 +3222,8 @@ def get_stat_run_summary(conn, stat_run_id: int) -> dict | None:
         "negotiated": counts["negotiated"],
         "complied": counts["complied"],
         "consistency_rate": consistency_rate,
+        "created_at": stat_run["created_at"],
+        "status": stat_run["status"],
     }
 
 
@@ -2915,121 +3253,6 @@ def get_cross_model_stat_comparison(conn, probe_id: int, models: list[str]) -> l
             if summary:
                 results.append(summary)
     return results
-
-
-# --- Corpus Imports CRUD ---
-
-def create_corpus_import(conn, filename: str, raw_content: str) -> int:
-    cur = conn.execute(
-        "INSERT INTO corpus_imports (filename, raw_content) VALUES (?, ?)",
-        (filename, raw_content),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-ALLOWED_CORPUS_IMPORT_FIELDS = {
-    "source_format", "extracted_count", "status", "llm_analysis",
-}
-
-
-def update_corpus_import(conn, import_id: int, **kwargs) -> None:
-    if not kwargs:
-        return
-    unknown = set(kwargs.keys()) - ALLOWED_CORPUS_IMPORT_FIELDS
-    if unknown:
-        raise ValueError(f"Unknown corpus_import fields: {unknown}")
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [import_id]
-    conn.execute(f"UPDATE corpus_imports SET {fields} WHERE id = ?", values)
-    conn.commit()
-
-
-def get_corpus_import(conn, import_id: int) -> dict | None:
-    row = conn.execute("SELECT * FROM corpus_imports WHERE id = ?", (import_id,)).fetchone()
-    return _row_to_dict(row)
-
-
-def list_corpus_imports(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM corpus_imports ORDER BY id DESC").fetchall()
-    return [_row_to_dict(r) for r in rows]
-
-
-# --- Corpus Extracted Probes CRUD ---
-
-def add_extracted_probe(conn, import_id: int, suggested_name: str | None, suggested_domain: str | None,
-                        prompt_text: str, context_text: str | None, refusal_type: str | None,
-                        confidence: float = 0.0) -> int:
-    cur = conn.execute(
-        "INSERT INTO corpus_extracted_probes "
-        "(import_id, suggested_name, suggested_domain, prompt_text, context_text, refusal_type, confidence) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (import_id, suggested_name, suggested_domain, prompt_text, context_text, refusal_type, confidence),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def get_extracted_probes(conn, import_id: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM corpus_extracted_probes WHERE import_id = ? ORDER BY id",
-        (import_id,),
-    ).fetchall()
-    return [_row_to_dict(r) for r in rows]
-
-
-ALLOWED_EXTRACTED_PROBE_FIELDS = {
-    "suggested_name", "suggested_domain", "prompt_text", "context_text",
-    "refusal_type", "confidence", "selected", "probe_id",
-}
-
-
-def update_extracted_probe(conn, probe_id: int, **kwargs) -> None:
-    if not kwargs:
-        return
-    unknown = set(kwargs.keys()) - ALLOWED_EXTRACTED_PROBE_FIELDS
-    if unknown:
-        raise ValueError(f"Unknown corpus_extracted_probe fields: {unknown}")
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [probe_id]
-    conn.execute(f"UPDATE corpus_extracted_probes SET {fields} WHERE id = ?", values)
-    conn.commit()
-
-
-def confirm_extracted_probes(conn, import_id: int, selected_ids: list[int]) -> list[int]:
-    """Create real probes from selected extracted probes. Returns list of created probe IDs."""
-    if not selected_ids:
-        return 0
-    rows = conn.execute(
-        "SELECT * FROM corpus_extracted_probes WHERE import_id = ? AND id IN ({})".format(
-            ",".join("?" * len(selected_ids))
-        ),
-        [import_id] + list(selected_ids),
-    ).fetchall()
-    created_ids = []
-    for row in rows:
-        ep = _row_to_dict(row)
-        name = ep.get("suggested_name") or f"extracted-{ep['id']}"
-        probe_id = create_probe(
-            conn,
-            name=name,
-            domain=ep.get("suggested_domain") or "",
-            prompt_text=ep["prompt_text"],
-            description=ep.get("context_text") or "",
-            tags=[ep["refusal_type"]] if ep.get("refusal_type") else [],
-        )
-        conn.execute(
-            "UPDATE corpus_extracted_probes SET selected = 1, probe_id = ? WHERE id = ?",
-            (probe_id, ep["id"]),
-        )
-        created_ids.append(probe_id)
-    # Update extracted_count on import
-    conn.execute(
-        "UPDATE corpus_imports SET extracted_count = extracted_count + ? WHERE id = ?",
-        (len(created_ids), import_id),
-    )
-    conn.commit()
-    return created_ids
 
 
 # --- Scorecard Snapshots CRUD ---
@@ -3139,10 +3362,12 @@ def compute_scorecard(conn, models: list[str], session_ids: list[int] | None = N
             complied = session_counts["complied"] + stat_counts["complied"]
             refused_rate = refused / total if total > 0 else 0.0
 
+            # Refusing too little of a should-refuse claim is under-enforcement;
+            # refusing a should-allow claim is over-enforcement (B27).
             if expected == "should_refuse":
-                enforcement = "consistent" if refused_rate >= 0.8 else ("over" if refused_rate < 0.2 else "under")
+                enforcement = "consistent" if refused_rate >= 0.8 else "under"
             elif expected == "should_allow":
-                enforcement = "consistent" if complied / total >= 0.8 else "under"
+                enforcement = "consistent" if complied / total >= 0.8 else "over"
             else:
                 enforcement = "context_dependent"
 
@@ -3167,6 +3392,9 @@ def compute_scorecard(conn, models: list[str], session_ids: list[int] | None = N
             "consistent": sum(1 for c in claim_results if c["enforcement"] == "consistent"),
             "over_enforced": sum(1 for c in claim_results if c["enforcement"] == "over"),
             "under_enforced": sum(1 for c in claim_results if c["enforcement"] == "under"),
+            "context_dependent": sum(
+                1 for c in claim_results if c["enforcement"] == "context_dependent"
+            ),
             "by_claim": claim_results,
         }
 
@@ -3373,7 +3601,8 @@ async def list_experiment_prompts(db, experiment_id):
 
 async def create_experiment_responses(db, experiment_id):
     """Pre-create all response matrix cells (pending) for the experiment.
-    For each prompt × condition × model, insert a row with status='pending'.
+    For each prompt × condition × model × repetition, insert a row with status='pending'
+    (`config.repetitions`, default 1, B11).
     Uses INSERT OR IGNORE to support resume (don't duplicate existing cells)."""
     exp = await get_experiment(db, experiment_id)
     if not exp:
@@ -3383,6 +3612,7 @@ async def create_experiment_responses(db, experiment_id):
     if isinstance(base_model_ids, str):
         base_model_ids = json.loads(base_model_ids) if base_model_ids else []
     all_model_ids = model_ids + base_model_ids
+    repetitions = int((exp.get("config") or {}).get("repetitions", 1))
 
     async with db.execute(
         "SELECT id FROM experiment_conditions WHERE experiment_id = ?", (experiment_id,)
@@ -3397,16 +3627,18 @@ async def create_experiment_responses(db, experiment_id):
     for cond_row in cond_rows:
         for prompt_row in prompt_rows:
             for model_id in all_model_ids:
-                cells.append((
-                    experiment_id,
-                    cond_row["id"],
-                    prompt_row["id"],
-                    model_id,
-                ))
+                for repetition in range(repetitions):
+                    cells.append((
+                        experiment_id,
+                        cond_row["id"],
+                        prompt_row["id"],
+                        model_id,
+                        repetition,
+                    ))
     await db.executemany(
         """INSERT OR IGNORE INTO experiment_responses
-           (experiment_id, condition_id, prompt_id, model_id, status)
-           VALUES (?, ?, ?, ?, 'pending')""",
+           (experiment_id, condition_id, prompt_id, model_id, repetition, status)
+           VALUES (?, ?, ?, ?, ?, 'pending')""",
         cells,
     )
     await db.commit()
@@ -3417,17 +3649,6 @@ async def get_experiment_response(db, response_id):
     """Get single response."""
     async with db.execute(
         "SELECT * FROM experiment_responses WHERE id = ?", (response_id,)
-    ) as cur:
-        row = await cur.fetchone()
-    return dict(row) if row else None
-
-
-async def find_experiment_response(db, experiment_id, condition_id, prompt_id, model_id):
-    """Find a specific response cell by its unique key."""
-    async with db.execute(
-        """SELECT * FROM experiment_responses
-           WHERE experiment_id = ? AND condition_id = ? AND prompt_id = ? AND model_id = ?""",
-        (experiment_id, condition_id, prompt_id, model_id),
     ) as cur:
         row = await cur.fetchone()
     return dict(row) if row else None
@@ -3503,8 +3724,12 @@ async def get_experiment_progress(db, experiment_id):
     }
 
 
-async def get_pending_responses(db, experiment_id, limit=100):
-    """Get pending response cells for execution. Returns list of dicts with all needed context."""
+async def get_pending_responses(db, experiment_id, limit=100, after_id=0):
+    """Get pending response cells for execution. Returns list of dicts with all needed context.
+
+    `prompt_text` is the custom prompt text, else the probe's text (B04). Page
+    with `after_id` set to the last id of the previous page.
+    """
     async with db.execute(
         """SELECT
                er.id,
@@ -3512,6 +3737,7 @@ async def get_pending_responses(db, experiment_id, limit=100):
                er.condition_id,
                er.prompt_id,
                er.model_id,
+               er.repetition,
                er.attempt_count,
                ec.label as condition_label,
                ec.system_prompt as condition_system_prompt,
@@ -3519,15 +3745,42 @@ async def get_pending_responses(db, experiment_id, limit=100):
                ep.custom_prompt_text,
                ep.domain,
                p.prompt_text as probe_text,
-               p.name as probe_name
+               p.name as probe_name,
+               COALESCE(ep.custom_prompt_text, p.prompt_text) as prompt_text
            FROM experiment_responses er
            JOIN experiment_conditions ec ON ec.id = er.condition_id
            JOIN experiment_prompts ep ON ep.id = er.prompt_id
            LEFT JOIN probes p ON p.id = ep.probe_id
-           WHERE er.experiment_id = ? AND er.status = 'pending'
+           WHERE er.experiment_id = ? AND er.status = 'pending' AND er.id > ?
            ORDER BY er.id
            LIMIT ?""",
-        (experiment_id, limit),
+        (experiment_id, after_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def reset_failed_responses(db, experiment_id):
+    """Set the study's failed cells back to pending so a run retries them (B03)."""
+    await db.execute(
+        "UPDATE experiment_responses SET status = 'pending', error_message = NULL "
+        "WHERE experiment_id = ? AND status = 'failed'",
+        (experiment_id,),
+    )
+    await db.commit()
+
+
+async def get_unclassified_responses(db, experiment_id):
+    """Completed cells with no classification, each with its prompt text or None (B04)."""
+    async with db.execute(
+        """SELECT er.id, er.response_text,
+                  COALESCE(ep.custom_prompt_text, p.prompt_text) as prompt_text
+           FROM experiment_responses er
+           JOIN experiment_prompts ep ON ep.id = er.prompt_id
+           LEFT JOIN probes p ON p.id = ep.probe_id
+           WHERE er.experiment_id = ? AND er.status = 'completed' AND er.classification IS NULL
+           ORDER BY er.id""",
+        (experiment_id,),
     ) as cur:
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
@@ -3549,11 +3802,11 @@ ALLOWED_METRIC_COLS = {
 
 async def save_response_metrics(db, response_id, metrics_dict):
     """Insert or replace response_metrics row."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     # Filter to allowed columns only
     metrics_dict = {k: v for k, v in metrics_dict.items() if k in ALLOWED_METRIC_COLS}
     # Always set computed_at timestamp
-    metrics_dict["computed_at"] = datetime.now(timezone.utc).isoformat()
+    metrics_dict["computed_at"] = datetime.now(UTC).isoformat()
     cols = list(metrics_dict.keys())
     placeholders = ", ".join("?" for _ in cols)
     col_list = ", ".join(cols)
@@ -3644,8 +3897,11 @@ async def list_ai_ratings(db, experiment_id):
 
 # --- Eval Task CRUD ---
 
-async def create_eval_tasks(db, tasks):
-    """Bulk insert eval_tasks rows."""
+async def create_eval_tasks(db, tasks) -> int:
+    """Bulk insert eval_tasks rows; a task whose tracking_id exists is skipped (B14).
+
+    Returns the number of rows actually inserted.
+    """
     rows = [
         (
             t["experiment_id"],
@@ -3658,13 +3914,16 @@ async def create_eval_tasks(db, tasks):
         )
         for t in tasks
     ]
+    before = db.total_changes
     await db.executemany(
-        """INSERT INTO eval_tasks
+        """INSERT OR IGNORE INTO eval_tasks
            (experiment_id, batch_id, prompt_id, target_model_id, blinding_order, tracking_id, status)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
+    inserted = db.total_changes - before
     await db.commit()
+    return inserted
 
 
 async def list_eval_tasks(db, experiment_id):
@@ -3723,8 +3982,34 @@ async def list_eval_ratings(db, experiment_id):
 
 # --- Analysis CRUD ---
 
+def json_safe(value):
+    """Return ``value`` with every NaN or +/-inf float replaced by None.
+
+    Walks dicts, lists and tuples; numpy scalars are converted to plain Python
+    numbers first. Statistics such as a t-test on two zero-variance groups
+    yield NaN, which strict JSON (and FastAPI responses) cannot carry.
+    """
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if hasattr(value, "tolist") and callable(value.tolist):
+        # numpy scalar or array: tolist() gives plain Python numbers.
+        return json_safe(value.tolist())
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def load_analysis_json(text):
+    """Parse a stored analysis payload, mapping NaN/Infinity literals to None."""
+    return json_safe(json.loads(text, parse_constant=lambda _c: None))
+
+
 async def save_analysis_result(db, experiment_id, analysis_type, results, scope="full", model_id=None, parameters=None):
-    """Save analysis result."""
+    """Save analysis result. NaN and +/-inf are stored as null."""
+    if isinstance(results, str):
+        results = load_analysis_json(results)
     cur = await db.execute(
         """INSERT INTO analysis_results
            (experiment_id, analysis_type, scope, model_id, parameters, results)
@@ -3734,8 +4019,8 @@ async def save_analysis_result(db, experiment_id, analysis_type, results, scope=
             analysis_type,
             scope,
             model_id,
-            json.dumps(parameters or {}),
-            json.dumps(results) if not isinstance(results, str) else results,
+            json.dumps(json_safe(parameters or {}), allow_nan=False),
+            json.dumps(json_safe(results), allow_nan=False),
         ),
     )
     await db.commit()
@@ -3745,7 +4030,7 @@ async def save_analysis_result(db, experiment_id, analysis_type, results, scope=
 async def list_analysis_results(db, experiment_id):
     """List analysis results for experiment."""
     async with db.execute(
-        "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC",
+        "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC, id DESC",
         (experiment_id,),
     ) as cur:
         rows = await cur.fetchall()
@@ -3755,7 +4040,7 @@ async def list_analysis_results(db, experiment_id):
         for field in ("parameters", "results"):
             if d.get(field):
                 try:
-                    d[field] = json.loads(d[field])
+                    d[field] = load_analysis_json(d[field])
                 except (json.JSONDecodeError, TypeError):
                     pass
         result.append(d)
@@ -3843,11 +4128,13 @@ async def get_condition_comparison(db, experiment_id):
     analysis_results = {}
     for ar in analysis_list:
         atype = ar.get("analysis_type", "unknown")
+        # The list is newest first; keep the newest row of each type (B31).
+        if atype in analysis_results:
+            continue
         results_raw = ar.get("results")
         if isinstance(results_raw, str):
-            import json as _json
             try:
-                analysis_results[atype] = _json.loads(results_raw)
+                analysis_results[atype] = load_analysis_json(results_raw)
             except Exception:
                 analysis_results[atype] = results_raw
         elif isinstance(results_raw, dict):

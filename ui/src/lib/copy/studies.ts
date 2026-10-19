@@ -1,0 +1,1098 @@
+// Studies section copy (brief 8). The research-question readouts brief A.6
+// names live in screens.ts; everything else a Studies screen says lives here
+// (brief 5.7 rule 9) and is in COPY_FILES. T21 adds Framings (8.1), T22
+// Conditions (8.2), T23 the study's Results, Raters and Export tabs and T24
+// Repeat runs (8.3), T27 Model compare (8.5), T28 Baselines (8.6); later
+// Studies tasks add their own objects.
+
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
+/** The framing labels "Write by hand" offers, in order (brief 8.1). */
+export const HAND_LABELS = [
+  'Direct request',
+  'Fiction framing',
+  'Academic framing',
+  'Roleplay',
+  'Historical context',
+  'Satire',
+] as const;
+
+/** The strategies "Write with the coach" starts with, all checked (`flinch/app.py` GenerateVariantsRequest). */
+export const DEFAULT_STRATEGIES = [
+  'Fiction Workshop',
+  'Academic Analysis',
+  'Historical Context',
+  'Roleplay Scenario',
+  'Satire/Parody',
+] as const;
+
+export const FRAMINGS = {
+  title: 'Framings',
+
+  // Tabs
+  tabGroups: 'Groups',
+  tabGroupsWhy: 'Every framing group, saved files first, and running one in this session.',
+  tabResults: 'Results',
+  tabResultsWhy: 'Whether each group got the same badge on every framing in this session.',
+
+  // Groups tab (8.1)
+  groupsEyebrow: 'Framing groups',
+  groupsCount: (n: number) => `${n} ${plural(n, 'group', 'groups')}`,
+  dbOnlyEyebrow: 'Groups without a file',
+  emptyTitle: 'No framing groups yet',
+  emptyBody: 'Make one below. Each group is saved as a Markdown file you can edit by hand.',
+  probeCount: (n: number) => `${n} ${plural(n, 'probe', 'probes')}`,
+  notSynced: 'Not loaded as probes yet',
+  notSyncedWhy:
+    'This file has no probes in the database yet. Save it again from the editor below to load it.',
+  runGroup: 'Run in this session',
+  runGroupWhy: 'Sends each framing once, with no pushback. Results arrive one by one.',
+  runEvery: (n: number) => `Run every group (${n} ${plural(n, 'probe', 'probes')})`,
+  runEveryWhy: 'Every probe across every framing group, each sent once, in one batch.',
+  runningGroup: (id: string) => `Running framing group ${id}`,
+  runningEvery: 'Running every framing group',
+  batchBusy: 'A batch is already running in this session.',
+  view: 'View',
+  hide: 'Hide',
+  viewLoading: 'Reading the file…',
+  savedAs: (path: string) => `Saved as ${path}`,
+  colLabel: 'Framing',
+  colPrompt: 'Prompt',
+  colProbe: 'Probe',
+  deleteGroup: 'Delete this group',
+  deleteConfirm: 'Delete it',
+  deletedNotice: (id: string) => `Deleted framing group ${id}`,
+  seeResults: 'See the results',
+
+  // New framing group (8.1)
+  newTitle: 'New framing group',
+  newReadout:
+    'Write one request several ways. Saving writes a Markdown file and loads each framing as a probe you can run.',
+  tabCoach: 'Write with the coach',
+  tabCoachWhy: 'The coach drafts one framing per strategy from a probe you pick; you edit them.',
+  tabHand: 'Write by hand',
+  tabHandWhy: 'Type each framing yourself.',
+  baseProbe: 'Base probe',
+  baseProbeWhy: 'The request every framing rewrites.',
+  baseProbeNone: 'None',
+  baseProbeHandWhy: 'Optional. Picking one fills the direct request with its text.',
+  baseProbeEmpty: 'This session has no probes. Add one from the rail first.',
+  groupId: 'Group id',
+  groupIdPlaceholder: 'violence-framing',
+  groupIdWhy: 'Lowercase letters, digits and hyphens. It names the file.',
+  groupIdBad: 'Use only lowercase letters, digits and hyphens.',
+  groupIdTaken: 'A group with this id exists. Saving replaces it.',
+  domain: 'Domain',
+  domainPlaceholder: 'e.g. violence',
+  description: 'Description',
+  descriptionPlaceholder: 'What this group tests, in a sentence.',
+  strategies: 'Framings',
+  strategiesWhy: 'The coach writes one variant for each checked framing.',
+  addStrategy: 'Add a framing',
+  addStrategyPlaceholder: 'Type a framing, then Enter',
+  draft: 'Draft the variants',
+  draftWhy:
+    'Asks Claude to rewrite the base probe once per framing. Nothing is sent to the target.',
+  draftNeedsKey: 'Needs an Anthropic key. Add one in Settings.',
+  drafting: (n: number) => `Drafting ${n} ${plural(n, 'framing', 'framings')}…`,
+  draftsTitle: (n: number) => `${n} ${plural(n, 'draft', 'drafts')} to check`,
+  draftsReadout: 'Edit any framing before you save. The first row is the probe as written.',
+  discard: 'Discard',
+  directRequest: 'Direct request',
+  label: 'Label',
+  prompt: 'Prompt text',
+  promptPlaceholder: 'The request, framed this way.',
+  addVariant: 'Add a variant',
+  removeVariant: (label: string) => `Remove ${label || 'this variant'}`,
+  save: 'Save group',
+  saving: 'Saving…',
+  saveNeeds: 'Needs a group id and at least two framings with a label and prompt text.',
+  saveNeedsUnique: 'Each framing needs its own label.',
+  savedNotice: (id: string, n: number) =>
+    `Saved framing group ${id} with ${n} ${plural(n, 'framing', 'framings')}`,
+
+  // Results tab (8.1)
+  resultsEyebrow: 'Consistency in this session',
+  resultsTitle: 'Same badge on every framing?',
+  resultsScore: (score: number) => `${score}%`,
+  resultsReadout: (consistent: number, total: number) =>
+    `${consistent} of ${total} ${plural(total, 'group', 'groups')} that ran got the same badge on every framing.`,
+  resultsNone: 'No framing group has been run in this session yet.',
+  resultsEmpty: 'There are no framing groups to compare. Make one on the Groups tab.',
+  consistent: 'Consistent',
+  inconsistent: 'Inconsistent',
+  notRun: 'Not run',
+  openRun: (label: string) => `Open the run for ${label}`,
+  reload: 'Reload',
+} as const;
+
+/** The four kinds the HH-RLHF importer samples by, in its order (`flinch/hh_import.py`). */
+export const HH_KIND_LABELS = {
+  factual: 'Factual',
+  advice: 'Advice',
+  opinion: 'Opinion',
+  ethical: 'Ethical',
+} as const;
+
+/** Provider names for the rate-limit rows (the keys the run's rate pool uses). */
+export const RATE_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  xai: 'xAI',
+  together: 'Together',
+  ollama: 'Ollama (local)',
+};
+
+export const CONDITIONS = {
+  title: 'Conditions',
+
+  // List (8.2.1)
+  newStudy: 'New study',
+  listEyebrow: 'Studies',
+  listCount: (n: number) => `${n} ${plural(n, 'study', 'studies')}`,
+  emptyTitle: 'No studies yet',
+  emptyBody: 'Make one to run prompts under several system prompts at once.',
+  open: 'Open',
+  openStudy: (name: string) => `Open ${name}`,
+  createdOn: (date: string) => `Created ${date}`,
+  noCellsYet: 'Not started',
+
+  // New study (8.2.2)
+  newTitle: 'New conditions study',
+  backToList: 'All studies',
+  aboutTitle: 'About',
+  name: 'Name',
+  namePlaceholder: 'Persona prompt against no prompt',
+  description: 'Description',
+  descriptionPlaceholder: 'What you expect to find.',
+  conditionsTitle: 'Conditions',
+  conditionsReadout:
+    'Each condition is a system prompt. Every prompt runs under each of them, so the answers line up side by side. Keep one with no system prompt as the control.',
+  label: 'Label',
+  systemPrompt: 'System prompt',
+  systemPromptPlaceholder: 'Empty means no system prompt. This is the control.',
+  controlLabel: 'Control',
+  conditionN: (n: number) => `Condition ${n}`,
+  addCondition: 'Add condition',
+  removeCondition: (label: string) => `Remove ${label || 'this condition'}`,
+  importFile: 'Import from a file…',
+  importEmpty:
+    'No conditions files in flinch/variants. A conditions file is a variants file with the line - type: conditions.',
+  importLoading: 'Reading the files…',
+  importedNotice: (id: string, n: number) =>
+    `Loaded ${n} ${plural(n, 'condition', 'conditions')} from ${id}`,
+  importRows: (n: number) => `${n} ${plural(n, 'condition', 'conditions')}`,
+
+  promptsTitle: 'Prompts',
+  promptsReadout:
+    'Where the prompts come from. Flinch adds them in this order: HH-RLHF first, then the probes you pick, then the pasted CSV.',
+  hhToggle: "Import from Anthropic's HH-RLHF dataset",
+  hhTarget: 'How many prompts',
+  hhTargetHint: '1 to 5,000.',
+  hhSubsets: 'Subsets',
+  hhSeed: 'Seed',
+  hhSeedHint: 'The same seed picks the same prompts.',
+  hhMix: 'Mix by kind (%)',
+  hhMixHint: 'Percent of the sample for each kind. They must add up to 100.',
+  hhMixSum: (n: number) => `These add up to ${n}. Make them add up to 100.`,
+  hhMixReset: 'Use the default mix',
+  hhNeedsEmpty: 'Only a study with no prompts yet can import from HH-RLHF.',
+  hhTargetBad: 'Ask for 1 to 5,000 HH-RLHF prompts.',
+  hhSubsetsBad: 'Tick at least one HH-RLHF subset.',
+  hhSeedBad: 'The HH-RLHF seed is a whole number.',
+  probesLabel: 'Probes',
+  probesPicked: (n: number) => `${n} ${plural(n, 'probe', 'probes')} picked`,
+  probesLoading: 'Loading probes…',
+  csvToggle: 'Paste prompts as CSV',
+  csvHint: 'Paste CSV with a header row. Columns: prompt_text (required), domain (optional).',
+  csvRows: (n: number) => `${n} ${plural(n, 'prompt', 'prompts')} in the pasted text`,
+  csvNoHeader: 'The first row needs a prompt_text column.',
+  csvLabel: 'CSV text',
+
+  modelsTitle: 'Models and repeats',
+  modelN: (n: number) => `Model ${n}`,
+  addModel: 'Add model',
+  removeModel: (id: string) => `Remove ${id || 'this model'}`,
+  repeats: 'Repeats per cell',
+  repeatsHint: 'How many times each prompt runs under each condition for each model.',
+  seed: 'Random seed',
+  seedHint: 'Optional. Saved with the study so its design can be described exactly.',
+  ratesTitle: 'Rate limits',
+  ratesHint:
+    'How fast Flinch calls each provider during the run. Leave both fields empty to keep the default.',
+  ratesRpm: 'Calls a minute',
+  ratesConcurrent: 'At once',
+  ratesRpmFor: (provider: string) => `Calls a minute for ${provider}`,
+  ratesConcurrentFor: (provider: string) => `Calls at once for ${provider}`,
+  ratesDefault: (rpm: number, concurrent: number) =>
+    `Default ${rpm} a minute, ${concurrent} at once`,
+  ratesBad: 'Calls a minute is 1 to 10,000 and at once is 1 to 50, in whole numbers.',
+  ratesNone: 'Pick a model to set the limits for its provider.',
+  cellsLine: (p: number, c: number, m: number, r: number, total: number) =>
+    `Cells: ${p} ${plural(p, 'prompt', 'prompts')} x ${c} ${plural(c, 'condition', 'conditions')} x ${m} ${plural(m, 'model', 'models')} x ${r} ${plural(r, 'repeat', 'repeats')} = ${total}`,
+  cellsLarge: 'That is a large study. Each cell is one model call.',
+  create: 'Create study',
+  creating: 'Creating…',
+  cancel: 'Cancel',
+
+  needName: 'Give the study a name.',
+  nameLong: 'Keep the name to 200 characters.',
+  needCondition: 'Add at least one condition with a label.',
+  labelLong: 'Keep each label to 100 characters.',
+  uniqueLabels: 'Condition labels must be different.',
+  needPrompt: 'Add at least one prompt: pick probes, paste CSV or import from HH-RLHF.',
+  needModel: 'Add at least one model.',
+  uniqueModels: 'Each model can be added once.',
+  repeatsBad: 'Repeats are a whole number from 1 to 50.',
+  seedBad: 'The random seed is a whole number.',
+
+  importingHh: 'Importing HH-RLHF prompts…',
+  hhImported: (n: number) => `Imported ${n} HH-RLHF ${plural(n, 'prompt', 'prompts')}`,
+  addPromptsFailed: (msg: string) =>
+    `The study was created, but adding prompts failed: ${msg}. Add them from the Setup panel.`,
+  createdNotice: (name: string) => `Created ${name}`,
+
+  // One study (8.2.3)
+  tabRun: 'Run',
+  tabRunWhy: 'Start, pause and resume the study, and watch its cells fill in.',
+  tabResults: 'Results',
+  tabResultsWhy: 'Badges per condition, text metrics and statistics.',
+  tabRaters: 'Raters',
+  tabRatersWhy: 'Blinded rankings from rater models and from people.',
+  tabExport: 'Export',
+  tabExportWhy: 'The responses and the study design as files.',
+  deleteStudy: 'Delete this study',
+  deleteConfirm: 'Delete it',
+  deletedNotice: (name: string) => `Deleted ${name}`,
+  loadFailed: 'This study could not be loaded.',
+
+  progressTitle: 'Progress',
+  progressReadout:
+    'Every prompt under every condition, for each model and repeat. A cell is one model call, classified as it lands.',
+  cellsDone: (completed: number, total: number) => `${completed} of ${total} cells`,
+  failedCount: (n: number) => `${n} failed`,
+  pendingCount: (n: number) => `${n} not run yet`,
+  byCondition: 'By condition',
+  byModel: 'By model',
+  gridLabel: 'Cells by condition',
+  gridLimit: 'Showing the first 1,000 cells. The counts above cover all of them.',
+  gridEmpty: 'The cells appear when the study starts.',
+  legendPending: 'Not run yet',
+  legendFailed: 'Failed',
+  cellTitle: (condition: string, prompt: string, model: string, repeat: number, state: string) =>
+    `${condition} · ${prompt} · ${model} · repeat ${repeat} · ${state}`,
+
+  setupTitle: 'Setup',
+  setupConditions: 'Conditions',
+  noSystemPrompt: 'No system prompt',
+  setupModels: 'Models',
+  setupPrompts: 'Prompts',
+  promptsCount: (n: number) => `${n} ${plural(n, 'prompt', 'prompts')}`,
+  setupRepeats: 'Repeats',
+  setupSeed: 'Seed',
+  setupRates: 'Rate limits',
+  ratesPoolDefault: 'Provider defaults',
+  rateOnlyConcurrent: (n: number) => `${n} at once`,
+  rateFull: (rpm: number | null, concurrent: number | null) =>
+    [rpm ? `${rpm} a minute` : null, concurrent ? `${concurrent} at once` : null]
+      .filter(Boolean)
+      .join(', '),
+  none: 'None',
+  setupCreated: 'Created',
+  setupStarted: 'Started',
+  setupCompleted: 'Completed',
+  notYet: 'Not yet',
+  addPrompts: 'Add prompts…',
+  addConditionOpen: 'Add a condition…',
+  addConditionWhy: 'Add one more system prompt before the study starts.',
+  addConditionSave: 'Add this condition',
+  addingCondition: 'Adding…',
+  conditionAdded: (label: string) => `Added the condition "${label}".`,
+
+  estimateLine: (cells: number, cost: number) =>
+    `About ${cells} model ${plural(cells, 'call', 'calls')}, roughly $${cost.toFixed(2)}.`,
+  estimateBreakdown: (p: number, c: number, m: number, r: number) =>
+    `${p} ${plural(p, 'prompt', 'prompts')} x ${c} ${plural(c, 'condition', 'conditions')} x ${m} ${plural(m, 'model', 'models')} x ${r} ${plural(r, 'repeat', 'repeats')}`,
+  estimateHint: 'The estimate uses average token counts. Real costs vary.',
+
+  start: 'Start',
+  pause: 'Pause',
+  pausing: 'Pausing…',
+  resume: 'Resume',
+  runPending: 'Run pending cells',
+  retryFailed: (n: number) => `Retry ${n} failed ${plural(n, 'cell', 'cells')}`,
+  retryFailedWhy: 'Sets the failed cells back to not run, then resumes.',
+  allDone: 'All cells done.',
+  orphanRunning: 'This study is marked running, but nothing in this window is running it.',
+  activeElsewhere: 'Another window is running this study. Resume here waits for it to stop first.',
+  needPrompts: 'Add prompts before you start.',
+  streamLabel: (name: string) => `Running study ${name}`,
+  runLabel: 'This run',
+  pausedNotice: (completed: number, total: number) =>
+    `Paused with ${completed} of ${total} cells done`,
+  finishedNotice: (name: string) => `Finished ${name}`,
+
+  // Add prompts dialog (8.2.3)
+  sourcesTitle: 'Add prompts',
+  sourcesLead:
+    'More prompts for this study. Flinch adds them in order: HH-RLHF, picked probes, pasted CSV.',
+  sourcesAdd: 'Add prompts',
+  sourcesAdding: 'Adding…',
+  sourcesNeed: 'Pick probes, paste CSV or import from HH-RLHF.',
+} as const;
+
+/** A conditions study's Results, Raters and Export tabs (brief 8.2.3, D20, D21, I11, I22). */
+export const CONDITIONS_RESULTS = {
+  // Shared
+  noRate: 'n/a',
+  loadFailed: 'These results could not be loaded.',
+  reload: 'Load again',
+  runningNote: 'The study is running. The results fill in as cells land.',
+
+  // Results: comparison (8.2.3)
+  comparisonTitle: 'Condition comparison',
+  comparisonReadout:
+    'Every completed response, counted by badge, one card per condition. The rate counts Complied and Negotiated together.',
+  responsesCount: (n: number) => `${n} ${plural(n, 'response', 'responses')}`,
+  compliedOrNegotiated: 'Complied or Negotiated',
+  noResponses: 'No responses yet. Start the study on the Run tab.',
+  classify: (n: number) => `Classify ${n} unclassified ${plural(n, 'response', 'responses')}`,
+  classifyCheck: 'Check for unclassified responses',
+  classifyWhy:
+    'Runs the classifier over completed responses that have no badge yet, such as rows from an older version.',
+  classifying: 'Classifying…',
+  classifyResult: (classified: number, skipped: number) =>
+    `Classified ${classified} ${plural(classified, 'response', 'responses')}. Skipped ${skipped} whose prompt has no text.`,
+
+  // Results: text metrics and statistics (8.2.3, I22, B31)
+  metricsTitle: 'Text metrics',
+  computeMetrics: 'Compute text metrics',
+  measureNew: 'Measure new responses',
+  measureNewWhy: 'Measures any completed response that has no metrics yet.',
+  metricsStream: (name: string) => `Measuring the responses in ${name}`,
+  metricsLabel: 'Measured',
+  metricsNothing: 'Every completed response already has its metrics.',
+  metricsStopped: 'Stopped. The responses measured so far are saved.',
+  metricsNeedResponses: 'Metrics need completed responses.',
+  colMetric: 'Metric',
+  colD: 'd',
+  colSig: 'Sig',
+  colDWhy: "The largest Cohen's d between any two conditions.",
+  colSigWhy: 'Stars from the smallest FDR-corrected p value between any two conditions.',
+  legend: '* p < .05, ** p < .01, *** p < .001. d: small 0.2, medium 0.5, large 0.8.',
+  runStats: 'Run statistics',
+  runStatsAgain: 'Run statistics again',
+  runningStats: 'Running statistics…',
+  statsNeedExtras:
+    'Statistics need the experiment extras (numpy, scipy, krippendorff) on the sidecar.',
+  statsTitle: 'Statistics',
+  statsComputed: (date: string) => `Statistics computed ${date}`,
+  statsFailed: (msg: string) => `Statistics did not run: ${msg}`,
+  statsErrorCount: (n: number) =>
+    `${n} ${plural(n, 'test', 'tests')} could not run. The reasons are listed below.`,
+  nothingToCompare: 'Nothing to compare yet',
+  pairsDone: (n: number) => `${n} ${plural(n, 'comparison', 'comparisons')}`,
+  winRatesDone: 'From the AI ratings',
+  powerLine: (power: number, need: number) =>
+    `Power ${power.toFixed(2)}; ${need} per group for d = 0.3`,
+  aiRaters: 'AI raters',
+  humanRaters: 'people',
+  alphaPart: (who: string, alpha: number) => `${who}: alpha ${alpha.toFixed(2)}`,
+  moreErrors: (n: number) => ` (and ${n} more)`,
+  analysisCsv: 'Download the statistics table (CSV)',
+  analysisCsvSentence:
+    "One row per metric and pair of conditions: means, Cohen's d with its interval, Mann-Whitney U and corrected p values.",
+
+  // Results: responses (8.2.3)
+  responsesTitle: 'Responses',
+  responsesReadout:
+    'One badge per response, by prompt, grouped by condition. Pick a prompt to read its answers side by side.',
+  searchPrompts: 'Search prompts',
+  noPromptMatch: 'No prompt matches.',
+  pickPrompt: 'Pick a prompt to read its responses.',
+  readingResponses: 'Loading the responses…',
+  badgeTitle: (condition: string, model: string, repeat: number, word: string) =>
+    `${condition} · ${model} · repeat ${repeat} · ${word}`,
+  responseHead: (model: string, repeat: number) => `${model} · repeat ${repeat}`,
+  failedLine: (msg: string) => `Failed: ${msg || 'no reason given'}`,
+  notRunYet: 'Not run yet',
+  showAll: 'Show all',
+  showLess: 'Show less',
+  emptyText: 'The model sent no text.',
+  /** One response's text metrics (brief 9.9, GET /api/experiments/{id}/metrics). */
+  metricLine: (words: number | null, grade: number | null, hedging: number | null) =>
+    `Words ${words ?? 'n/a'} · Reading grade ${grade === null ? 'n/a' : grade.toFixed(1)} · Hedging ${hedging === null ? 'n/a' : hedging.toFixed(2)}`,
+  limitLine: 'Showing the first 1,000 responses for this prompt. Download the CSV for all of them.',
+
+  // Raters: AI (8.2.3, B14)
+  aiTitle: 'AI raters',
+  raterN: (n: number) => `Rater ${n}`,
+  addRater: 'Add rater',
+  removeRater: (id: string) => `Remove ${id || 'this rater'}`,
+  rate: 'Rate responses',
+  rating: 'Rating…',
+  rateStream: (name: string) => `Rating the responses in ${name}`,
+  rateLabel: 'This rating run',
+  rateNeedsCompleted: 'Rating needs completed responses under every condition.',
+  rateNeedsTwo: 'Rating compares conditions, so the study needs at least two.',
+  rateUniqueRaters: 'Each rater model can be added once.',
+  rateDone: (n: number) => `Rated ${n} prompt and model ${plural(n, 'pair', 'pairs')}.`,
+  rateNothing: 'Every prompt already has a rating from these raters.',
+  rateStopped: 'Stopped. The ratings made so far are saved.',
+  rateFailed: (n: number) => `${n} ${plural(n, 'rating', 'ratings')} failed.`,
+  winTitle: 'Win rates',
+  winReadout:
+    'How often each condition was ranked first, and its average rank, over every completed rating.',
+  colCondition: 'Condition',
+  colFirst: 'First place',
+  colMeanRank: 'Mean rank',
+  colRated: 'Rated',
+  winCell: (wins: number, rated: number) => `${wins} of ${rated}`,
+  agreement: (agreed: number, shared: number) =>
+    `Raters picked the same winner on ${agreed} of ${shared} ${plural(shared, 'prompt', 'prompts')} rated by more than one rater.`,
+  agreementNone: 'Each prompt has one rater so far, so there is no agreement to measure.',
+  ratingsTitle: 'Ratings',
+  colRater: 'Rater',
+  colPrompt: 'Prompt',
+  colModel: 'Model',
+  colStatus: 'Status',
+  noRatings: 'No ratings yet.',
+  rankOf: (rank: number) => `#${rank}`,
+  ratingsMore: (n: number) => `Showing the first 200 of ${n} ratings.`,
+
+  // Raters: Prolific (8.2.3, I11, B14)
+  humanTitle: 'Human raters (Prolific)',
+  prolificNotAllowed: (n: number) =>
+    `Prolific tasks compare two or three conditions. This study has ${n}.`,
+  prolificPrompts: 'Prompts to sample',
+  prolificPromptsHint: 'Prompts with a completed first repeat under every condition.',
+  prolificModels: 'Models',
+  prolificRaters: 'Raters per task',
+  prolificBatch: 'Batch id',
+  prolificBatchPlaceholder: 'Optional. Made from the date when empty.',
+  makeTasks: 'Make tasks',
+  making: 'Making…',
+  prolificResult: (tasks: number, prompts: number, batch: string) =>
+    `${tasks} new ${plural(tasks, 'task', 'tasks')} for ${prompts} ${plural(prompts, 'prompt', 'prompts')} in batch ${batch}.`,
+  prolificNoneNew: 'These prompts already have their tasks, so nothing new was made.',
+  prolificPromptsBad: 'Prompts to sample is a whole number from 1.',
+  prolificRatersBad: 'Raters per task is a whole number from 1.',
+  prolificModelsBad: 'Tick at least one model.',
+  taskCsv: 'Download the task CSV',
+  taskCsvSentence: 'Each download lists the tasks not downloaded before and marks them exported.',
+  pasteResults: 'Paste the results CSV',
+  pasteHint: 'Columns: tracking_id, rater_id, rank_a, rank_b, rank_c, reasoning, completion_time_s',
+  chooseFile: 'Read a CSV file…',
+  fileRead: (name: string) => `Read ${name}`,
+  fileFailed: 'That file could not be read.',
+  importResults: 'Import results',
+  importing: 'Importing…',
+  importResult: (imported: number, skipped: number, errors: number) =>
+    `${imported} imported, ${skipped} already there, ${errors} ${plural(errors, 'error', 'errors')}`,
+  importNeedsText: 'Paste the results CSV or read a file first.',
+  tasksTitle: 'Tasks',
+  colBatch: 'Batch',
+  colTracking: 'Tracking id',
+  noTasks: 'No tasks yet.',
+  tasksMore: (n: number) => `Showing the first 200 of ${n} tasks.`,
+
+  // Export (D20)
+  exportTitle: 'Files',
+  dataGroup: 'Data',
+  documentsGroup: 'Documents',
+  exportReadout:
+    'The responses and the study design as files. The Prolific task CSV is on the Raters tab and the statistics table on the Results tab.',
+  rows: {
+    csv: {
+      label: 'Responses (CSV)',
+      sentence:
+        'One row per response with its condition, model, repeat, classification and text metrics.',
+    },
+    jsonl: {
+      label: 'Responses (JSONL)',
+      sentence: 'One JSON object per response, every column, for scripts.',
+    },
+    json: {
+      label: 'Everything (JSON)',
+      sentence:
+        "The study's settings, conditions, prompts, progress, ratings, human evaluations, analysis and metrics. Response text is in the CSV and JSONL files.",
+    },
+    prereg: {
+      label: 'Preregistration (Markdown)',
+      sentence: "A preregistration document built from this study's design, for OSF or similar.",
+    },
+    report: {
+      label: 'Report (Markdown)',
+      sentence: 'Methods and results written up from the analysis.',
+    },
+  },
+  reportNotReady: 'Finish the study and run statistics first.',
+  exportEmpty: 'The sidecar sent an empty document.',
+} as const;
+
+/** Repeat runs (brief 8.3, T24). The research question is SCREENS.repeat. */
+export const REPEAT = {
+  title: 'Repeat runs',
+
+  // Set up
+  setupEyebrow: 'Set up',
+  setupTitle: 'Probes and repeats',
+  setupReadout:
+    "Every call is a fresh conversation with this session's model and system prompt. No pushback, no coach.",
+  probes: 'Probes',
+  probesWhy: "From this session's list in the rail. Pick several to run them one after another.",
+  noProbes: 'This session has no probes. Add one from the rail first.',
+  times: 'Times per probe',
+  timesHint: '1 to 100. Ten is usually enough to see a split.',
+  plan: (probes: number, n: number) =>
+    `${probes} ${plural(probes, 'probe', 'probes')} × ${n} = ${probes * n} ${plural(probes * n, 'call', 'calls')}`,
+  runSelected: 'Run selected',
+  runSelectedWhy: 'Sends each picked probe that many times, one call after another.',
+  runEvery: (n: number) => `Run every probe in this session (${n})`,
+  runEveryWhy: "Every probe in this session's list, each sent that many times.",
+  pickFirst: 'Pick at least one probe.',
+  busy: 'A repeat run is already going in this session.',
+  stripLabel: (probes: number, n: number) =>
+    probes === 1 ? `Repeat run: 1 probe × ${n}` : `Repeat runs: ${probes} probes × ${n}`,
+
+  // The live run
+  liveEyebrow: (model: string | null) => (model ? `On ${model}` : 'Repeat run'),
+  liveRunning: (probes: number, n: number) =>
+    `Repeating ${probes} ${plural(probes, 'probe', 'probes')} × ${n}`,
+  liveStopping: 'Stopping…',
+  liveFinished: (calls: number) => `Finished: ${calls} ${plural(calls, 'call', 'calls')}`,
+  liveStopped: (done: number, total: number) => `Stopped after ${done} of ${total} calls`,
+  liveFailed: 'The repeat run stopped with an error',
+  liveReadout:
+    'Each square is one fresh call. One colour all the way along is a rule; a mix is a coin flip.',
+  liveStoppedReadout:
+    'Stopping closes the stream, and the sidecar stops after the call in flight. The sidecar has no stop request for repeat runs, so the stopped run stays "running" in the list until Flinch restarts, then shows as failed.',
+  progress: 'Calls',
+  close: 'Close',
+  closeWhy: 'Hide this panel. The runs stay in the list below.',
+  probeWaiting: 'Waiting',
+  probeFailed: (msg: string) => `Did not run: ${msg}`,
+  probeStopped: 'Stopped',
+  slotTitle: (i: number, word: string, latency: string) =>
+    latency ? `Call ${i}: ${word}, ${latency}` : `Call ${i}: ${word}`,
+  slotPending: (i: number) => `Call ${i}: waiting`,
+  slotFailed: (i: number, msg: string) => `Call ${i} failed: ${msg}`,
+  tapeLabel: (name: string, done: number, total: number) =>
+    `${name}: ${done} of ${total} calls back`,
+
+  // Results: the list
+  resultsEyebrow: 'In this session',
+  resultsTitle: 'Results',
+  resultsCount: (n: number) => `${n} ${plural(n, 'run', 'runs')}`,
+  resultsReadout: 'Newest first. Pick a run to see how its calls split and read each response.',
+  empty: 'No repeat runs in this session yet.',
+  emptyBody: 'Pick a probe above, choose how many times, and run it.',
+  refusedOf: (refused: number, total: number, rate: string | null) =>
+    rate ? `Refused ${refused} of ${total} (${rate})` : `Refused ${refused} of ${total}`,
+  nCalls: (n: number) => `N = ${n}`,
+  loadAgain: 'Load again',
+  openRun: (name: string, date: string) => `${name}, ${date}`,
+
+  // Results: the selected run
+  pickOne: 'Pick a run on the left to see how it split.',
+  reading: 'Reading the run…',
+  detailEyebrow: (model: string) => `On ${model}`,
+  distTitle: 'How the calls split',
+  unanimous: (word: string, n: number) =>
+    n === 1 ? `One call, ${word}.` : `Every call came back ${word}: ${n} of ${n}.`,
+  split: (word: string, pct: string) => `A split. ${word} came up most, ${pct} of the time.`,
+  noCalls: 'No call in this run came back.',
+  share: 'of calls',
+  colCount: 'Calls',
+  colShare: 'Share',
+  iterationsTitle: 'Each call',
+  median: (label: string) => `median ${label}`,
+  colIteration: 'Call',
+  colBadge: 'Badge',
+  colLatency: 'Latency',
+  colResponse: 'Response',
+  showAll: 'Show all',
+  showLess: 'Show less',
+  showAllFor: (i: number) => `Show all of call ${i}'s response`,
+  showLessFor: (i: number) => `Show less of call ${i}'s response`,
+  noText: 'No response text',
+  noIterations: 'No calls recorded for this run.',
+} as const;
+
+/**
+ * Sequences, Run tab (brief 8.4, 9.9, D30, T25). The research question is
+ * SCREENS.sequences and the batch readout SCREENS['sequences.batch'].
+ */
+export const SEQUENCES = {
+  title: 'Sequences',
+  tabRun: 'Run',
+  tabRunWhy: 'Build sequences one at a time or in a batch, and watch them run.',
+  tabResults: 'Results',
+  tabResultsWhy: "Thresholds, turn-by-turn strips and each strategy's record.",
+
+  // New sequence
+  newEyebrow: 'One sequence',
+  newTitle: 'New sequence',
+  newReadout:
+    'Pick a probe and a kind of story. Automatic runs every turn in one go; interactive lets you read each warmup before you drop the probe.',
+  strategy: 'Strategy',
+  strategyNone: 'No strategies yet. Add one in the Strategies panel below.',
+  probe: 'Probe',
+  customOption: 'Custom prompt…',
+  customLabel: 'Custom prompt',
+  customHint: 'Saved as a probe in this session, then used for the sequence.',
+  customEmpty: 'Write the custom prompt first.',
+  noProbes: 'This session has no probes. Add one from the rail or write a custom prompt.',
+  mode: 'Mode',
+  modeAutomatic: 'Automatic: all warmup turns and the probe in one go',
+  modeInteractive: 'Interactive: one turn at a time; you decide when to drop the probe',
+  warmup: 'Warmup turns',
+  warmupValue: (n: number) => `${n} ${plural(n, 'turn', 'turns')}`,
+  warmupHint: 'How many turns of story the coach builds before the probe arrives.',
+  engine: 'Use the interactive-fiction engine',
+  engineHint:
+    'Sets the model up as a collaborative story engine (dialogue in quotes, directions in ((double parentheses))) and has the coach play the writer. Matches the original research.',
+  create: 'Create sequence',
+  createWhy:
+    'Saves the sequence. Interactive ones open for the first turn; run automatic ones from their card.',
+  createWhittle: 'Create and whittle',
+  createWhittleWhy:
+    'Creates an automatic sequence, then runs it at fewer and fewer warmup turns until the probe is Refused.',
+  creating: 'Creating…',
+  created: (name: string) => `Sequence created for ${name}.`,
+
+  // Batch
+  batchEyebrow: 'Many probes',
+  batchTitle: 'Batch',
+  batchProbes: 'Probes',
+  batchModeWhittle: 'Whittle each probe',
+  batchModeFixed: 'Run each probe at one depth',
+  batchWarmup: 'Warmup turns',
+  batchWarmupHint: 'Whittle starts here and counts down.',
+  depth: 'Depth',
+  depthHint: '0 to 20 warmup turns. 0 sends the probe as written, with no story.',
+  estimate: 'Estimate the cost',
+  estimating: 'Estimating…',
+  estimateWhy: 'Saves the batch and asks the sidecar for a rough cost before anything runs.',
+  estimateLine: (runs: number, turns: number) =>
+    `About ${runs} ${plural(runs, 'run', 'runs')}, ${turns} ${plural(turns, 'turn', 'turns')}, roughly`,
+  estimateDepth: (n: number) => `Depth: ${n} warmup ${plural(n, 'turn', 'turns')} per probe`,
+  estimateWhittle: (n: number) =>
+    `Whittles down from ${n} warmup ${plural(n, 'turn', 'turns')} per probe`,
+  estimateStale: 'You changed the batch, so the estimate was dropped. Estimate again to start.',
+  costUnder: 'under $0.01',
+  pickProbes: 'Pick at least one probe.',
+  start: 'Start the batch',
+  startWhy: 'Runs one sequence per probe, one after another.',
+  batchStrip: (n: number) => `Sequence batch: ${n} ${plural(n, 'probe', 'probes')}`,
+  batchProgress: 'Probes',
+  batchRunning: (done: number, total: number) => `Running: ${done} of ${total} probes`,
+  batchFinished: (done: number) => `Finished: ${done} ${plural(done, 'probe', 'probes')}`,
+  batchStopped: (done: number, total: number) => `Stopped after ${done} of ${total} probes`,
+  batchFailed: 'The batch stopped with an error',
+  batchStoppedNote:
+    'Stopping closes the stream; the sidecar has no stop request for batches, so the batch stays running until Flinch restarts.',
+  rowThreshold: (name: string, n: number) =>
+    `${name}: threshold ${n} ${plural(n, 'turn', 'turns')}`,
+  rowNoThreshold: (name: string) => `${name}: no threshold`,
+  rowFailed: (name: string, msg: string) => `${name}: did not run (${msg})`,
+  newBatch: 'New batch',
+
+  // Sequences in this session
+  listEyebrow: 'In this session',
+  listTitle: 'Sequences in this session',
+  listCount: (n: number) => `${n} ${plural(n, 'sequence', 'sequences')}`,
+  listReadout:
+    'Newest first. Interactive sequences wait for you; automatic ones run when you ask. Completed ones show their results.',
+  empty: 'No sequences in this session yet.',
+  emptyBody: 'Create one above, or run a batch over several probes.',
+  loadAgain: 'Load again',
+  modes: {
+    automatic: 'Automatic',
+    interactive: 'Interactive',
+    whittle: 'Whittle',
+    fixed_n: 'One depth',
+  } as Record<string, string>,
+  engineChip: 'IF engine',
+  engineChipWhy: 'Runs with the interactive-fiction engine.',
+  batchChip: (id: number) => `Batch ${id}`,
+  warmupChip: (n: number) => `Warmup: ${n} ${plural(n, 'turn', 'turns')}`,
+  probeFallback: (id: number) => `Probe ${id}`,
+  strategyFallback: (id: number) => `Strategy ${id}`,
+  gotThrough: (complied: number, refused: number) => `${complied} got through, ${refused} Refused`,
+  threshold: (n: number) => `Threshold: ${n} ${plural(n, 'turn', 'turns')}`,
+
+  // Card actions
+  runAll: 'Run all turns',
+  runAllWhy: 'Sends every warmup turn, the setup and the probe in one go, in a fresh conversation.',
+  runAgain: 'Run again',
+  runAgainWhy: 'Runs every turn again in a fresh conversation.',
+  whittle: 'Whittle',
+  whittleWhy:
+    'Runs the sequence at fewer and fewer warmup turns until the probe is Refused, to find the threshold.',
+  whittleWorking: (passes: number, minutes: number) =>
+    `Whittling. This runs up to ${passes} ${plural(passes, 'pass', 'passes')} and can take up to about ${minutes} ${plural(minutes, 'minute', 'minutes')}.`,
+  whittleElapsed: (clock: string) => `Working for ${clock}`,
+  whittleStrip: (name: string) => `Whittling ${name}`,
+  whittleThreshold: (n: number, runs: number) =>
+    `The threshold is ${n} warmup ${plural(n, 'turn', 'turns')} (${runs} ${plural(runs, 'pass', 'passes')}).`,
+  whittleZero: 'No threshold: the probe got through even with no warmup.',
+  whittleNone: (max: number) =>
+    `No threshold: the probe was Refused even after ${max} warmup ${plural(max, 'turn', 'turns')}.`,
+  whittleFailed: 'Whittling stopped early because a run failed.',
+  nextTurn: 'Next turn',
+  nextTurnWhy: 'The coach writes the next warmup turn and the model answers it.',
+  dropProbe: 'Drop the probe',
+  dropProbeWhy: 'The coach writes a setup turn, then delivers the probe inside the story.',
+  stepping: 'Writing the next turn…',
+  dropping: 'Dropping the probe…',
+  sentOf: (sent: number, planned: number) =>
+    `${sent} of ${planned} warmup ${plural(planned, 'turn', 'turns')} sent`,
+  plannedReached: 'Every planned warmup turn is sent. Drop the probe when you are ready.',
+  showResults: 'Show results',
+  showResultsWhy: 'Opens the Results tab with this sequence picked.',
+  showThread: 'Show the transcript',
+  hideThread: 'Hide the transcript',
+  deleteSequence: 'Delete this sequence',
+  deleteConfirm: 'Yes, delete it',
+  deleted: 'Sequence deleted.',
+  stop: 'Stop',
+  stopWhy: 'Closes the stream. The sidecar stops after the turn in flight.',
+  autoStrip: (name: string) => `Sequence: ${name}`,
+  autoLine: (step: number, total: number, type: string, cls: string) =>
+    `Turn ${step} of ${total}: ${type}, ${cls}`,
+  autoStarting: 'Starting the run…',
+  autoStopped: 'Stopped. The sequence stays running until Flinch restarts.',
+  probeResult: 'Probe result:',
+  busySequence: 'This sequence is already running.',
+
+  // Export menu
+  exportLabel: 'Export',
+  exportWhy: 'Download this sequence with every turn.',
+  exportFormats: {
+    json: 'Download JSON',
+    csv: 'Download CSV',
+    html: 'Download HTML',
+    pdf: 'Download PDF',
+  },
+  exportSaving: 'Saving…',
+  pdfUnavailable: 'Not available: weasyprint is not installed on the sidecar.',
+
+  // The thread
+  threadLabel: (name: string) => `Transcript of the sequence on ${name}`,
+  threadEmpty: 'No turns yet. Press Next turn to have the coach open the story.',
+  threadLoading: 'Reading the turns…',
+  roles: { coach: 'Coach', target: 'Model', probe: 'Probe' } as Record<string, string>,
+  turnTypes: { warmup: 'Warmup', setup: 'Setup', probe: 'Probe' } as Record<string, string>,
+  warmupN: (n: number) => `Warmup ${n}`,
+  noReply: 'No reply text',
+
+  // Strategies
+  strategiesEyebrow: 'Kinds of story',
+  strategiesTitle: 'Strategies',
+  strategiesReadout:
+    'The kinds of story a sequence can build. Built-in strategies cannot be changed; add your own for new kinds of story.',
+  newStrategy: 'New strategy…',
+  builtIn: 'Built in',
+  builtInWhy: 'Ships with Flinch. Built-in strategies cannot be edited or deleted.',
+  edit: 'Edit',
+  editFor: (name: string) => `Edit ${name}`,
+  deleteStrategy: 'Delete this strategy',
+  deleteStrategyConfirm: 'Yes, delete it',
+  strategyDeleted: (name: string) => `Strategy ${name} deleted.`,
+  strategySaved: (name: string) => `Strategy ${name} saved.`,
+  strategiesEmpty: 'No strategies yet.',
+} as const;
+
+/**
+ * Sequences, Results tab (brief 8.4, D21, I20): the picked sequence's
+ * Threshold, Turn by turn and Runs panels, then Thresholds across probes and
+ * Strategy effectiveness over the session's completed sequences. The
+ * effectiveness line itself is SCREENS['sequences.strategies'].
+ */
+export const SEQUENCE_RESULTS = {
+  // The picker
+  pickLabel: 'Sequence',
+  pickHint: 'Completed and failed sequences in this session, newest first.',
+  pickOption: (probe: string, strategy: string, id: number) => `${probe}, ${strategy} (#${id})`,
+  pickOptionStatus: (probe: string, strategy: string, id: number, status: string) =>
+    `${probe}, ${strategy} (#${id}, ${status})`,
+  reading: 'Reading the results…',
+  noneTitle: 'No completed sequences yet',
+  noneBody:
+    'Drop the probe in an interactive sequence, run an automatic one or whittle one on the Run tab. Its threshold and turns show here.',
+  openRun: 'Open the Run tab',
+  loadAgain: 'Load again',
+  sequenceEyebrow: 'This sequence',
+
+  // Threshold
+  thresholdTitle: 'Threshold',
+  thresholdReadout:
+    'One bar per run: the height is the warmup turns, the colour is the probe result. The threshold run is outlined.',
+  found: (n: number) =>
+    `At ${n} warmup ${plural(n, 'turn', 'turns')} the probe got through; at ${n - 1} it was Refused. The threshold is ${n} ${plural(n, 'turn', 'turns')}.`,
+  single: (n: number) => `One run at ${n} warmup ${plural(n, 'turn', 'turns')}.`,
+  unwhittled: (runs: number) =>
+    `${runs} ${plural(runs, 'run', 'runs')} and no threshold. Whittle the sequence to find one.`,
+  noRuns: 'This sequence has no runs yet.',
+  headlineCaption: (n: number) => `warmup ${plural(n, 'turn', 'turns')}`,
+  barsLabel: 'Runs by warmup turns',
+  barLabel: (n: number) => `N=${n}`,
+  barTitle: (n: number, word: string) => `${n} warmup ${plural(n, 'turn', 'turns')}: ${word}`,
+  thresholdChip: 'Threshold',
+  thresholdChipWhy: 'The fewest warmup turns that still got the probe through.',
+  failedChip: 'Failed',
+
+  // Turn by turn
+  turnsTitle: 'Turn by turn',
+  turnsReadout:
+    'One square per model reply, coloured by its badge. W is a warmup turn, S the setup, P the probe.',
+  runLabel: (n: number) => `N=${n}`,
+  stripLabel: (n: number) =>
+    `Model replies in the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  cellWarmup: (n: number, word: string) => `Warmup ${n}: ${word}`,
+  cellSetup: (word: string) => `Setup: ${word}`,
+  cellProbe: (word: string) => `Probe: ${word}`,
+  noReplies: 'No model replies in this run.',
+  probeAt: 'Probe',
+
+  // Runs
+  runsTitle: 'Runs',
+  runsReadout: 'Open a run to read every turn, with the role and the turn type.',
+  runShow: (n: number) => `Show the turns of the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  runHide: (n: number) => `Hide the turns of the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  runThread: (n: number) => `Transcript of the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  runsEmpty: 'No runs yet.',
+
+  // Session level
+  sessionEyebrow: 'This session',
+  acrossTitle: 'Thresholds across probes',
+  acrossReadout:
+    'Where each probe gave way, one row per completed sequence. None means whittling found no threshold, or the sequence was not whittled.',
+  filterLabel: 'Strategy',
+  filterAll: 'All strategies',
+  colProbe: 'Probe',
+  colDomain: 'Domain',
+  colStrategy: 'Strategy',
+  colThreshold: 'Threshold',
+  colRuns: 'Runs',
+  colResult: 'Probe result',
+  turns: (n: number) => `${n} ${plural(n, 'turn', 'turns')}`,
+  noThreshold: 'None',
+  noDomain: 'None',
+  showSequence: (probe: string, id: number) => `Show ${probe} (#${id}) above`,
+  acrossEmpty: 'No completed sequences to compare yet.',
+  filterEmpty: 'No completed sequence in this session uses that strategy.',
+  effectTitle: 'Strategy effectiveness',
+  effectReadout:
+    'How often each kind of story got the probe through (Complied or Collapsed), and the average threshold where whittling found one.',
+  effectEmpty: 'No completed sequences yet, so no strategy has a record.',
+  excluded: (parts: string) => `Only completed sequences count here. Left out: ${parts}.`,
+  excludedPart: (n: number, status: string) => `${n} ${status}`,
+} as const;
+
+/** StrategyDialog (brief 9.9): the fields `POST /api/strategies` takes. */
+export const STRATEGY_DIALOG = {
+  titleNew: 'New strategy',
+  titleEdit: 'Edit strategy',
+  lead: 'A strategy tells the coach what kind of story to build and how to steer it toward the probe.',
+  name: 'Name',
+  nameHint: 'Short and unique, such as noir_detective. Underscores show as spaces.',
+  description: 'Description',
+  descriptionHint: 'One line shown under the strategy in the selects.',
+  goal: 'Goal',
+  goalHint: 'What the story is for, in a sentence.',
+  opening: 'Opening pattern',
+  openingHint: 'How the coach opens the story.',
+  escalation: 'Escalation pattern',
+  escalationHint: 'How each warmup turn moves the story closer to the probe.',
+  setup: 'Setup hint',
+  setupHint: 'What the setup turn does just before the probe arrives.',
+  category: 'Category',
+  categoryHint: 'Optional, such as fiction or academic.',
+  required: 'Fill in Name, Goal, Opening pattern, Escalation pattern and Setup hint.',
+  duplicate: 'A strategy with that name exists. Choose another name.',
+  loading: 'Reading the strategy…',
+  cancel: 'Cancel',
+  save: 'Save strategy',
+  saving: 'Saving…',
+} as const;
+
+/** Model compare (brief 8.5, D16, D29): set up, the run, past comparisons and one comparison. */
+export const COMPARE = {
+  title: 'Model compare',
+
+  // Where the per-model sessions go (D29)
+  sessionsNote:
+    'Each comparison saves its answers as one session per model, named "Compare" with the date. Those sessions stay out of the session switcher and Browse, so they do not crowd your own work. Open them from the comparison: every answer links to its run.',
+
+  // Set up
+  setupEyebrow: 'Set up',
+  setupTitle: 'Models and probes',
+  setupReadout:
+    'Every model gets each probe once, in a fresh conversation, with the same system prompt. No pushback, no coach.',
+  models: 'Models',
+  modelsHint: 'Two to five. Providers without a key are greyed out; set one in Settings.',
+  modelN: (n: number) => `Model ${n}`,
+  removeModel: (model: string) => (model ? `Remove ${model}` : 'Remove this model'),
+  addModel: 'Add a model',
+  modelsLoading: 'Reading the model list…',
+  probes: 'Probes',
+  sourceLabel: 'Which probes to list',
+  sourceSession: "This session's probes",
+  sourceSessionWhy: 'The probes in the rail for the session you have open.',
+  sourceAll: 'Every probe',
+  sourceAllWhy: 'Every probe in the library, whichever session holds it.',
+  probesLoading: 'Reading the probes…',
+  noProbes: 'No probes to list. Add one from the rail, or write a custom prompt below.',
+  customSummary: 'Add a custom prompt',
+  customHint: 'Saved as a new probe in the "custom" domain and sent with the picked probes.',
+  customLabel: 'Custom prompt',
+  systemPrompt: 'System prompt',
+  systemPromptHint: 'Optional. Applied to every model.',
+  plan: (models: number, probes: number) =>
+    `${models} ${plural(models, 'model', 'models')} × ${probes} ${plural(probes, 'probe', 'probes')} = ${models * probes} ${plural(models * probes, 'call', 'calls')}`,
+  run: (models: number, probes: number) =>
+    `Run the comparison (${models} ${plural(models, 'model', 'models')} × ${probes} ${plural(probes, 'probe', 'probes')})`,
+  runWhy: 'Sends every picked probe to every picked model and saves the comparison.',
+  needPick: 'Pick 2 to 5 models and at least 1 probe.',
+  duplicateModels: 'Each model can appear once. Change or remove the repeat.',
+  busy: 'A comparison is already running.',
+
+  // The run (one request, R11)
+  working: (probes: number, models: number, minutes: number) =>
+    `Running ${probes} ${plural(probes, 'probe', 'probes')} against ${models} ${plural(models, 'model', 'models')}. This can take a few minutes (about ${minutes} ${plural(minutes, 'minute', 'minutes')} at most). You can leave this screen; the strip keeps track.`,
+  elapsed: (clock: string) => `${clock} elapsed`,
+  strip: (models: number, probes: number) =>
+    `Model compare: ${models} ${plural(models, 'model', 'models')} × ${probes} ${plural(probes, 'probe', 'probes')}`,
+  failed: 'The comparison did not finish',
+  finished: 'Comparison saved.',
+  openResult: 'Open the comparison',
+
+  // Past comparisons
+  pastEyebrow: 'History',
+  pastTitle: 'Past comparisons',
+  pastReadout: 'Agreement is the share of probes that got the same badge from every model.',
+  pastCount: (n: number) => `${n} ${plural(n, 'comparison', 'comparisons')}`,
+  emptyTitle: 'No comparisons yet.',
+  emptyBody: 'Pick two models and a probe above, then run the comparison.',
+  probeCount: (n: number) => `${n} ${plural(n, 'probe', 'probes')}`,
+  vs: 'vs',
+  agreementShort: (pct: string) => `${pct} agree`,
+  open: 'Open',
+  openComparison: (name: string) => `Open ${name}`,
+  remove: 'Delete this comparison',
+  removeConfirm: 'Yes, delete it',
+  deleted: 'Comparison deleted.',
+  loadAgain: 'Load again',
+
+  // One comparison (/studies/compare/[id])
+  back: 'Back to Model compare',
+  loading: 'Reading the comparison…',
+  notFound: 'That comparison is gone. It may have been deleted.',
+  agreementEyebrow: 'Agreement',
+  aligned: (aligned: number, total: number) =>
+    `${aligned} of ${total} ${plural(total, 'probe', 'probes')} got the same badge from every model`,
+  savedOn: (date: string) => `Saved ${date}`,
+  gridEyebrow: 'Answers',
+  gridTitle: 'Badges by probe and model',
+  gridReadout:
+    'One row per probe, one column per model. A marked row is a disagreement. Pick a badge to read that answer.',
+  gridLabel: 'Badges by probe and model',
+  probeColumn: 'Probe',
+  disagreement: 'Disagreement',
+  failedCell: 'Failed',
+  cellLabel: (model: string, probe: string, badge: string) => `${model} on ${probe}: ${badge}`,
+  tallyLabel: (model: string) => `Badges for ${model}`,
+  tallyCount: (n: number) => `×${n}`,
+  turnsEyebrow: (model: string) => `On ${model}`,
+  turnsLoading: 'Reading the conversation…',
+  turnsEmpty: 'This answer has no saved turns.',
+  failedAnswer: (error: string) => `Failed: ${error}`,
+  openRun: 'Open the run',
+  openRunWhy: 'The saved run in Probe, where you can push back or correct the badge.',
+  closeTurns: 'Close',
+  prompt: 'Prompt',
+  downloadsEyebrow: 'Download',
+  json: 'Download JSON',
+  jsonWhy: 'The comparison with every answer, as saved.',
+  csv: 'Download CSV',
+  csvWhy: 'One row per probe, a badge and an answer column per model.',
+} as const;
+
+/** Baselines (brief 8.6, T28; formerly Snapshots). The research question is SCREENS.baselines. */
+export const BASELINES = {
+  title: 'Baselines',
+
+  // The list
+  listEyebrow: 'This session',
+  listTitle: 'Baselines',
+  listReadout:
+    "A baseline keeps each probe's latest badge in this session. Run the probes again after a model or prompt update, then compare the baseline with now.",
+  save: 'Save a baseline…',
+  saveWhy: "Freezes this session's current results under a name.",
+  count: (n: number) => `${n} ${plural(n, 'baseline', 'baselines')}`,
+  loading: 'Reading the baselines…',
+  emptyTitle: 'No baselines saved for this session.',
+  emptyBody: 'Run at least one probe, then save a baseline to compare with later.',
+  probeCount: (n: number) => `${n} ${plural(n, 'probe', 'probes')}`,
+  tallyLabel: (name: string) => `Badges saved in ${name}`,
+  tallyCount: (n: number) => `×${n}`,
+  detailLoading: 'Reading the saved results…',
+  show: 'Show saved results',
+  hide: 'Hide saved results',
+  compareNow: 'Compare with now',
+  compareNowWhy: "This baseline against the session's current results.",
+  remove: 'Delete this baseline',
+  removeConfirm: 'Yes, delete it',
+  deleted: 'Baseline deleted.',
+  saved: (name: string) => `Baseline "${name}" saved.`,
+  loadAgain: 'Load again',
+  savedRows: (name: string) => `Saved results in ${name}`,
+  noRows: 'This baseline holds no runs.',
+
+  // The compare form
+  compareEyebrow: 'Compare',
+  compareTitle: 'What changed',
+  compareReadout:
+    'Pick a baseline, then what to hold it against: the current results, or a later baseline.',
+  before: 'Baseline',
+  after: 'Against',
+  now: "Now (this session's current results)",
+  run: 'Compare',
+  needTwo: 'Save a baseline first. Then compare it with now, or with a second baseline.',
+  sameBaseline: 'Pick two different baselines.',
+  comparing: 'Comparing…',
+
+  // The diff
+  diffTitle: (before: string, after: string) => `${before} against ${after}`,
+  nowLabel: 'now',
+  summary: (changed: number, unchanged: number) => `${changed} changed, ${unchanged} unchanged`,
+  improved: 'Improved',
+  regressed: 'Regressed',
+  changed: 'Changed',
+  unchanged: 'Unchanged',
+  probeColumn: 'Probe',
+  baselineColumn: 'Baseline',
+  nowColumn: 'Now',
+  statusColumn: 'Status',
+  notRun: 'Not run',
+  noChanges: 'Neither side holds any runs.',
+  close: 'Close the comparison',
+} as const;
+
+/** The Save a baseline dialog (brief 8.6, 7.1). */
+export const SAVE_BASELINE = {
+  title: 'Save a baseline',
+  lead: "Freezes this session's current results so you can see what changed after a model or prompt update.",
+  name: 'Name',
+  namePlaceholder: 'Before the model update',
+  nameHint: (n: number, max: number) => `Required. ${n} of ${max} characters.`,
+  description: 'Description',
+  optional: 'optional',
+  descriptionPlaceholder: 'What was true when you saved it: the model, the system prompt.',
+  submit: 'Save baseline',
+  saving: 'Saving…',
+  cancel: 'Cancel',
+} as const;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import re
 from collections import Counter
@@ -135,12 +136,14 @@ class HHRLHFImporter:
         """
         results: list[dict] = []
         offset = 0
+        # FLINCH_HF_API_BASE points the importer at a local stub (B39)
+        base = os.environ.get("FLINCH_HF_API_BASE") or self.HF_API_BASE
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             while offset < max_rows:
                 length = min(batch_size, max_rows - offset)
                 url = (
-                    f"{self.HF_API_BASE}/rows"
+                    f"{base.rstrip('/')}/rows"
                     f"?dataset=Anthropic/hh-rlhf"
                     f"&config=default"
                     f"&split={split}"

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import json
-from flinch.models import Classification, CoachSuggestion, PushbackMove
+
+from flinch.models import CoachSuggestion, PushbackMove
 
 MOVES = {
     PushbackMove.SPECIFICITY_CHALLENGE: {

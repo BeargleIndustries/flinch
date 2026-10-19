@@ -15,7 +15,7 @@ import json
 import logging
 import random
 import string
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -66,23 +66,27 @@ class ProlificExporter:
         from flinch.db import create_eval_tasks, list_conditions
 
         if not batch_id:
-            batch_id = f"batch_{experiment_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+            batch_id = f"batch_{experiment_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
 
         conditions = await list_conditions(self.db, experiment_id)
         condition_ids = [c["id"] for c in conditions]
+        if len(condition_ids) not in (2, 3):
+            # The CSV has three response columns (I11)
+            raise ValueError("Prolific tasks need a study with two or three conditions.")
 
-        # Get available (prompt, model) pairs
+        # Get available (prompt, model) pairs, repetition 0 of each cell only (I11)
         model_filter = ""
-        params = [experiment_id, len(condition_ids)]
+        params = [experiment_id]
         if model_ids:
             placeholders = ",".join("?" * len(model_ids))
             model_filter = f"AND er.model_id IN ({placeholders})"
             params.extend(model_ids)
+        params.append(len(condition_ids))  # placeholders in SQL order: HAVING comes last
 
         cursor = await self.db.execute(f"""
             SELECT er.prompt_id, er.model_id, COUNT(DISTINCT er.condition_id) as cond_count
             FROM experiment_responses er
-            WHERE er.experiment_id = ? AND er.status = 'completed'
+            WHERE er.experiment_id = ? AND er.status = 'completed' AND er.repetition = 0
             {model_filter}
             GROUP BY er.prompt_id, er.model_id
             HAVING cond_count >= ?
@@ -101,7 +105,7 @@ class ProlificExporter:
                 SELECT er.id, er.condition_id, er.response_text
                 FROM experiment_responses er
                 WHERE er.experiment_id = ? AND er.prompt_id = ? AND er.model_id = ?
-                    AND er.status = 'completed'
+                    AND er.status = 'completed' AND er.repetition = 0
                 ORDER BY er.condition_id
             """, (experiment_id, prompt_id, target_model_id))
             responses = [dict(r) for r in await cursor.fetchall()]
@@ -109,7 +113,8 @@ class ProlificExporter:
             if len(responses) < len(condition_ids):
                 continue
 
-            seed = hash((experiment_id, prompt_id, target_model_id, "prolific")) & 0xFFFFFFFF
+            seed_key = f"{experiment_id}:{prompt_id}:{target_model_id}:prolific"
+            seed = int(hashlib.sha256(seed_key.encode()).hexdigest()[:8], 16)
             blinded, blinding_map = _blind_for_eval(responses, seed)
 
             for rater_slot in range(raters_per_task):
@@ -119,16 +124,16 @@ class ProlificExporter:
                     "batch_id": batch_id,
                     "prompt_id": prompt_id,
                     "target_model_id": target_model_id,
-                    "blinding_order": json.dumps(blinding_map),
+                    "blinding_order": blinding_map,  # create_eval_tasks encodes it once
                     "tracking_id": tracking_id,
                 })
 
-        if tasks:
-            await create_eval_tasks(self.db, tasks)
+        # A second call inserts nothing new and reports 0 (B14)
+        task_count = await create_eval_tasks(self.db, tasks) if tasks else 0
 
         return {
             "batch_id": batch_id,
-            "task_count": len(tasks),
+            "task_count": task_count,
             "prompt_count": len(available_pairs),
             "raters_per_task": raters_per_task,
             "conditions": len(condition_ids),
@@ -163,6 +168,7 @@ class ProlificExporter:
                 cursor2 = await self.db.execute("""
                     SELECT response_text FROM experiment_responses
                     WHERE experiment_id = ? AND prompt_id = ? AND model_id = ? AND condition_id = ?
+                        AND repetition = 0
                 """, (experiment_id, row[3], row[2], condition_id))
                 resp_row = await cursor2.fetchone()
                 responses[label] = resp_row[0] if resp_row else ""
@@ -171,7 +177,8 @@ class ProlificExporter:
             resp_b = responses.get("B", "")
             resp_c = responses.get("C", "")
 
-            question = "Read the prompt and the three AI responses below. Rank them from best (1) to worst (3). Consider helpfulness, accuracy, thoroughness, and clarity."
+            n = len(blinding_map)
+            question = f"Read the prompt and the {n} AI responses below. Rank them from best (1) to worst ({n}). Consider helpfulness, accuracy, thoroughness, and clarity."
 
             writer.writerow([tracking_id, prompt_text, resp_a, resp_b, resp_c, question])
 
@@ -243,6 +250,7 @@ class ProlificExporter:
                 cursor = await self.db.execute("""
                     SELECT id FROM experiment_responses
                     WHERE experiment_id = ? AND prompt_id = ? AND model_id = ? AND condition_id = ?
+                        AND repetition = 0
                 """, (experiment_id, task[2], task[3], condition_id))
                 resp = await cursor.fetchone()
                 if not resp:
@@ -258,7 +266,7 @@ class ProlificExporter:
                     "rank": rank,
                     "reasoning": reasoning,
                     "completion_time_s": completion_time,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "completed_at": datetime.now(UTC).isoformat(),
                 })
 
             # Update task status

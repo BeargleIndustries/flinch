@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +201,6 @@ class ExperimentAnalyzer:
         from flinch.db import list_conditions
 
         conditions = await list_conditions(self.db, experiment_id)
-        cond_map = {c["id"]: c["label"] for c in conditions}
 
         metrics_cols = [
             "word_count", "sentence_count", "words_per_sentence",
@@ -458,7 +456,7 @@ class ExperimentAnalyzer:
         return results
 
     async def compute_paired_analysis(self, experiment_id: int) -> dict:
-        """Wilcoxon signed-rank test — responses paired by prompt_id.
+        """Wilcoxon signed-rank test: responses paired by (prompt_id, model_id), repetition 0 (I11).
         This is the PRIMARY analysis since responses are naturally paired.
         Fetches all metrics in one query per condition pair, then filters in Python.
         """
@@ -479,22 +477,22 @@ class ExperimentAnalyzer:
                 cid1 = cond_ids[labels[i]]
                 cid2 = cond_ids[labels[j]]
 
-                # Single query: fetch all metrics for both conditions, joined on prompt_id
+                # Single query: fetch all metrics for both conditions, joined on prompt and model
                 async with self.db.execute(f"""
                     SELECT a.prompt_id, {', '.join(f'a.{c}' for c in metrics_cols)},
                            {', '.join(f'b.{c}' for c in metrics_cols)}
                     FROM (
-                        SELECT er.prompt_id, {col_select}
+                        SELECT er.prompt_id, er.model_id, {col_select}
                         FROM response_metrics rm
                         JOIN experiment_responses er ON er.id = rm.response_id
-                        WHERE er.experiment_id = ? AND er.condition_id = ?
+                        WHERE er.experiment_id = ? AND er.condition_id = ? AND er.repetition = 0
                     ) a
                     JOIN (
-                        SELECT er.prompt_id, {col_select}
+                        SELECT er.prompt_id, er.model_id, {col_select}
                         FROM response_metrics rm
                         JOIN experiment_responses er ON er.id = rm.response_id
-                        WHERE er.experiment_id = ? AND er.condition_id = ?
-                    ) b ON a.prompt_id = b.prompt_id
+                        WHERE er.experiment_id = ? AND er.condition_id = ? AND er.repetition = 0
+                    ) b ON a.prompt_id = b.prompt_id AND a.model_id = b.model_id
                 """, (experiment_id, cid1, experiment_id, cid2)) as cursor:
                     rows = await cursor.fetchall()
 
@@ -548,8 +546,10 @@ class ExperimentAnalyzer:
             if not isinstance(pair_data, dict):
                 continue
             for metric, mdata in pair_data.items():
-                if isinstance(mdata, dict) and "p_value" in mdata:
-                    entries.append((pair_key, metric, float(mdata["p_value"])))
+                p = mdata.get("p_value") if isinstance(mdata, dict) else None
+                # A test that could not produce a p-value (NaN) is not corrected.
+                if p is not None and math.isfinite(float(p)):
+                    entries.append((pair_key, metric, float(p)))
 
         if not entries:
             return {}
@@ -598,28 +598,46 @@ class ExperimentAnalyzer:
         import csv
         import io
 
-        # Pull stored analysis results
+        from flinch.db import load_analysis_json
+
+        # Pull stored analysis results, oldest first so the newest of each type wins
         cursor = await self.db.execute("""
-            SELECT analysis_type, result_json
+            SELECT analysis_type, results
             FROM analysis_results
             WHERE experiment_id = ?
+            ORDER BY created_at, id
         """, (experiment_id,))
         rows = await cursor.fetchall()
 
         stored: dict[str, dict] = {}
         for row in rows:
             try:
-                stored[row[0]] = json.loads(row[1])
+                loaded = load_analysis_json(row[1])
             except Exception:
-                pass
+                continue
+            if isinstance(loaded, dict):
+                stored[row[0]] = loaded
+
+        def section(source: dict, pair_key: str, metric: str | None = None) -> dict:
+            """The dict at source[pair_key][metric]; {} when absent, null or not a dict."""
+            value = source.get(pair_key)
+            if metric is not None:
+                value = value.get(metric) if isinstance(value, dict) else None
+            return value if isinstance(value, dict) else {}
+
+        def cell(value) -> object:
+            """CSV cell: None (a statistic that could not be computed) is an empty cell."""
+            return "" if value is None else value
 
         effect_sizes = stored.get("effect_sizes", {})
         nonparametric = stored.get("nonparametric", {})
         paired = stored.get("paired", {})
         corrections = stored.get("corrections", {})
 
-        # Collect all pair/metric combinations
-        all_pairs: set[str] = set(effect_sizes) | set(nonparametric) | set(paired)
+        # Collect all pair/metric combinations (an {"error": ...} entry is not a pair)
+        all_pairs: set[str] = {
+            k for src in (effect_sizes, nonparametric, paired) for k, v in src.items() if isinstance(v, dict)
+        }
 
         output = io.StringIO()
         writer = csv.writer(output)
@@ -640,38 +658,43 @@ class ExperimentAnalyzer:
             # Collect all metrics across sources for this pair
             all_metrics: set[str] = set()
             for src in (effect_sizes, nonparametric, paired):
-                if pair_key in src and isinstance(src[pair_key], dict):
-                    all_metrics.update(src[pair_key].keys())
+                all_metrics.update(k for k, v in section(src, pair_key).items() if isinstance(v, dict))
 
             for metric in sorted(all_metrics):
-                es = effect_sizes.get(pair_key, {}).get(metric, {})
-                np_data = nonparametric.get(pair_key, {}).get(metric, {})
-                pa_data = paired.get(pair_key, {}).get(metric, {})
-                corr = corrections.get(pair_key, {}).get(metric, {})
+                es = section(effect_sizes, pair_key, metric)
+                np_data = section(nonparametric, pair_key, metric)
+                pa_data = section(paired, pair_key, metric)
+                corr = section(corrections, pair_key, metric)
 
-                writer.writerow([
+                p_raw = corr.get("p_raw")
+                if p_raw is None:
+                    p_raw = es.get("p_value")
+                if p_raw is None:
+                    p_raw = np_data.get("p_value")
+
+                writer.writerow([cell(v) for v in (
                     metric, cond_1, cond_2,
-                    es.get("n1", ""), es.get("n2", ""),
-                    "", "",  # mean_1, sd_1 — not stored; compute separately if needed
-                    "", "",  # mean_2, sd_2
-                    es.get("cohens_d", ""),
-                    es.get("ci_lower", ""),
-                    es.get("ci_upper", ""),
-                    np_data.get("U", ""),
-                    pa_data.get("W", ""),
-                    corr.get("p_raw", es.get("p_value", np_data.get("p_value", ""))),
-                    corr.get("p_bonferroni", ""),
-                    corr.get("p_fdr", ""),
-                    np_data.get("rank_biserial", ""),
-                    corr.get("sig_bonferroni", ""),
-                    corr.get("sig_fdr", ""),
-                ])
+                    es.get("n1"), es.get("n2"),
+                    None, None,  # mean_1, sd_1: not stored
+                    None, None,  # mean_2, sd_2
+                    es.get("cohens_d"),
+                    es.get("ci_lower"),
+                    es.get("ci_upper"),
+                    np_data.get("U"),
+                    pa_data.get("W"),
+                    p_raw,
+                    corr.get("p_bonferroni"),
+                    corr.get("p_fdr"),
+                    np_data.get("rank_biserial"),
+                    corr.get("sig_bonferroni"),
+                    corr.get("sig_fdr"),
+                )])
 
         return output.getvalue()
 
     async def full_analysis(self, experiment_id: int) -> dict:
-        """Run all analyses, store results, return summary."""
-        from flinch.db import save_analysis_result
+        """Run all analyses, store results, return summary (NaN and +/-inf become None)."""
+        from flinch.db import json_safe, save_analysis_result
 
         all_results = {}
 
@@ -738,4 +761,4 @@ class ExperimentAnalyzer:
         except Exception as e:
             all_results["corrections"] = {"error": str(e)}
 
-        return all_results
+        return json_safe(all_results)

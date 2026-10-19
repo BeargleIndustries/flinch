@@ -4,8 +4,8 @@
 //   - Tauri builder + single-instance focus-existing-window handler
 //   - Global panic hook -> crash::record_crash
 //   - Setup hook: resolve bundled flinch source, launch sidecar in background
-//     if runtime is ready; otherwise the frontend drives bootstrap via
-//     `bootstrap_runtime_command`.
+//     if the runtime is current (P01); otherwise the frontend drives bootstrap
+//     via `bootstrap_runtime_command`, which installs or updates it.
 //   - Command surface for the frontend: sidecar lifecycle, API key CRUD
 //     (boolean-only read), bootstrap, crash diagnostics.
 //   - Exit handler: shuts the sidecar down cleanly on window close.
@@ -49,41 +49,119 @@ async fn sidecar_stderr(state: State<'_, SidecarState>) -> Result<Vec<String>, A
     }
 }
 
+/// `{ready, installed, current}` (P01): `ready` means a sidecar handle exists.
 #[tauri::command]
 async fn runtime_status(state: State<'_, SidecarState>) -> Result<RuntimeStatus, AppError> {
     let arc: &Arc<Mutex<Option<SidecarHandle>>> = state.inner();
-    let guard = arc.lock().await;
-    Ok(RuntimeStatus {
-        ready: guard.is_some(),
-    })
+    let ready = arc.lock().await.is_some();
+    Ok(RuntimeStatus::probe(ready))
+}
+
+/// Stop the sidecar in state, if any (a crashed one included), through the
+/// taskkill path in `SidecarHandle::shutdown`.
+async fn stop_sidecar(state: &SidecarState) {
+    let taken = state.lock().await.take();
+    if let Some(mut old) = taken {
+        tracing::info!("stopping current sidecar on {}", old.base_url);
+        if let Err(e) = old.shutdown().await {
+            tracing::warn!("shutdown of previous sidecar failed: {e}");
+        }
+    }
+}
+
+/// Launch a sidecar into state and return its base URL. The state lock is
+/// held across shutdown + launch, so concurrent launches are serialized, and
+/// any handle already in state is shut down first: never two sidecars (P01).
+async fn relaunch_sidecar(app: &AppHandle, state: &SidecarState) -> Result<String, String> {
+    let mut guard = state.lock().await;
+    if let Some(mut old) = guard.take() {
+        tracing::info!("relaunch: stopping current sidecar on {}", old.base_url);
+        if let Err(e) = old.shutdown().await {
+            tracing::warn!("relaunch: shutdown of previous sidecar failed: {e}");
+        }
+    }
+    let db = sidecar::db_path(app).map_err(|e| format!("{e:#}"))?;
+    let handle = sidecar::launch_with_app(Some(app.clone()), db)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let base_url = handle.base_url.clone();
+    tracing::info!("sidecar launched on {base_url}");
+    *guard = Some(handle);
+    Ok(base_url)
+}
+
+/// P04: stop the current sidecar (a crashed one included), launch a new one,
+/// emit `sidecar:restarted {base_url}` and return the base URL.
+#[tauri::command]
+async fn restart_sidecar(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<String, AppError> {
+    let state_arc: SidecarState = state.inner().clone();
+    match relaunch_sidecar(&app, &state_arc).await {
+        Ok(base_url) => {
+            use tauri::Emitter;
+            if let Err(e) = app.emit(
+                "sidecar:restarted",
+                serde_json::json!({ "base_url": base_url }),
+            ) {
+                tracing::warn!("failed to emit sidecar:restarted: {e}");
+            }
+            Ok(base_url)
+        }
+        Err(detail) => {
+            tracing::error!("restart: sidecar launch failed: {detail}");
+            if let Err(log_err) = crash::record_crash("sidecar restart", &detail) {
+                tracing::warn!("failed to write crash log: {log_err}");
+            }
+            Err(AppError::Sidecar(detail))
+        }
+    }
+}
+
+/// P04: open the webview devtools. Gated by this crate's `devtools` feature
+/// (default-on, so release builds have it too). Built with
+/// `--no-default-features` the command still exists but returns an error.
+#[tauri::command]
+async fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(feature = "devtools")]
+    {
+        window.open_devtools();
+        Ok(())
+    }
+    #[cfg(not(feature = "devtools"))]
+    {
+        let _ = window;
+        Err("DevTools not available in this build".to_string())
+    }
 }
 
 // ── Bootstrap command ─────────────────────────────────────────────────────────
 
-/// Frontend-driven bootstrap entry. Called on first-run or retry after a
-/// bootstrap error. Emits `bootstrap:progress` / `bootstrap:log` events the
-/// splash UI subscribes to, then (on success) launches the sidecar.
+/// Frontend-driven bootstrap entry. Called on first run, after an upgrade
+/// (runtime installed but not current), or on retry after a bootstrap error.
+/// Stops any running sidecar first so the venv is not in use while pip
+/// reinstalls, emits the `bootstrap:progress` / `bootstrap:log` events the
+/// welcome Python step subscribes to, then (on success) launches the sidecar.
 #[tauri::command]
 async fn bootstrap_runtime_command(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<(), AppError> {
+    let state_arc: SidecarState = state.inner().clone();
+    stop_sidecar(&state_arc).await;
+
     bootstrap::bootstrap_runtime(app.clone())
         .await
         .map_err(|e| AppError::Bootstrap(format!("{e:#}")))?;
 
-    let db = sidecar::db_path(&app).map_err(|e| AppError::Sidecar(format!("{e:#}")))?;
-    match sidecar::launch_with_app(Some(app.clone()), db).await {
-        Ok(handle) => {
-            tracing::info!("sidecar launched on {}", handle.base_url);
-            let arc: &Arc<Mutex<Option<SidecarHandle>>> = state.inner();
-            *arc.lock().await = Some(handle);
+    match relaunch_sidecar(&app, &state_arc).await {
+        Ok(_) => {
             use tauri::Emitter;
             let _ = app.emit("sidecar:ready", ());
             Ok(())
         }
-        Err(e) => {
-            let detail = format!("{e:#}");
+        Err(detail) => {
             if let Err(log_err) = crash::record_crash("sidecar launch (bootstrap)", &detail) {
                 tracing::warn!("failed to write crash log: {log_err}");
             }
@@ -133,6 +211,9 @@ pub fn run() {
                 let _ = window.unminimize();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // Step A — resolve the bundled flinch source directory (dev + installed
             // layouts) and publish it as FLINCH_SIDECAR_SOURCE for bootstrap::pip.
@@ -170,29 +251,21 @@ pub fn run() {
             let state: SidecarState = Arc::new(Mutex::new(None));
             app.manage(state.clone());
 
-            // Step C — if runtime is ready, launch sidecar in the background.
-            // Otherwise the frontend will invoke `bootstrap_runtime_command`
-            // (driven by the splash UI) to install the runtime + launch.
-            if bootstrap::is_runtime_ready() {
+            // Step C - if the runtime is current (installed, and its flinch
+            // package matches the bundled one), launch the sidecar in the
+            // background. Otherwise (first run, or an upgrade left a stale
+            // package) launch nothing: the welcome Python step invokes
+            // `bootstrap_runtime_command` to install or update, then launch (P01).
+            if bootstrap::is_runtime_current() {
                 let state_for_launch = state.clone();
                 let app_handle_for_launch = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    let db = match sidecar::db_path(&app_handle_for_launch) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::error!("resolve db_path failed: {e:#}");
-                            return;
-                        }
-                    };
-                    match sidecar::launch_with_app(Some(app_handle_for_launch.clone()), db).await {
-                        Ok(handle) => {
-                            tracing::info!("sidecar launched on {}", handle.base_url);
-                            *state_for_launch.lock().await = Some(handle);
+                    match relaunch_sidecar(&app_handle_for_launch, &state_for_launch).await {
+                        Ok(_) => {
                             use tauri::Emitter;
                             let _ = app_handle_for_launch.emit("sidecar:ready", ());
                         }
-                        Err(e) => {
-                            let detail = format!("{e:#}");
+                        Err(detail) => {
                             tracing::error!("sidecar launch failed: {detail}");
                             if let Err(log_err) =
                                 crash::record_crash("sidecar launch (background)", &detail)
@@ -209,8 +282,9 @@ pub fn run() {
                 });
             } else {
                 tracing::info!(
-                    "runtime not ready — skipping sidecar launch; frontend \
-                    will invoke bootstrap_runtime_command to install + launch"
+                    "runtime not current (installed: {}); skipping sidecar launch, \
+                    frontend will invoke bootstrap_runtime_command to install + launch",
+                    bootstrap::is_runtime_ready()
                 );
             }
 
@@ -220,6 +294,8 @@ pub fn run() {
             sidecar_url,
             sidecar_stderr,
             runtime_status,
+            restart_sidecar,
+            open_devtools,
             bootstrap_runtime_command,
             set_api_key,
             get_api_keys,

@@ -62,9 +62,24 @@ unsafe impl Send for SidecarHandle {}
 #[cfg(target_os = "windows")]
 unsafe impl Sync for SidecarHandle {}
 
+/// `runtime_status` payload (P01). `ready`: a sidecar handle exists.
+/// `installed`: the managed runtime (venv + flinch package) is in place.
+/// `current`: it is installed and its flinch package matches the bundled one.
 #[derive(Serialize, Clone, Debug)]
 pub struct RuntimeStatus {
     pub ready: bool,
+    pub installed: bool,
+    pub current: bool,
+}
+
+impl RuntimeStatus {
+    pub fn probe(ready: bool) -> Self {
+        Self {
+            ready,
+            installed: crate::bootstrap::is_runtime_ready(),
+            current: crate::bootstrap::is_runtime_current(),
+        }
+    }
 }
 
 impl SidecarHandle {
@@ -335,6 +350,14 @@ pub async fn launch_with_app(
     app_handle: Option<tauri::AppHandle>,
     db_path: PathBuf,
 ) -> anyhow::Result<SidecarHandle> {
+    // P01: never launch a stale managed runtime (an app upgrade leaves the old
+    // flinch package in the venv until the welcome Python step reinstalls it).
+    if crate::bootstrap::is_runtime_ready() && !crate::bootstrap::is_runtime_current() {
+        anyhow::bail!(
+            "the installed Python runtime is out of date; run setup again from the             welcome Python step to update it"
+        );
+    }
+
     let port =
         portpicker::pick_unused_port().ok_or_else(|| anyhow!("no free port available"))?;
 

@@ -5,12 +5,13 @@ Uses normalized parent/child tables (ai_ratings + ai_rating_items).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
 import string
-from datetime import datetime, timezone
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +108,18 @@ class AIRaterPipeline:
         """Rate all (prompt, target_model) pairs across conditions.
         Yields SSE progress events.
         """
-        from flinch.db import save_ai_rating, list_conditions, list_experiment_prompts
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, TargetResponse
+        from flinch.db import list_conditions
 
         # Get experiment structure
         conditions = await list_conditions(self.db, experiment_id)
         condition_ids = [c["id"] for c in conditions]
 
         # Get all unique (prompt_id, model_id) pairs with completed responses
+        # (repetition 0 of each cell only, I11)
         cursor = await self.db.execute("""
             SELECT DISTINCT prompt_id, model_id
             FROM experiment_responses
-            WHERE experiment_id = ? AND status = 'completed'
+            WHERE experiment_id = ? AND status = 'completed' AND repetition = 0
         """, (experiment_id,))
         pairs = await cursor.fetchall()
 
@@ -129,12 +130,11 @@ class AIRaterPipeline:
                 SELECT COUNT(DISTINCT condition_id) as cond_count
                 FROM experiment_responses
                 WHERE experiment_id = ? AND prompt_id = ? AND model_id = ? AND status = 'completed'
+                    AND repetition = 0
             """, (experiment_id, pair[0], pair[1]))
             row = await cursor.fetchone()
             if row[0] >= len(condition_ids):
                 valid_pairs.append((pair[0], pair[1]))
-
-        total_evals = len(valid_pairs) * len(self.rater_models)
 
         # Check for already-completed ratings to skip
         cursor = await self.db.execute("""
@@ -178,7 +178,7 @@ class AIRaterPipeline:
             JOIN experiment_prompts ep ON ep.id = er.prompt_id
             LEFT JOIN probes p ON p.id = ep.probe_id
             WHERE er.experiment_id = ? AND er.prompt_id = ? AND er.model_id = ?
-                AND er.status = 'completed'
+                AND er.status = 'completed' AND er.repetition = 0
             ORDER BY er.condition_id
         """, (experiment_id, prompt_id, target_model_id))
         responses = [dict(r) for r in await cursor.fetchall()]
@@ -189,8 +189,9 @@ class AIRaterPipeline:
         # Get prompt text
         prompt_text = responses[0].get("probe_text") or responses[0].get("custom_prompt_text") or ""
 
-        # Blind and shuffle
-        seed = hash((experiment_id, prompt_id, target_model_id, rater_model)) & 0xFFFFFFFF
+        # Blind and shuffle; the seed is stable across processes (B14)
+        seed_key = f"{experiment_id}:{prompt_id}:{target_model_id}:{rater_model}"
+        seed = int(hashlib.sha256(seed_key.encode()).hexdigest()[:8], 16)
         blinded, blinding_map = _blind_responses(responses, seed)
         expected_positions = [b["position"] for b in blinded]
 
@@ -212,11 +213,11 @@ class AIRaterPipeline:
             "rater_model": rater_model,
             "prompt_id": prompt_id,
             "target_model_id": target_model_id,
-            "blinding_order": json.dumps(blinding_map),
+            "blinding_order": blinding_map,  # save_ai_rating encodes it once
             "rater_reasoning": resp.text if resp else None,
             "raw_response": resp.text if resp else None,
             "status": "completed" if ranking else "failed",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
         }
 
         items_data = []
@@ -233,15 +234,7 @@ class AIRaterPipeline:
         await save_ai_rating(self.db, rating_data, items_data)
 
     def _create_rater_target(self, rater_model: str):
-        """Create a TargetModel for the rater."""
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget
+        """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+        from flinch.target import make_target
 
-        model_lower = rater_model.lower()
-        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
-            return ClaudeTarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
-        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
-            return OpenAITarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
-        elif "gemini" in model_lower:
-            return GeminiTarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
-        else:
-            return OpenAITarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
+        return make_target(rater_model, RATER_SYSTEM_PROMPT)

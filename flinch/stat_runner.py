@@ -3,35 +3,21 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from flinch import db
+from flinch import target as flinch_target
 from flinch.classifier import classify
 from flinch.llm import LLMBackend
-from flinch.target import ClaudeTarget, GeminiTarget, OpenAITarget, TargetModel
+from flinch.target import TargetModel
 
 logger = logging.getLogger(__name__)
 
 
-def _make_target(model_name: str, client=None) -> TargetModel:
-    """Create a fresh target model instance. Each iteration gets its own to avoid context contamination."""
-    if model_name.startswith("claude-"):
-        if not client:
-            raise ValueError(
-                "Anthropic API key required to test Claude models. "
-                "Set ANTHROPIC_API_KEY or choose a different target model."
-            )
-        return ClaudeTarget(model=model_name, client=client)
-    elif model_name.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
-        return OpenAITarget(model_name)
-    elif model_name.startswith("gemini-"):
-        return GeminiTarget(model_name)
-    elif model_name.startswith("grok-"):
-        # xAI uses OpenAI-compatible API
-        return OpenAITarget(model_name)
-    else:
-        # Try OpenAI-compatible (Ollama, Together, etc.)
-        return OpenAITarget(model_name)
+def _make_target(model_name: str, system_prompt: str = "", client=None) -> TargetModel:
+    """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+    return flinch_target.make_target(model_name, system_prompt, anthropic_client=client)
 
 
 async def run_statistical(
@@ -42,8 +28,13 @@ async def run_statistical(
     repeat_count: int,
     backend: LLMBackend | None,
     client=None,
+    make_target: Callable[[], TargetModel] | None = None,
+    system_prompt: str = "",
 ):
     """Run a probe N times against a model, classifying each response.
+
+    `make_target()` builds each iteration's fresh target; by default it is the
+    shared factory with `target_model` and `system_prompt`.
 
     Async generator — yields SSE event dicts (same pattern as Runner.run_batch).
     Each iteration gets a fresh TargetModel instance to avoid context contamination.
@@ -51,14 +42,18 @@ async def run_statistical(
 
     Yields dicts with 'event' and 'data' keys.
     """
-    stat_run_id = db.create_stat_run(conn, session_id, probe_id, target_model, repeat_count)
-    db.update_stat_run(conn, stat_run_id, status="running")
+    if make_target is None:
+        def make_target() -> TargetModel:
+            return _make_target(target_model, system_prompt, client)
 
+    # Check the probe first: a stat run row cannot reference a missing probe.
     probe = db.get_probe(conn, probe_id)
     if not probe:
-        yield {"event": "error", "data": {"message": f"Probe {probe_id} not found"}}
-        db.update_stat_run(conn, stat_run_id, status="failed")
+        yield {"event": "error", "data": {"error": f"Probe {probe_id} not found"}}
         return
+
+    stat_run_id = db.create_stat_run(conn, session_id, probe_id, target_model, repeat_count)
+    db.update_stat_run(conn, stat_run_id, status="running")
 
     yield {
         "event": "start",
@@ -77,7 +72,7 @@ async def run_statistical(
     for i in range(repeat_count):
         try:
             # Fresh target per iteration — no context bleed between runs
-            target = _make_target(target_model, client)
+            target = make_target()
 
             start_time = time.time()
             response_text = (await target.send(probe["prompt_text"])).text
@@ -127,7 +122,7 @@ async def run_statistical(
         conn,
         stat_run_id,
         status="complete",
-        completed_at=datetime.now(timezone.utc).isoformat(),
+        completed_at=datetime.now(UTC).isoformat(),
     )
 
     summary = db.get_stat_run_summary(conn, stat_run_id)
@@ -151,6 +146,8 @@ async def run_statistical_batch(
     repeat_count: int,
     backend: LLMBackend | None,
     client=None,
+    make_target: Callable[[], TargetModel] | None = None,
+    system_prompt: str = "",
 ):
     """Run statistical analysis on multiple probes sequentially. Yields SSE events for all."""
     yield {
@@ -165,7 +162,8 @@ async def run_statistical_batch(
 
     for probe_idx, probe_id in enumerate(probe_ids):
         async for event in run_statistical(
-            conn, session_id, probe_id, target_model, repeat_count, backend, client
+            conn, session_id, probe_id, target_model, repeat_count, backend, client,
+            make_target=make_target, system_prompt=system_prompt,
         ):
             # Augment every event with batch progress metadata
             event["data"]["batch_probe_index"] = probe_idx + 1

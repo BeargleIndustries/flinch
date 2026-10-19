@@ -1,17 +1,50 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from collections import deque
+from datetime import UTC, datetime
+
+import anyio
+
+from flinch import db
+from flinch import target as flinch_target
+from flinch.classifier import classify
+from flinch.coach import NARRATIVE_ENGINE_SYSTEM_PROMPT, Coach, NarrativeCoach
+from flinch.llm import LLMBackend
+from flinch.models import Classification, PushbackSource
+from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
+from flinch.target import EMPTY_RESPONSE, BaseModelTarget, TargetModel
 
 logger = logging.getLogger(__name__)
-from flinch import db
-from flinch.llm import LLMBackend
-from flinch.models import Classification, PushbackSource, CoachSuggestion, PushbackMove
-from flinch.target import TargetModel, ClaudeTarget, OpenAITarget, GeminiTarget, OllamaTarget
-from flinch.classifier import classify
-from flinch.coach import Coach, NarrativeCoach, NARRATIVE_ENGINE_SYSTEM_PROMPT
-from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
+
+# Stored turn roles, mapped to the roles a target conversation uses (I6).
+_RUN_TURN_ROLES = {"probe": "user", "pushback": "user", "user": "user",
+                   "response": "assistant", "assistant": "assistant"}
+_SEQUENCE_TURN_ROLES = {"coach": "user", "probe": "user", "target": "assistant"}
+
+
+def _target_history(turns: list[dict], roles: dict[str, str]) -> list[dict[str, str]]:
+    """Stored turns, in order, as user/assistant messages for `TargetModel.seed`.
+
+    An empty provider reply is never fed back as an assistant turn.
+    """
+    history = []
+    for t in turns:
+        role = roles.get(t["role"])
+        if role is None or (role == "assistant" and t["content"] in (EMPTY_RESPONSE, "", None)):
+            continue
+        history.append({"role": role, "content": t["content"]})
+    return history
+
+
+def _after_pushback(classification: Classification, run: dict) -> Classification:
+    """Complied after pushback on a run first Refused is stored as Collapsed (I7)."""
+    if (classification == Classification.COMPLIED
+            and run.get("initial_classification") == Classification.REFUSED.value):
+        return Classification.COLLAPSED
+    return classification
 
 
 class Runner:
@@ -19,7 +52,6 @@ class Runner:
         self._conn = conn
         self._client = client  # Keep for ClaudeTarget backward compat
         self._backend = backend  # For classifier + coach
-        self._targets: dict[int, TargetModel] = {}  # session_id -> target
 
     @property
     def backend(self) -> LLMBackend | None:
@@ -30,61 +62,22 @@ class Runner:
         return self._client
 
     def _make_target(self, model_name: str, system_prompt: str = "") -> TargetModel:
-        """Factory: dispatch to correct target based on model name prefix."""
-        if model_name.startswith("claude-"):
-            if not self._client:
-                raise ValueError(
-                    "Anthropic API key required to test Claude models. "
-                    "Set ANTHROPIC_API_KEY or choose a different target model."
-                )
-            return ClaudeTarget(model=model_name, client=self._client, system_prompt=system_prompt)
-        elif model_name.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
-            return OpenAITarget(model_name, system_prompt=system_prompt)
-        elif model_name.startswith("gemini-"):
-            return GeminiTarget(model_name, system_prompt=system_prompt)
-        elif model_name.startswith("grok-"):
-            # xAI uses OpenAI-compatible API
-            return OpenAITarget(
-                model_name,
-                system_prompt=system_prompt,
-                api_key=os.environ.get("XAI_API_KEY"),
-                base_url="https://api.x.ai/v1",
-            )
-        elif model_name.startswith("meta-llama/") or model_name.startswith("llama-"):
-            # Together AI for Meta models
-            return OpenAITarget(
-                model_name,
-                system_prompt=system_prompt,
-                api_key=os.environ.get("TOGETHER_API_KEY"),
-                base_url="https://api.together.xyz/v1",
-            )
-        elif model_name.startswith("ollama:"):
-            # Ollama local models
-            return OllamaTarget(
-                model=model_name,
-                system_prompt=system_prompt,
-            )
-        else:
-            raise ValueError(
-                f"Unknown model prefix for '{model_name}'. "
-                "Supported: claude-*, gpt-*, o1-*, o3-*, o4-*, gemini-*, grok-*, meta-llama/*, ollama:*"
-            )
+        """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+        return flinch_target.make_target(model_name, system_prompt, anthropic_client=self._client)
 
-    def _get_target(self, session_id: int) -> TargetModel:
-        """Get or create a target model for a session."""
-        if session_id not in self._targets:
-            session = db.get_session(self._conn, session_id)
-            if session is None:
-                raise ValueError(f"Session {session_id} not found")
-            self._targets[session_id] = self._make_target(
-                session["target_model"],
-                session.get("system_prompt", ""),
-            )
-        return self._targets[session_id]
+    def _target_for_run(self, run: dict) -> TargetModel:
+        """A fresh target for the run's own model, seeded with its stored conversation (I6)."""
+        session = db.get_session(self._conn, run["session_id"]) or {}
+        model = run.get("target_model") or session.get("target_model")
+        if not model:
+            raise ValueError(f"Run {run['id']} has no target model")
+        target = self._make_target(model, session.get("system_prompt") or "")
+        target.seed(_target_history(db.list_run_turns(self._conn, run["id"]), _RUN_TURN_ROLES))
+        return target
 
     def _get_coach(self, session_id: int) -> Coach:
         """Create a coach for a session, using the configured backend provider."""
-        from flinch.llm import AnthropicBackend, OpenAICompatibleBackend, get_backend_for_provider
+        from flinch.llm import OpenAICompatibleBackend, get_backend_for_provider
 
         session = db.get_session(self._conn, session_id)
         profile = db.get_coach_profile(self._conn, session.get("coach_profile", "standard")) if session else None
@@ -123,8 +116,8 @@ class Runner:
         if session is None:
             raise ValueError(f"Session {session_id} not found")
 
-        target = self._get_target(session_id)
-        target.reset()  # Fresh conversation for each probe
+        # A fresh target per run, never shared across runs (I6)
+        target = self._make_target(session["target_model"], session.get("system_prompt") or "")
 
         # Send probe
         response_text = (await target.send(probe["prompt_text"])).text
@@ -168,14 +161,15 @@ class Runner:
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
-        target = self._get_target(run["session_id"])
-
-        # Send pushback in same conversation
+        # Rebuild the run's conversation from the database, then continue it
+        target = self._target_for_run(run)
         response_text = (await target.reply(pushback_text)).text
 
         # Classify the response after pushback
         probe = db.get_probe(self._conn, run["probe_id"])
-        classification = await classify(response_text, probe["prompt_text"], self._backend)
+        classification = _after_pushback(
+            await classify(response_text, probe["prompt_text"], self._backend), run
+        )
 
         update_fields = {
             "pushback_text": pushback_text,
@@ -199,12 +193,14 @@ class Runner:
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
-        target = self._get_target(run["session_id"])
-        # Don't reset — continue the existing conversation
+        # Rebuild the run's conversation from the database, then continue it
+        target = self._target_for_run(run)
         response_text = (await target.reply(text)).text
 
         probe = db.get_probe(self._conn, run["probe_id"])
-        classification = await classify(response_text, probe["prompt_text"], self._backend)
+        classification = _after_pushback(
+            await classify(response_text, probe["prompt_text"], self._backend), run
+        )
 
         # Overwrite final_response/final_classification with the latest
         db.update_run(self._conn, run_id,
@@ -220,7 +216,12 @@ class Runner:
         return db.get_run(self._conn, run_id)
 
     async def run_batch(self, session_id: int, probe_ids: list[int], delay_ms: int = 2000):
-        """Async generator that yields SSE events as each probe completes."""
+        """Async generator that yields SSE events as each probe completes.
+
+        Cancel is the batch row's `cancelled` status, read before every probe, so
+        it does not depend on the client or on runner state. A generator closed
+        early (client disconnect, `aclose()`) also leaves the row `cancelled`.
+        """
         session = db.get_session(self._conn, session_id)
         if not session:
             raise ValueError("Session not found")
@@ -229,188 +230,82 @@ class Runner:
         total = len(probe_ids)
         completed = 0
         failed = 0
+        cancelled = False
+        finished = False
 
-        for probe_id in probe_ids:
-            try:
-                run = await self.send_probe(session_id, probe_id)
-                completed += 1
-                db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+        try:
+            yield {"event": "start", "data": {"batch_id": batch_id, "total": total}}
 
-                probe = db.get_probe(self._conn, probe_id)
-                yield {
-                    "event": "progress",
-                    "data": {
-                        "batch_id": batch_id,
-                        "probe_id": probe_id,
-                        "probe_name": probe["name"] if probe else f"probe-{probe_id}",
-                        "run_id": run["id"],
-                        "classification": run.get("initial_classification", "unknown"),
-                        "completed": completed,
-                        "total": total,
-                    },
-                }
-            except Exception as e:
-                failed += 1
-                completed += 1
-                db.update_batch_run(self._conn, batch_id, probes_completed=completed)
-                yield {
-                    "event": "error",
-                    "data": {
-                        "probe_id": probe_id,
-                        "error": str(e),
-                        "completed": completed,
-                        "total": total,
-                    },
-                }
-
-            # Delay between probes (skip after last one)
-            if completed < total:
-                await asyncio.sleep(delay_ms / 1000)
-
-        db.update_batch_run(
-            self._conn,
-            batch_id,
-            status="complete",
-            probes_completed=completed,
-            completed_at=datetime.now(timezone.utc).isoformat(),
-        )
-        yield {
-            "event": "complete",
-            "data": {
-                "batch_id": batch_id,
-                "total": total,
-                "completed": completed,
-                "failed": failed,
-            },
-        }
-
-    async def run_batch_conditions(
-        self,
-        session_id: int,
-        probe_ids: list[int],
-        conditions: list[dict],
-        delay_ms: int = 2000,
-        concurrency: int = 1,
-    ):
-        """Async generator yielding SSE events — runs each probe under each condition.
-
-        conditions: list of {"label": str, "system_prompt": str}
-        Produces N_probes × N_conditions runs total.
-        concurrency: number of parallel API calls per condition (1 = sequential, >1 = parallel batches).
-        """
-        session = db.get_session(self._conn, session_id)
-        if not session:
-            raise ValueError("Session not found")
-
-        total = len(probe_ids) * len(conditions)
-        completed = 0
-        failed = 0
-
-        batch_id = db.create_batch_run(self._conn, session_id, total, delay_ms)
-
-        for condition in conditions:
-            cond_label = condition.get("label", "")
-            cond_system_prompt = condition.get("system_prompt", "")
-
-            # Pre-fetch all probes for this condition
-            probes = []
             for probe_id in probe_ids:
-                probe = db.get_probe(self._conn, probe_id)
-                if not probe:
+                row = db.get_batch_run(self._conn, batch_id)
+                if row and row["status"] == "cancelled":
+                    cancelled = True
+                    break
+                try:
+                    run = await self.send_probe(session_id, probe_id)
+                    completed += 1
+                    db.update_batch_run(self._conn, batch_id, probes_completed=completed)
+
+                    probe = db.get_probe(self._conn, probe_id)
+                    yield {
+                        "event": "progress",
+                        "data": {
+                            "batch_id": batch_id,
+                            "probe_id": probe_id,
+                            "probe_name": probe["name"] if probe else f"probe-{probe_id}",
+                            "run_id": run["id"],
+                            "classification": run.get("initial_classification", "unknown"),
+                            "completed": completed,
+                            "total": total,
+                        },
+                    }
+                except Exception as e:
                     failed += 1
                     completed += 1
                     db.update_batch_run(self._conn, batch_id, probes_completed=completed)
                     yield {
                         "event": "error",
                         "data": {
+                            "batch_id": batch_id,
                             "probe_id": probe_id,
-                            "condition": cond_label,
-                            "error": f"Probe {probe_id} not found",
+                            "error": str(e),
                             "completed": completed,
                             "total": total,
                         },
                     }
-                else:
-                    probes.append(probe)
 
-            # Process probes in batches of `concurrency`
-            for batch_start in range(0, len(probes), concurrency):
-                batch = probes[batch_start:batch_start + concurrency]
-
-                async def _run_one(probe):
-                    """Run a single probe against the target. Returns (probe, result_dict) or (probe, error)."""
-                    target = self._make_target(session["target_model"], cond_system_prompt)
-                    for attempt in range(3):
-                        try:
-                            target.reset()
-                            response_text = (await target.send(probe["prompt_text"])).text
-                            run_id = db.create_run(self._conn, probe["id"], session_id, session["target_model"])
-                            db.update_run(self._conn, run_id, initial_response=response_text, notes=f"condition:{cond_label}")
-                            return probe, {"ok": True, "run_id": run_id, "response_text": response_text}
-                        except Exception as e:
-                            if attempt < 2:
-                                await asyncio.sleep(2 ** attempt)
-                                continue
-                            return probe, {"ok": False, "error": str(e)}
-                    return probe, {"ok": False, "error": "max retries exceeded"}
-
-                # Run batch concurrently
-                results = await asyncio.gather(*[_run_one(p) for p in batch])
-
-                for probe, result in results:
-                    if result["ok"]:
-                        completed += 1
-                        db.update_batch_run(self._conn, batch_id, probes_completed=completed)
-                        yield {
-                            "event": "progress",
-                            "data": {
-                                "batch_id": batch_id,
-                                "probe_id": probe["id"],
-                                "probe_name": probe["name"],
-                                "run_id": result["run_id"],
-                                "condition": cond_label,
-                                "response_text": result["response_text"],
-                                "completed": completed,
-                                "total": total,
-                            },
-                        }
-                    else:
-                        failed += 1
-                        completed += 1
-                        db.update_batch_run(self._conn, batch_id, probes_completed=completed)
-                        yield {
-                            "event": "error",
-                            "data": {
-                                "probe_id": probe["id"],
-                                "condition": cond_label,
-                                "error": result["error"],
-                                "completed": completed,
-                                "total": total,
-                            },
-                        }
-
-                if batch_start + concurrency < len(probes):
-                    await asyncio.sleep(delay_ms / 1000)
-
+                # Delay between probes (skip after last one)
                 if completed < total:
                     await asyncio.sleep(delay_ms / 1000)
 
-        db.update_batch_run(
-            self._conn,
-            batch_id,
-            status="complete",
-            probes_completed=completed,
-            completed_at=datetime.now(timezone.utc).isoformat(),
-        )
-        yield {
-            "event": "complete",
-            "data": {
-                "batch_id": batch_id,
-                "total": total,
-                "completed": completed,
-                "failed": failed,
-            },
-        }
+            db.update_batch_run(
+                self._conn,
+                batch_id,
+                status="cancelled" if cancelled else "complete",
+                probes_completed=completed,
+                completed_at=datetime.now(UTC).isoformat(),
+            )
+            finished = True
+            yield {
+                "event": "complete",
+                "data": {
+                    "batch_id": batch_id,
+                    "total": total,
+                    "completed": completed,
+                    "failed": failed,
+                    "cancelled": cancelled,
+                },
+            }
+        finally:
+            if not finished:
+                # Closed early. A synchronous write: there is no await here to cancel.
+                db.update_batch_run(
+                    self._conn,
+                    batch_id,
+                    status="cancelled",
+                    probes_completed=completed,
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
 
     async def skip_pushback(self, run_id: int) -> dict:
         """Skip pushback for a run."""
@@ -421,215 +316,16 @@ class Runner:
         db.update_run(self._conn, run_id, pushback_source=PushbackSource.SKIP.value)
         return db.get_run(self._conn, run_id)
 
-    def _get_sequence_target(self, session_id: int, use_narrative_engine: bool) -> "TargetModel":
-        """Get a target for a sequence, optionally with narrative engine system prompt."""
-        if use_narrative_engine:
-            session = db.get_session(self._conn, session_id)
-            if session is None:
-                raise ValueError(f"Session {session_id} not found")
-            return self._make_target(session["target_model"], NARRATIVE_ENGINE_SYSTEM_PROMPT)
-        return self._get_target(session_id)
-
-
-class ExperimentRunner:
-    """Runs the full prompt × model × condition matrix for experiments."""
-
-    MAX_RETRIES = 5
-    BACKOFF_BASE = 1.0  # seconds
-    BACKOFF_MAX = 60.0
-
-    def __init__(self, async_db, rate_pool: RateLimiterPool, backend=None):
-        self.db = async_db
-        self.rate_pool = rate_pool
-        self.backend = backend or "anthropic"
-        self._paused = False
-
-    def _get_provider(self, model_id: str) -> str:
-        """Determine provider from model ID."""
-        if model_id.startswith("ollama:"):
-            return "ollama"
-        model_lower = model_id.lower()
-        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
-            return "anthropic"
-        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
-            return "openai"
-        elif "gemini" in model_lower:
-            return "google"
-        elif any(x in model_lower for x in ["grok"]):
-            return "xai"
-        else:
-            return "together"
-
-    async def run_experiment(self, experiment_id: int):
-        """Execute full matrix, yielding SSE progress events."""
-        from flinch.db import get_pending_responses, update_experiment_response, update_experiment, get_experiment_progress
-
-        # Mark experiment as running
-        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(timezone.utc).isoformat())
-
-        # Group pending cells by provider for parallel execution
-        pending = await get_pending_responses(self.db, experiment_id, limit=50000)
-        if not pending:
-            yield {"type": "complete", "message": "No pending responses"}
-            return
-
-        by_provider = {}
-        for cell in pending:
-            provider = self._get_provider(cell["model_id"])
-            by_provider.setdefault(provider, []).append(cell)
-
-        total = len(pending)
-        completed = 0
-        failed = 0
-
-        yield {"type": "started", "total": total}
-
-        results_queue: asyncio.Queue = asyncio.Queue()
-
-        cell_count = 0
-
-        async def provider_worker(provider, cells):
-            nonlocal completed, failed, cell_count
-            limiter = self.rate_pool.get(provider)
-            for cell in cells:
-                if self._paused:
-                    break
-                # Check DB for pause signal every 10 cells
-                cell_count += 1
-                if cell_count % 10 == 0:
-                    cursor = await self.db.execute(
-                        "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
-                    )
-                    row = await cursor.fetchone()
-                    if row and row[0] == "paused":
-                        break
-                try:
-                    await self._run_single_cell(cell, limiter)
-                    completed += 1
-                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"]})
-                except Exception as e:
-                    failed += 1
-                    await update_experiment_response(self.db, cell["id"], status="failed", error_message=str(e))
-                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"], "error": str(e)})
-
-        tasks = [asyncio.create_task(provider_worker(p, cells)) for p, cells in by_provider.items()]
-
-        while True:
-            try:
-                event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
-                yield event
-            except asyncio.TimeoutError:
-                if all(t.done() for t in tasks):
-                    break
-                yield {"type": "heartbeat"}
-
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Final status
-        progress = await get_experiment_progress(self.db, experiment_id)
-        final_status = "completed"
-        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(timezone.utc).isoformat())
-
-        yield {"type": "complete", "completed": completed, "failed": failed, "total": total}
-
-    async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
-        """Execute one matrix cell with retry logic."""
-        from flinch.db import update_experiment_response
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget
-
-        model_id = cell["model_id"]
-        system_prompt = cell.get("condition_system_prompt", "")
-        prompt_text = cell.get("prompt_text") or cell.get("probe_text", "")
-        response_id = cell["id"]
-
-        target = self._create_target(model_id, system_prompt)
-        released = False
-
-        for attempt in range(self.MAX_RETRIES):
-            released = False
-            try:
-                await limiter.acquire()
-                try:
-                    resp = await target.send(prompt_text)
-                finally:
-                    limiter.release()
-                    released = True
-
-                limiter.record_usage(
-                    input_tokens=resp.input_tokens or 0,
-                    output_tokens=resp.output_tokens or 0,
-                )
-
-                await update_experiment_response(
-                    self.db, response_id,
-                    response_text=resp.text,
-                    latency_ms=resp.latency_ms,
-                    token_count_input=resp.input_tokens,
-                    token_count_output=resp.output_tokens,
-                    finish_reason=resp.finish_reason,
-                    status="completed",
-                    attempt_count=attempt + 1,
-                    completed_at=datetime.now(timezone.utc).isoformat(),
-                )
-                return
-
-            except Exception as e:
-                if not released:
-                    try:
-                        limiter.release()
-                    except ValueError:
-                        pass
-                limiter.record_retry()
-                if attempt < self.MAX_RETRIES - 1:
-                    backoff = min(self.BACKOFF_BASE * (2 ** attempt), self.BACKOFF_MAX)
-                    logger.warning(f"Retry {attempt+1} for cell {response_id}: {e}, waiting {backoff}s")
-                    await asyncio.sleep(backoff)
-                else:
-                    raise
-
-    def _create_target(self, model_id: str, system_prompt: str):
-        """Create appropriate TargetModel instance."""
-        from flinch.target import ClaudeTarget, OpenAITarget, GeminiTarget, BaseModelTarget, OllamaTarget
-
-        provider = self._get_provider(model_id)
-        # Check if it's a known base model
-        if model_id in BaseModelTarget.BASE_MODELS:
-            return BaseModelTarget(model=model_id, system_prompt=system_prompt)
-        if provider == "ollama":
-            return OllamaTarget(model=model_id, system_prompt=system_prompt)
-        elif provider == "anthropic":
-            return ClaudeTarget(model=model_id, system_prompt=system_prompt)
-        elif provider in ("openai", "xai", "together"):
-            base_url = None
-            if provider == "xai":
-                base_url = "https://api.x.ai/v1"
-            elif provider == "together":
-                base_url = "https://api.together.xyz/v1"
-            return OpenAITarget(model=model_id, system_prompt=system_prompt, base_url=base_url)
-        elif provider == "google":
-            return GeminiTarget(model=model_id, system_prompt=system_prompt)
-        else:
-            raise ValueError(f"Unknown provider for model: {model_id}")
-
-    async def pause(self, experiment_id: int):
-        """Pause execution."""
-        from flinch.db import update_experiment
-        self._paused = True
-        await update_experiment(self.db, experiment_id, status="paused")
-
-    def estimate_cost(self, total_cells: int, avg_input_tokens: int = 500, avg_output_tokens: int = 1000) -> dict:
-        """Estimate cost for the experiment."""
-        pricing = {
-            "anthropic": {"input": 0.003, "output": 0.015},   # Sonnet
-            "openai": {"input": 0.005, "output": 0.015},       # GPT-4o
-            "google": {"input": 0.00125, "output": 0.005},     # Gemini Pro
-            "together": {"input": 0.0009, "output": 0.0009},   # Llama
-        }
-        estimated_cost = 0.0
-        for p, rates in pricing.items():
-            estimated_cost += (avg_input_tokens / 1000 * rates["input"] + avg_output_tokens / 1000 * rates["output"])
-        estimated_cost *= total_cells / len(pricing)
-        return {"estimated_cost_usd": round(estimated_cost, 2), "total_cells": total_cells}
+    def _get_sequence_target(self, session_id: int, use_narrative_engine: bool) -> TargetModel:
+        """A fresh target for a sequence, optionally with the narrative engine system prompt."""
+        session = db.get_session(self._conn, session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        system_prompt = (
+            NARRATIVE_ENGINE_SYSTEM_PROMPT if use_narrative_engine
+            else session.get("system_prompt") or ""
+        )
+        return self._make_target(session["target_model"], system_prompt)
 
     # ── Narrative Momentum Methods ─────────────────────────────────
 
@@ -676,7 +372,6 @@ class ExperimentRunner:
 
         strategy = db.get_strategy_template(self._conn, seq["strategy_id"])
         probe = db.get_probe(self._conn, seq["probe_id"])
-        session = db.get_session(self._conn, seq["session_id"])
 
         # Get existing turns to build conversation history
         existing_turns = db.list_sequence_turns(self._conn, sequence_run_id)
@@ -701,16 +396,14 @@ class ExperimentRunner:
         coach_turn_count = sum(1 for t in existing_turns if t["role"] == "coach") + 1
         warmup_text = await coach.generate_warmup_turn(conversation_history, coach_turn_count, warmup_count)
 
-        # Get or create target (fresh for first turn)
+        # Fresh target, seeded with this run's stored turns (I6)
         target = self._get_sequence_target(seq["session_id"], use_ne)
-        if not existing_turns:
-            target.reset()
-
-        # Send warmup to target
-        if not existing_turns:
-            response_text = (await target.send(warmup_text)).text
-        else:
+        target_history = _target_history(existing_turns, _SEQUENCE_TURN_ROLES)
+        if target_history:
+            target.seed(target_history)
             response_text = (await target.reply(warmup_text)).text
+        else:
+            response_text = (await target.send(warmup_text)).text
 
         # Classify the response (use warmup text as probe_text context for classification)
         classification = await classify(response_text, warmup_text, self._backend)
@@ -758,7 +451,11 @@ class ExperimentRunner:
             elif t["role"] == "target":
                 conversation_history.append({"role": "assistant", "content": t["content"]})
 
+        # Fresh target, seeded with this run's stored turns (I6)
         target = self._get_sequence_target(seq["session_id"], use_ne)
+        target_history = _target_history(existing_turns, _SEQUENCE_TURN_ROLES)
+        if target_history:
+            target.seed(target_history)
         result_turns = []
 
         # Generate setup turn (N-1) if we have warmup context
@@ -782,7 +479,10 @@ class ExperimentRunner:
             adapted_probe = await coach_for_adapt.adapt_probe_to_story(conversation_history)
         else:
             adapted_probe = probe["prompt_text"]
-        probe_response = (await target.reply(adapted_probe)).text
+        if target_history or result_turns:
+            probe_response = (await target.reply(adapted_probe)).text
+        else:
+            probe_response = (await target.send(adapted_probe)).text
         probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
         db.add_sequence_turn(self._conn, sequence_run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -798,6 +498,7 @@ class ExperimentRunner:
             probe_classification=probe_classification.value,
             completed_at=now,
         )
+        db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
         return {
             "turns": result_turns,
@@ -816,7 +517,6 @@ class ExperimentRunner:
 
         strategy = db.get_strategy_template(self._conn, seq["strategy_id"])
         probe = db.get_probe(self._conn, seq["probe_id"])
-        session = db.get_session(self._conn, seq["session_id"])
         warmup_count = seq["max_warmup_turns"]
         use_ne = bool(seq.get("use_narrative_engine"))
 
@@ -878,8 +578,12 @@ class ExperimentRunner:
                 turn_number += 2
 
             # Probe turn (N) — adapt probe to story context then send
-            adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = (await target.reply(adapted_probe)).text
+            if conversation_history:
+                adapted_probe = await coach.adapt_probe_to_story(conversation_history)
+                probe_response = (await target.reply(adapted_probe)).text
+            else:
+                adapted_probe = probe["prompt_text"]
+                probe_response = (await target.send(adapted_probe)).text
             probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -895,6 +599,7 @@ class ExperimentRunner:
                 probe_classification=probe_classification.value,
                 completed_at=now,
             )
+            db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
             return {
                 "sequence_run_id": run_id,
@@ -903,8 +608,9 @@ class ExperimentRunner:
                 "turns": all_turns,
             }
 
-        except Exception as e:
+        except Exception:
             db.update_sequence_run(self._conn, run_id, status="failed")
+            db.update_sequence(self._conn, sequence_id, status="failed")
             raise
 
     async def run_sequence_auto_stream(self, sequence_id: int):
@@ -988,8 +694,12 @@ class ExperimentRunner:
                 }
 
             # Probe turn — adapt to story context
-            adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = (await target.reply(adapted_probe)).text
+            if conversation_history:
+                adapted_probe = await coach.adapt_probe_to_story(conversation_history)
+                probe_response = (await target.reply(adapted_probe)).text
+            else:
+                adapted_probe = probe["prompt_text"]
+                probe_response = (await target.send(adapted_probe)).text
             probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -1001,6 +711,7 @@ class ExperimentRunner:
                 probe_classification=probe_classification.value,
                 completed_at=now,
             )
+            db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
             yield {
                 "event": "complete",
@@ -1016,6 +727,7 @@ class ExperimentRunner:
 
         except Exception as e:
             db.update_sequence_run(self._conn, run_id, status="failed")
+            db.update_sequence(self._conn, sequence_id, status="failed")
             yield {
                 "event": "error",
                 "data": {"error": str(e), "sequence_run_id": run_id},
@@ -1040,6 +752,7 @@ class ExperimentRunner:
         results = []
         threshold_found = False
         threshold_at = None
+        errored = False
 
         for n in range(max_turns, -1, -1):  # max_turns down to 0
             # Run a full sequence at this warmup count
@@ -1075,17 +788,22 @@ class ExperimentRunner:
                     "warmup_count": n,
                     "probe_classification": "error",
                     "error": str(e),
+                    "sequence_run_id": run_id,
                 })
+                errored = True
                 break
 
         # If we went all the way to 0 without refusal, threshold is 0
-        if not threshold_found and results:
+        if not threshold_found and not errored and results:
             last_run_id = results[-1]["sequence_run_id"]
             db.update_sequence_run(self._conn, last_run_id, threshold_found=1)
             threshold_at = 0
 
         now = __import__("datetime").datetime.utcnow().isoformat()
-        db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
+        if errored:
+            db.update_sequence(self._conn, sequence_id, status="failed")
+        else:
+            db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
         return {
             "sequence_id": sequence_id,
@@ -1172,7 +890,7 @@ class ExperimentRunner:
 
         return {"probe_classification": probe_classification.value}
 
-    def estimate_cost(self, probe_count: int, max_turns: int, mode: str = "whittle") -> dict:
+    def estimate_sequence_cost(self, probe_count: int, max_turns: int, mode: str = "whittle") -> dict:
         """Estimate cost for a batch sequence run.
 
         Rough estimates per turn:
@@ -1311,3 +1029,258 @@ class ExperimentRunner:
                 "completed": completed,
             },
         }
+
+
+class ExperimentRunner:
+    """Runs the full prompt × model × condition matrix for experiments."""
+
+    MAX_RETRIES = 5
+    BACKOFF_BASE = 1.0  # seconds
+    BACKOFF_MAX = 60.0
+
+    # Cells read from the database per page (B03: page until none remain).
+    PENDING_PAGE_SIZE = 500
+
+    def __init__(self, async_db, rate_pool: RateLimiterPool, backend: LLMBackend | None = None):
+        self.db = async_db
+        self.rate_pool = rate_pool
+        self.backend = backend
+
+    def _get_provider(self, model_id: str) -> str:
+        """Determine provider from model ID."""
+        if model_id.startswith("ollama:"):
+            return "ollama"
+        model_lower = model_id.lower()
+        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
+            return "anthropic"
+        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
+            return "openai"
+        elif "gemini" in model_lower:
+            return "google"
+        elif any(x in model_lower for x in ["grok"]):
+            return "xai"
+        else:
+            return "together"
+
+    async def _write_final_status(self, experiment_id: int) -> str:
+        """Settle the study's status from its cells in the database, not this run's counters (B03).
+
+        `paused` while cells are pending, `completed` when some completed or none
+        failed, `failed` when every cell failed, `draft` when it has no cells.
+        """
+        from flinch.db import get_experiment_progress, update_experiment
+
+        progress = await get_experiment_progress(self.db, experiment_id)
+        if progress["total"] == 0:
+            status = "draft"
+        elif progress["pending"] > 0:
+            status = "paused"
+        elif progress["completed"] > 0 or progress["failed"] == 0:
+            status = "completed"
+        else:
+            status = "failed"
+        if status in ("completed", "failed"):
+            await update_experiment(self.db, experiment_id, status=status, completed_at=datetime.now(UTC).isoformat())
+        else:
+            await update_experiment(self.db, experiment_id, status=status)
+        return status
+
+    async def run_experiment(self, experiment_id: int):
+        """Execute full matrix, yielding SSE progress events.
+
+        Each provider runs `max_concurrent` workers over its own queue; every
+        worker reads the study status before each cell and stops on `paused`.
+        The `finally` is shielded (I27): a client disconnect cancels the
+        workers, and the final status is still written.
+        """
+        from flinch.db import (
+            get_pending_responses,
+            update_experiment,
+            update_experiment_response,
+        )
+
+        pending: list[dict] = []
+        while True:
+            page = await get_pending_responses(
+                self.db, experiment_id, limit=self.PENDING_PAGE_SIZE,
+                after_id=pending[-1]["id"] if pending else 0,
+            )
+            if not page:
+                break
+            pending.extend(page)
+
+        if not pending:
+            await self._write_final_status(experiment_id)
+            yield {"type": "complete", "completed": 0, "failed": 0, "total": 0}
+            return
+
+        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(UTC).isoformat())
+
+        by_provider: dict[str, list[dict]] = {}
+        for cell in pending:
+            by_provider.setdefault(self._get_provider(cell["model_id"]), []).append(cell)
+
+        total = len(pending)
+        completed = 0
+        failed = 0
+        results_queue: asyncio.Queue = asyncio.Queue()
+        worker_done = object()
+        tasks: list[asyncio.Task] = []
+        final_written = False
+
+        async def mark_failed(cell: dict, error: str) -> None:
+            nonlocal failed
+            failed += 1
+            await update_experiment_response(self.db, cell["id"], status="failed", error_message=error)
+            results_queue.put_nowait({"type": "progress", "completed": completed, "failed": failed,
+                                      "total": total, "model": cell["model_id"], "error": error})
+
+        async def is_paused() -> bool:
+            async with self.db.execute("SELECT status FROM experiments WHERE id = ?", (experiment_id,)) as cur:
+                row = await cur.fetchone()
+            return bool(row) and row[0] == "paused"
+
+        async def worker(queue: deque, limiter: ProviderRateLimiter) -> None:
+            nonlocal completed
+            try:
+                while queue:
+                    if await is_paused():
+                        return
+                    if not queue:
+                        return
+                    cell = queue.popleft()
+                    try:
+                        await self._run_single_cell(cell, limiter)
+                    except Exception as e:
+                        await mark_failed(cell, str(e))
+                        continue
+                    completed += 1
+                    results_queue.put_nowait({"type": "progress", "completed": completed, "failed": failed,
+                                              "total": total, "model": cell["model_id"]})
+            finally:
+                results_queue.put_nowait(worker_done)
+
+        try:
+            yield {"type": "started", "total": total}
+
+            for provider, cells in by_provider.items():
+                try:
+                    limiter = self.rate_pool.get(provider)
+                except Exception as e:
+                    for cell in cells:
+                        await mark_failed(cell, str(e))
+                    continue
+                queue = deque(cells)
+                for _ in range(min(limiter.max_concurrent, len(cells))):
+                    tasks.append(asyncio.create_task(worker(queue, limiter)))
+
+            running = len(tasks)
+            while running or not results_queue.empty():
+                try:
+                    event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
+                except TimeoutError:
+                    yield {"type": "heartbeat"}
+                    continue
+                if event is worker_done:
+                    running -= 1
+                else:
+                    yield event
+
+            for result in await asyncio.gather(*tasks, return_exceptions=True):
+                if isinstance(result, Exception):
+                    yield {"type": "error", "error": str(result)}
+
+            status = await self._write_final_status(experiment_id)
+            final_written = True
+            name = "paused" if status == "paused" else "complete"
+            yield {"type": name, "completed": completed, "failed": failed, "total": total}
+        finally:
+            with anyio.CancelScope(shield=True):
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                if not final_written:
+                    await self._write_final_status(experiment_id)
+
+    async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
+        """Execute one matrix cell with retry logic, then classify the response (B04)."""
+        from flinch.db import update_experiment_response
+
+        model_id = cell["model_id"]
+        system_prompt = cell.get("condition_system_prompt", "")
+        prompt_text = cell.get("prompt_text") or cell.get("probe_text") or ""
+        response_id = cell["id"]
+        if not prompt_text:
+            raise ValueError("Prompt has no text")
+
+        target = self._create_target(model_id, system_prompt)
+        released = False
+
+        for attempt in range(self.MAX_RETRIES):
+            released = False
+            try:
+                await limiter.acquire()
+                try:
+                    resp = await target.send(prompt_text)
+                finally:
+                    limiter.release()
+                    released = True
+
+                limiter.record_usage(
+                    input_tokens=resp.input_tokens or 0,
+                    output_tokens=resp.output_tokens or 0,
+                )
+
+                try:
+                    cls = await classify(resp.text, prompt_text, self.backend)
+                except Exception:
+                    cls = await classify(resp.text, prompt_text, None)
+
+                await update_experiment_response(
+                    self.db, response_id,
+                    response_text=resp.text,
+                    latency_ms=resp.latency_ms,
+                    token_count_input=resp.input_tokens,
+                    token_count_output=resp.output_tokens,
+                    finish_reason=resp.finish_reason,
+                    status="completed",
+                    attempt_count=attempt + 1,
+                    completed_at=datetime.now(UTC).isoformat(),
+                    classification=cls.value,
+                )
+                return
+
+            except Exception as e:
+                if not released:
+                    try:
+                        limiter.release()
+                    except ValueError:
+                        pass
+                limiter.record_retry()
+                if attempt < self.MAX_RETRIES - 1:
+                    backoff = min(self.BACKOFF_BASE * (2 ** attempt), self.BACKOFF_MAX)
+                    logger.warning(f"Retry {attempt+1} for cell {response_id}: {e}, waiting {backoff}s")
+                    await asyncio.sleep(backoff)
+                else:
+                    raise
+
+    def _create_target(self, model_id: str, system_prompt: str) -> TargetModel:
+        """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+        if model_id in BaseModelTarget.BASE_MODELS:
+            return BaseModelTarget(model=model_id, system_prompt=system_prompt)
+        return flinch_target.make_target(model_id, system_prompt, provider_hint=self._get_provider(model_id))
+
+    def estimate_cost(self, total_cells: int, avg_input_tokens: int = 500, avg_output_tokens: int = 1000) -> dict:
+        """Estimate cost for the experiment."""
+        pricing = {
+            "anthropic": {"input": 0.003, "output": 0.015},   # Sonnet
+            "openai": {"input": 0.005, "output": 0.015},       # GPT-4o
+            "google": {"input": 0.00125, "output": 0.005},     # Gemini Pro
+            "together": {"input": 0.0009, "output": 0.0009},   # Llama
+        }
+        estimated_cost = 0.0
+        for p, rates in pricing.items():
+            estimated_cost += (avg_input_tokens / 1000 * rates["input"] + avg_output_tokens / 1000 * rates["output"])
+        estimated_cost *= total_cells / len(pricing)
+        return {"estimated_cost_usd": round(estimated_cost, 2), "total_cells": total_cells}

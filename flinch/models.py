@@ -1,20 +1,24 @@
 from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
+from typing import Annotated, Literal
+
 from pydantic import BaseModel, Field, model_validator
 
-class Classification(str, Enum):
+
+class Classification(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     REFUSED = "refused"
     COLLAPSED = "collapsed"
     NEGOTIATED = "negotiated"
     COMPLIED = "complied"
 
-class PushbackSource(str, Enum):
+class PushbackSource(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     COACH = "coach"
     OVERRIDE = "override"
     SKIP = "skip"
 
-class PushbackMove(str, Enum):
+class PushbackMove(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     SPECIFICITY_CHALLENGE = "specificity_challenge"
     EQUIVALENCE_PROBE = "equivalence_probe"
     PROJECTION_CHECK = "projection_check"
@@ -144,7 +148,8 @@ class GenerateScorecardRequest(BaseModel):
 
 class PublicationExportRequest(BaseModel):
     name: str = Field(max_length=200)
-    format: str = "markdown"  # markdown, html, csv
+    # PDF is stored as HTML and converted on download (B24, I13); no JSON
+    format: Literal["markdown", "html", "csv", "pdf"] = "markdown"
     template: str = "full_report"  # comparison_table, consistency_matrix, pushback_summary, full_report
     filters: dict | None = None
     theme: str = "beargle-dark"
@@ -202,7 +207,7 @@ class ThemeSummary(BaseModel):
 # EXPERIMENT FRAMEWORK MODELS
 # ============================================================
 
-class ExperimentStatus(str, Enum):
+class ExperimentStatus(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
     DRAFT = "draft"
     RUNNING = "running"
     PAUSED = "paused"
@@ -212,7 +217,7 @@ class ExperimentStatus(str, Enum):
 
 class ConditionCreate(BaseModel):
     label: str = Field(..., min_length=1, max_length=100)
-    system_prompt: str = Field(..., min_length=1)
+    system_prompt: str = Field(default="", max_length=10000)
     description: str = ""
     sort_order: int = 0
 
@@ -255,6 +260,8 @@ class CreateExperimentRequest(BaseModel):
     random_seed: int | None = None
     config: dict = Field(default_factory=dict)
     conditions: list[ConditionCreate] = Field(default_factory=list)
+    # Runs per (condition, prompt, model) cell, stored in config (B11)
+    repetitions: int = Field(default=1, ge=1, le=50)
 
 
 class Experiment(BaseModel):
@@ -385,11 +392,22 @@ class AnalysisResult(BaseModel):
 
 # --- Request Models ---
 
+class ProviderLimit(BaseModel):
+    """One provider's rate limit; a missing field takes the pool default (I25)."""
+    rpm: int | None = Field(None, ge=1, le=10000)
+    concurrent: int | None = Field(None, ge=1, le=50)
+
+
 class StartExperimentRequest(BaseModel):
-    """Request to start experiment execution."""
-    concurrency_per_provider: dict[str, int] = Field(
-        default_factory=lambda: {"anthropic": 5, "openai": 5, "google": 3, "together": 3, "ollama": 3}
+    """Request to start experiment execution.
+
+    `concurrency_per_provider` maps a provider to its concurrency (an int) or a
+    `ProviderLimit`; an empty map means the pool defaults (B36).
+    """
+    concurrency_per_provider: dict[str, Annotated[int, Field(ge=1, le=50)] | ProviderLimit] = Field(
+        default_factory=dict
     )
+    retry_failed: bool = False
 
 
 class RunAIRatersRequest(BaseModel):

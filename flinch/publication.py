@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape as html_escape
 
 from flinch.themes import get_theme, render_theme_css, render_theme_header
@@ -21,7 +20,7 @@ _CLASSIFICATIONS = ("refused", "collapsed", "negotiated", "complied")
 
 def _pct(numerator: int, denominator: int) -> str:
     if denominator == 0:
-        return "—"
+        return "n/a"
     return f"{numerator / denominator:.1%}"
 
 
@@ -237,7 +236,7 @@ def generate_comparison_table(
 
     if format == "html":
         return (
-            f"<h2>Model Comparison</h2>\n"
+            "<h2>Model Comparison</h2>\n"
             + _format_table(headers, rows, "html")
         )
     return _format_table(headers, rows, format)
@@ -304,7 +303,7 @@ def generate_consistency_matrix(
         row = [pname]
         for model in model_set:
             rate = cell.get((pname, model))
-            row.append(f"{rate:.2f}" if rate is not None else "—")
+            row.append(f"{rate:.2f}" if rate is not None else "n/a")
         rows.append(row)
 
     if format == "html":
@@ -371,7 +370,7 @@ def generate_pushback_summary(
             d = dict(r)
             rows.append([
                 d["move"],
-                d.get("target_model") or "—",
+                d.get("target_model") or "n/a",
                 d["total"],
                 d["successes"],
                 _pct(d["successes"], d["total"]),
@@ -412,7 +411,7 @@ def generate_full_report(
       5. Pushback effectiveness
     """
     stats = _summary_stats(conn, filters)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     # Build section bodies (csv/markdown format; html/pdf branch regenerates as html below)
     _section_fmt = format if format not in ("html", "pdf") else "html"
@@ -428,7 +427,7 @@ def generate_full_report(
             f"# Total runs: {stats.get('total_runs', 0)}",
             f"# Probes tested: {stats.get('total_probes', 0)}",
             f"# Models: {stats.get('total_models', 0)}",
-            f"# Date range: {stats.get('date_start', '—')} to {stats.get('date_end', '—')}",
+            f"# Date range: {stats.get('date_start', 'n/a')} to {stats.get('date_end', 'n/a')}",
             f"# Overall refusal rate: {_pct(stats.get('refused') or 0, stats.get('total_runs') or 0)}",
             "",
             "## Model Comparison",
@@ -453,7 +452,7 @@ def generate_full_report(
             f'Total runs: {stats.get("total_runs", 0)} &nbsp;|&nbsp; '
             f'Probes: {stats.get("total_probes", 0)} &nbsp;|&nbsp; '
             f'Models: {stats.get("total_models", 0)} &nbsp;|&nbsp; '
-            f'Date range: {stats.get("date_start", "—")} → {stats.get("date_end", "—")} &nbsp;|&nbsp; '
+            f'Date range: {stats.get("date_start", "n/a")} → {stats.get("date_end", "n/a")} &nbsp;|&nbsp; '
             f'Overall refusal rate: {refusal_rate}</p>\n'
         )
         html_doc = (
@@ -466,11 +465,8 @@ def generate_full_report(
             + "\n" + pushback
             + "\n</body></html>"
         )
-        if format == "html":
-            return html_doc
-        # PDF: convert HTML to bytes via WeasyPrint — returns bytes, not str
-        from flinch.themes import html_to_pdf  # noqa: PLC0415
-        return html_to_pdf(html_doc)
+        # PDF is stored as this HTML and converted on download (B24, I13).
+        return html_doc
 
     # Markdown
     refusal_rate = _pct(stats.get("refused") or 0, stats.get("total_runs") or 0)
@@ -480,7 +476,7 @@ def generate_full_report(
         f"**Total runs:** {stats.get('total_runs', 0)}  \n"
         f"**Probes tested:** {stats.get('total_probes', 0)}  \n"
         f"**Models:** {stats.get('total_models', 0)}  \n"
-        f"**Date range:** {stats.get('date_start', '—')} to {stats.get('date_end', '—')}  \n"
+        f"**Date range:** {stats.get('date_start', 'n/a')} to {stats.get('date_end', 'n/a')}  \n"
         f"**Overall refusal rate:** {refusal_rate}  \n"
     )
 

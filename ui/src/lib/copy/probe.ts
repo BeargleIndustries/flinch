@@ -32,6 +32,9 @@ export const PROBE = {
   runAll: (n: number) => `Run all ${n} ${plural(n, 'probe', 'probes')}`,
   baselineTitle: 'Save a baseline',
   baselineOpen: 'Open Baselines',
+  baselineSave: 'Save a baseline…',
+  baselineSaveWhy: 'Name it now; compare with it after an update.',
+  baselineCompare: 'Compare with a baseline',
   runAllWhy: 'Results arrive one by one. No pushback is sent.',
 
   // Batch run (7.8)

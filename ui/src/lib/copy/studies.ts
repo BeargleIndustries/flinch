@@ -2,8 +2,8 @@
 // names live in screens.ts; everything else a Studies screen says lives here
 // (brief 5.7 rule 9) and is in COPY_FILES. T21 adds Framings (8.1), T22
 // Conditions (8.2), T23 the study's Results, Raters and Export tabs and T24
-// Repeat runs (8.3), T27 Model compare (8.5); later Studies tasks add their
-// own objects.
+// Repeat runs (8.3), T27 Model compare (8.5), T28 Baselines (8.6); later
+// Studies tasks add their own objects.
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -1011,4 +1011,80 @@ export const COMPARE = {
   jsonWhy: 'The comparison with every answer, as saved.',
   csv: 'Download CSV',
   csvWhy: 'One row per probe, a badge and an answer column per model.',
+} as const;
+
+/** Baselines (brief 8.6, T28; formerly Snapshots). The research question is SCREENS.baselines. */
+export const BASELINES = {
+  title: 'Baselines',
+
+  // The list
+  listEyebrow: 'This session',
+  listTitle: 'Baselines',
+  listReadout:
+    "A baseline keeps each probe's latest badge in this session. Run the probes again after a model or prompt update, then compare the baseline with now.",
+  save: 'Save a baseline…',
+  saveWhy: "Freezes this session's current results under a name.",
+  count: (n: number) => `${n} ${plural(n, 'baseline', 'baselines')}`,
+  loading: 'Reading the baselines…',
+  emptyTitle: 'No baselines saved for this session.',
+  emptyBody: 'Run at least one probe, then save a baseline to compare with later.',
+  probeCount: (n: number) => `${n} ${plural(n, 'probe', 'probes')}`,
+  tallyLabel: (name: string) => `Badges saved in ${name}`,
+  tallyCount: (n: number) => `×${n}`,
+  detailLoading: 'Reading the saved results…',
+  show: 'Show saved results',
+  hide: 'Hide saved results',
+  compareNow: 'Compare with now',
+  compareNowWhy: "This baseline against the session's current results.",
+  remove: 'Delete this baseline',
+  removeConfirm: 'Yes, delete it',
+  deleted: 'Baseline deleted.',
+  saved: (name: string) => `Baseline "${name}" saved.`,
+  loadAgain: 'Load again',
+  savedRows: (name: string) => `Saved results in ${name}`,
+  noRows: 'This baseline holds no runs.',
+
+  // The compare form
+  compareEyebrow: 'Compare',
+  compareTitle: 'What changed',
+  compareReadout:
+    'Pick a baseline, then what to hold it against: the current results, or a later baseline.',
+  before: 'Baseline',
+  after: 'Against',
+  now: "Now (this session's current results)",
+  run: 'Compare',
+  needTwo: 'Save a baseline first. Then compare it with now, or with a second baseline.',
+  sameBaseline: 'Pick two different baselines.',
+  comparing: 'Comparing…',
+
+  // The diff
+  diffTitle: (before: string, after: string) => `${before} against ${after}`,
+  nowLabel: 'now',
+  summary: (changed: number, unchanged: number) => `${changed} changed, ${unchanged} unchanged`,
+  improved: 'Improved',
+  regressed: 'Regressed',
+  changed: 'Changed',
+  unchanged: 'Unchanged',
+  probeColumn: 'Probe',
+  baselineColumn: 'Baseline',
+  nowColumn: 'Now',
+  statusColumn: 'Status',
+  notRun: 'Not run',
+  noChanges: 'Neither side holds any runs.',
+  close: 'Close the comparison',
+} as const;
+
+/** The Save a baseline dialog (brief 8.6, 7.1). */
+export const SAVE_BASELINE = {
+  title: 'Save a baseline',
+  lead: "Freezes this session's current results so you can see what changed after a model or prompt update.",
+  name: 'Name',
+  namePlaceholder: 'Before the model update',
+  nameHint: (n: number, max: number) => `Required. ${n} of ${max} characters.`,
+  description: 'Description',
+  optional: 'optional',
+  descriptionPlaceholder: 'What was true when you saved it: the model, the system prompt.',
+  submit: 'Save baseline',
+  saving: 'Saving…',
+  cancel: 'Cancel',
 } as const;

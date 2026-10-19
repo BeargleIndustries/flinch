@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Baselines (brief 8.6): save a session's results, compare them later, delete. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import Baselines from '$lib/components/studies/Baselines.svelte';
 </script>
 
-<ScreenPlaceholder title="Baselines" question={SCREENS.baselines} needsSession />
+<Baselines />

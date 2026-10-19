@@ -10,9 +10,8 @@
   The Probe keys (S, P, K, N, R, Up, Down) belong to T17's shortcuts.ts.
 
   ProbeRail renders the rail inside RailFrame; NewSessionDialog opens on
-  `shell.newSessionOpen` (T16). Mount points for later tasks: T20 puts the
-  ExportDialog on `shell.exportOpen`; T19 fills
-  components/settings/SettingsSections.svelte.
+  `shell.newSessionOpen` (T16), ExportDialog on `shell.exportOpen` (T20);
+  T19 fills components/settings/SettingsSections.svelte.
 -->
 <script lang="ts">
   import '../app.css';
@@ -24,6 +23,7 @@
   import SettingsSections from '$lib/components/settings/SettingsSections.svelte';
   import CrashBanner from '$lib/components/shell/CrashBanner.svelte';
   import Header from '$lib/components/shell/Header.svelte';
+  import ExportDialog from '$lib/components/dialogs/ExportDialog.svelte';
   import NewSessionDialog from '$lib/components/dialogs/NewSessionDialog.svelte';
   import ProbeRail from '$lib/components/rail/ProbeRail.svelte';
   import ShortcutsOverlay from '$lib/components/shell/ShortcutsOverlay.svelte';
@@ -101,5 +101,6 @@
   </SettingsDrawer>
   <ShortcutsOverlay open={shell.shortcutsOpen} onClose={() => (shell.shortcutsOpen = false)} />
   <NewSessionDialog open={shell.newSessionOpen} onClose={() => (shell.newSessionOpen = false)} />
+  <ExportDialog open={shell.exportOpen} onClose={() => (shell.exportOpen = false)} />
   <FirstTimeTip />
 {/if}

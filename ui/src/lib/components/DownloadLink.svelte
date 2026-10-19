@@ -6,11 +6,14 @@
 
   `onDownload` fetches `path` and saves it: T13's `download(path)` (10.3)
   followed by `saveFile(blob, name)` (10.6). It resolves to the path the
-  desktop app wrote, or null when the browser downloaded the file.
+  desktop app wrote, or null when the browser downloaded the file. Closing
+  the desktop save dialog (SAVE_CANCELLED) shows nothing: no result line and
+  no error.
 -->
 <script lang="ts">
   import { Download } from 'lucide-svelte';
   import { friendlyError } from '$lib/errors';
+  import { isSaveCancelled } from './save-download';
   import { DOWNLOAD_MESSAGE_MS, savedMessage } from './download-link';
 
   interface Props {
@@ -49,7 +52,7 @@
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => (done = null), DOWNLOAD_MESSAGE_MS);
     } catch (e) {
-      error = friendlyError(e).message;
+      if (!isSaveCancelled(e)) error = friendlyError(e).message;
     } finally {
       busy = false;
     }

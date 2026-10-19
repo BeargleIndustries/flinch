@@ -11,6 +11,8 @@ export const ERROR_COPY = {
   missingPackage:
     "That provider's library is not installed on the sidecar. Reinstall Flinch with the multi-model extras.",
   pdfUnavailable: 'PDF export needs weasyprint on the sidecar. Choose HTML instead.',
+  /** Desktop: the save dialog's folder is outside the app's file scope (plan R10). */
+  saveOutsideScope: 'Could not save there. Choose a folder in Downloads, Documents or Desktop.',
   experimentExtras:
     'Statistics need the experiment extras (numpy, scipy, krippendorff) on the sidecar.',
   noRunsForBaseline: 'Run at least one probe before saving a baseline.',

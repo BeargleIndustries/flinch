@@ -51,4 +51,5 @@ export const COPY_FILES = [
   'lib/copy/rail.ts',
   'lib/copy/probe.ts',
   'lib/copy/settings.ts',
+  'lib/copy/export.ts',
 ];

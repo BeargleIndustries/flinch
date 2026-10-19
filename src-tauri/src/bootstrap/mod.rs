@@ -45,40 +45,65 @@ pub fn is_runtime_ready() -> bool {
 }
 
 /// Compute a SHA256 over the bundled Flinch source files. The result changes
-/// whenever any top-level `flinch/*.py` or `pyproject.toml` changes, so the
-/// bootstrap can tell when the packaged wheel has drifted from the installed
-/// copy in the managed venv.
+/// whenever `pyproject.toml` or any packaged file under `flinch/` changes, so
+/// the bootstrap can tell when the packaged wheel has drifted from the
+/// installed copy in the managed venv.
 pub fn bundle_hash() -> anyhow::Result<String> {
     let bundle_dir = pip::locate_sidecar_source()
         .map_err(|e| anyhow::anyhow!("could not locate flinch bundle: {e}"))?;
+    hash_bundle_dir(&bundle_dir)
+}
 
-    let mut files: Vec<std::path::PathBuf> = vec![bundle_dir.join("pyproject.toml")];
+/// Extensions of the packaged files under `flinch/` (P03): code, the
+/// playbook, themes, probes, strategies, variants and seeds.
+const HASHED_EXTENSIONS: &[&str] = &["py", "md", "yaml", "yml", "json"];
 
-    // Top-level *.py only — matches Pry's pattern for pry_sidecar/*.py.
+/// Hash `pyproject.toml` plus every file under `flinch/` (recursively) with a
+/// hashed extension. Files are sorted by their relative path (forward
+/// slashes), and that path is hashed with the contents, so the result does
+/// not depend on the order the filesystem lists directories in.
+fn hash_bundle_dir(bundle_dir: &std::path::Path) -> anyhow::Result<String> {
+    let mut files: Vec<(String, PathBuf)> =
+        vec![("pyproject.toml".to_string(), bundle_dir.join("pyproject.toml"))];
+
     let pkg_dir = bundle_dir.join("flinch");
-    if pkg_dir.exists() {
-        for entry in std::fs::read_dir(&pkg_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("py") {
-                files.push(path);
+    let mut pending = vec![pkg_dir.clone()];
+    while let Some(dir) = pending.pop() {
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
             }
+            let hashed = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| HASHED_EXTENSIONS.contains(&ext));
+            if !hashed {
+                continue;
+            }
+            let rel = path.strip_prefix(bundle_dir)?;
+            let rel = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            files.push((rel, path));
         }
     }
 
-    // Sort for determinism across filesystems.
-    files.sort();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = Sha256::new();
-    for file in &files {
-        if let Ok(bytes) = std::fs::read(file) {
-            if let Some(name) = file.file_name().and_then(|s| s.to_str()) {
-                hasher.update(name.as_bytes());
-                hasher.update(b":");
-            }
-            hasher.update(&bytes);
-            hasher.update(b"\n");
-        }
+    for (rel, path) in &files {
+        let bytes = std::fs::read(path)?;
+        hasher.update(rel.as_bytes());
+        hasher.update(b":");
+        hasher.update(&bytes);
+        hasher.update(b"\n");
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -178,4 +203,93 @@ pub async fn bootstrap_runtime(app: AppHandle) -> Result<(), BootstrapError> {
 
     emit.stage(BootstrapStage::Ready, "runtime installed and ready");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_bundle_dir;
+    use std::path::{Path, PathBuf};
+
+    /// A fresh, empty directory under the system temp dir.
+    fn scratch_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "flinch-bundle-hash-{}-{}-{}",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(root: &Path, rel: &str, contents: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    const FILES: &[(&str, &str)] = &[
+        ("pyproject.toml", "[project]\nname = \"flinch\"\n"),
+        ("flinch/__init__.py", ""),
+        ("flinch/app.py", "print('app')\n"),
+        ("flinch/playbook.md", "# Playbook\n"),
+        ("flinch/themes/__init__.py", ""),
+        ("flinch/themes/presets.md", "## Preset one\n"),
+        ("flinch/seeds/policies.py", "POLICIES = []\n"),
+        ("flinch/variants/lexical-complexity.md", "# Variants\n"),
+        ("flinch/probes/example-probes.md", "# Probes\n"),
+    ];
+
+    #[test]
+    fn bundle_hash_changes_when_a_theme_file_changes() {
+        let root = scratch_dir("theme");
+        for (rel, contents) in FILES {
+            write(&root, rel, contents);
+        }
+        let before = hash_bundle_dir(&root).unwrap();
+        assert_eq!(before, hash_bundle_dir(&root).unwrap(), "hash is stable");
+
+        write(&root, "flinch/themes/presets.md", "## Preset one, edited\n");
+        let after = hash_bundle_dir(&root).unwrap();
+        assert_ne!(before, after, "a change under flinch/themes/ changes the hash");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn bundle_hash_ignores_traversal_order() {
+        let forward = scratch_dir("forward");
+        for (rel, contents) in FILES {
+            write(&forward, rel, contents);
+        }
+        let reverse = scratch_dir("reverse");
+        for (rel, contents) in FILES.iter().rev() {
+            write(&reverse, rel, contents);
+        }
+        assert_eq!(
+            hash_bundle_dir(&forward).unwrap(),
+            hash_bundle_dir(&reverse).unwrap(),
+            "creation and listing order do not change the hash"
+        );
+
+        std::fs::remove_dir_all(&forward).ok();
+        std::fs::remove_dir_all(&reverse).ok();
+    }
+
+    #[test]
+    fn bundle_hash_skips_bytecode_caches() {
+        let root = scratch_dir("pycache");
+        for (rel, contents) in FILES {
+            write(&root, rel, contents);
+        }
+        let before = hash_bundle_dir(&root).unwrap();
+        write(&root, "flinch/__pycache__/app.cpython-311.pyc", "bytecode");
+        assert_eq!(before, hash_bundle_dir(&root).unwrap());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

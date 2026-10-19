@@ -10,7 +10,8 @@ use tokio::process::Command;
 /// Pry's install_runtime_deps installed torch / transformer-lens / sae-lens in
 /// separate stages (each its own CUDA-aware index resolution). Flinch has no ML
 /// dependencies — everything it needs is declared in its own wheel's metadata,
-/// so this reduces to a single `pip install <wheel>` pulling deps from PyPI.
+/// so this reduces to a single `pip install "<src>[multi-model,experiment]"`
+/// pulling deps from PyPI (I8; see `install_with_extras` for the R5 fallback).
 pub async fn install_runtime_deps(
     emit: &Emitter,
     runtime_dir: &Path,
@@ -36,13 +37,7 @@ pub async fn install_runtime_deps(
         ))
     })?;
 
-    stream_pip_install(
-        emit,
-        &pip,
-        &["install", src_str],
-        BootstrapStage::InstallingDeps,
-    )
-    .await?;
+    install_with_extras(emit, &pip, src_str).await?;
 
     // Write initial sidecar hash marker so subsequent bootstraps recognize the
     // install as current and only reinstall the flinch package when source changes.
@@ -97,6 +92,10 @@ pub async fn reinstall_sidecar_package(
     )
     .await?;
 
+    // An upgrade from 0.8 installed bare `flinch`; fill in the extras now (no
+    // --force-reinstall, so satisfied dependencies are left alone).
+    install_with_extras(emit, &pip, src_str).await?;
+
     let new_hash = super::bundle_hash()
         .map_err(|e| BootstrapError::Internal(format!("bundle hash: {e}")))?;
     let marker_path = super::sidecar_hash_marker_path()
@@ -111,6 +110,61 @@ pub async fn reinstall_sidecar_package(
         1.0,
     );
     Ok(())
+}
+
+/// The extras the desktop app needs (I8): every provider SDK and the
+/// statistics stack. PDF export (`[pdf]`) stays optional.
+const FULL_EXTRAS: &str = "multi-model,experiment";
+/// The R5 fallback when an `[experiment]` dependency fails to build.
+const FALLBACK_EXTRAS: &str = "multi-model";
+
+/// `pip install "<src>[multi-model,experiment]"`. When pip reports a build
+/// failure (R5, A8: an `[experiment]` dependency without a Windows wheel),
+/// install `"<src>[multi-model]"` instead and say so on `bootstrap:progress`
+/// and `bootstrap:log`; statistics then stay off through
+/// `capabilities.experiment_extras`. Any other failure (network, anti-virus)
+/// is returned as is.
+async fn install_with_extras(
+    emit: &Emitter,
+    pip: &Path,
+    src: &str,
+) -> Result<(), BootstrapError> {
+    let full = format!("{src}[{FULL_EXTRAS}]");
+    match stream_pip_install(emit, pip, &["install", &full], BootstrapStage::InstallingDeps)
+        .await
+    {
+        Err(BootstrapError::PipInstall(detail)) if is_build_failure(&detail) => {
+            let note = "statistics packages failed to build; installing without them \
+                        (statistics stay off)";
+            tracing::warn!("{note}: {detail}");
+            emit.log(format!("[flinch] {note}"));
+            emit.stage(BootstrapStage::InstallingDeps, note);
+            let fallback = format!("{src}[{FALLBACK_EXTRAS}]");
+            stream_pip_install(
+                emit,
+                pip,
+                &["install", &fallback],
+                BootstrapStage::InstallingDeps,
+            )
+            .await
+        }
+        other => other,
+    }
+}
+
+/// Whether a pip failure tail reads as a package build failure rather than
+/// a download or permission problem.
+fn is_build_failure(detail: &str) -> bool {
+    let d = detail.to_lowercase();
+    [
+        "failed building wheel",
+        "failed to build",
+        "could not build wheels",
+        "subprocess-exited-with-error",
+        "metadata-generation-failed",
+    ]
+    .iter()
+    .any(|marker| d.contains(marker))
 }
 
 /// Locate the bundled Flinch source tree (the directory containing
@@ -251,4 +305,21 @@ async fn stream_pip_install(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_build_failure;
+
+    #[test]
+    fn build_failures_trigger_the_extras_fallback() {
+        assert!(is_build_failure(
+            "pip exit 1\n  error: subprocess-exited-with-error\nERROR: Failed building wheel for scipy"
+        ));
+        assert!(is_build_failure("ERROR: Could not build wheels for krippendorff"));
+        assert!(!is_build_failure(
+            "ERROR: Could not find a version that satisfies the requirement openai (from versions: none)"
+        ));
+        assert!(!is_build_failure("Connection reset by peer"));
+    }
 }

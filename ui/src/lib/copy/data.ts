@@ -462,3 +462,45 @@ export const PUBLISH = {
   showing: 'Showing',
   loadAgain: 'Read again',
 } as const;
+
+// Coach examples (brief 9.4, I19, D14, B28). The research question is
+// SCREENS.coach; the empty sentence is the brief's, verbatim.
+export const COACH = {
+  title: 'Coach examples',
+  profile: 'Profile',
+  profileHint: 'Examples belong to a coach profile. A session drafts with its own profile.',
+  newProfile: 'New profile name…',
+  newProfileLabel: 'Profile name',
+  newProfilePlaceholder: 'careful-coach',
+  show: 'Show',
+  loading: 'Reading the examples…',
+  count: (n: number, profile: string) =>
+    `${count(n, 'example', 'examples')} for the ${profile} profile`,
+  empty: 'No examples yet. In Probe, after a pushback, use Teach the coach this exchange.',
+  failed: 'The examples did not load.',
+  loadAgain: 'Read again',
+
+  // One example
+  taught: (date: string) => (date ? `Taught ${date}` : 'Taught'),
+  unknownMove: 'Unknown move',
+  move: 'Move',
+  pattern: 'Pattern',
+  outcome: (label: string) => `Outcome: ${label}`,
+  refusal: 'Refusal',
+  pushback: 'Pushback',
+  noPushback: 'No pushback was sent.',
+  effectiveness: 'Effectiveness',
+  effectivenessOf: (n: number) => `${n} of 5`,
+  edit: 'Edit the pushback',
+  editLabel: 'Pushback text',
+  save: 'Save',
+  saving: 'Saving…',
+  cancel: 'Cancel',
+  pushbackEmpty: 'Write a pushback first.',
+  saved: 'Pushback saved.',
+  rated: (n: number) => `Effectiveness set to ${n}.`,
+  openRun: 'Open the run',
+  delete: 'Delete this example',
+  deleteConfirm: 'Yes, delete it',
+  deleted: 'Example deleted.',
+} as const;

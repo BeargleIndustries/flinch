@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Coach examples (brief 9.4): what the coach has learned, per profile. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import CoachExamples from '$lib/components/data/CoachExamples.svelte';
 </script>
 
-<ScreenPlaceholder title="Coach examples" question={SCREENS.coach} />
+<CoachExamples />

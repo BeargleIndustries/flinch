@@ -1,7 +1,8 @@
 // Glossary checks (brief 13.2, AC16): definitions at most 140 characters, no
-// duplicate names, every alias resolves to its own entry, no em dash. The
-// "every <Term key> exists" check waits for screens that use <Term>.
+// duplicate names, every alias resolves to its own entry, no em dash, and
+// (Pry's check, T32) every <Term key="..."> in a .svelte file exists here.
 import { describe, expect, it } from 'vitest';
+import { allFiles, read } from './copy/copy-files';
 import { MAX_DEFINITION_LENGTH, glossary, lookupTerm, resolveTerm } from './glossary';
 
 /** The em dash, built from its code point so this file never holds one (brief 5.7 rule 1). */
@@ -48,5 +49,18 @@ describe('glossary', () => {
     expect(lookupTerm('System Prompt')).toBe(glossary['system-prompt']);
     expect(lookupTerm('  stat run ')).toBe(glossary['repeat-run']);
     expect(lookupTerm('Hugging Face')).toBeNull();
+  });
+
+  it('every <Term key="..."> in a .svelte file exists in the glossary', () => {
+    const files = allFiles().filter((f) => f.endsWith('.svelte'));
+    expect(files.length).toBeGreaterThan(5);
+    const used: string[] = [];
+    for (const f of files) {
+      for (const m of read(f).matchAll(/<Term\s+key="([^"]+)"/g)) {
+        used.push(m[1]);
+        expect(resolveTerm(m[1]), `${f}: unknown term "${m[1]}"`).not.toBeNull();
+      }
+    }
+    expect(used.length).toBeGreaterThan(0);
   });
 });

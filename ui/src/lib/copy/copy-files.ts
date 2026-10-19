@@ -54,4 +54,5 @@ export const COPY_FILES = [
   'lib/copy/export.ts',
   'lib/copy/studies.ts',
   'lib/copy/data.ts',
+  'lib/copy/guide.ts',
 ];

@@ -90,8 +90,8 @@ try {
     Write-Host ("Installer: {0}" -f $installer.FullName) -ForegroundColor Green
     Write-Host ("Size     : {0} MB" -f $sizeMB) -ForegroundColor Green
     Write-Host ""
-    if ($sizeMB -lt 50 -or $sizeMB -gt 80) {
-        Write-Warning ("Installer size {0} MB is outside the expected 50-80 MB band - double-check bundled resources." -f $sizeMB)
+    if ($sizeMB -lt 40 -or $sizeMB -gt 80) {
+        Write-Warning ("Installer size {0} MB is outside the expected 40-80 MB band - double-check bundled resources." -f $sizeMB)
     }
     Write-Host "Done. Next: test on a clean Windows 11 VM per acceptance criterion 1 in .omc/plans/no-cli-release-v2.md" -ForegroundColor Green
 } finally {

@@ -1045,7 +1045,6 @@ class ExperimentRunner:
         self.db = async_db
         self.rate_pool = rate_pool
         self.backend = backend
-        self._paused = False
 
     def _get_provider(self, model_id: str) -> str:
         """Determine provider from model ID."""
@@ -1144,7 +1143,7 @@ class ExperimentRunner:
         async def worker(queue: deque, limiter: ProviderRateLimiter) -> None:
             nonlocal completed
             try:
-                while queue and not self._paused:
+                while queue:
                     if await is_paused():
                         return
                     if not queue:
@@ -1271,12 +1270,6 @@ class ExperimentRunner:
         if model_id in BaseModelTarget.BASE_MODELS:
             return BaseModelTarget(model=model_id, system_prompt=system_prompt)
         return flinch_target.make_target(model_id, system_prompt, provider_hint=self._get_provider(model_id))
-
-    async def pause(self, experiment_id: int):
-        """Pause execution."""
-        from flinch.db import update_experiment
-        self._paused = True
-        await update_experiment(self.db, experiment_id, status="paused")
 
     def estimate_cost(self, total_cells: int, avg_input_tokens: int = 500, avg_output_tokens: int = 1000) -> dict:
         """Estimate cost for the experiment."""

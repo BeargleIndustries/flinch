@@ -40,8 +40,3 @@ export function groupLabel(group: ModelGroup): string {
 export function isListed(value: string, groups: readonly ModelGroup[]): boolean {
   return groups.some((g) => g.models.some((m) => m.id === value));
 }
-
-/** The provider of a listed model id, or null. */
-export function providerOf(value: string, groups: readonly ModelGroup[]): string | null {
-  return groups.find((g) => g.models.some((m) => m.id === value))?.provider ?? null;
-}

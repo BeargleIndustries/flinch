@@ -98,24 +98,6 @@ export function scrollAboveSheet(
 /** How the bottom sheet keeps its target in view: all of it, or its focus point. */
 export type SheetFit = 'whole' | 'focus';
 
-/** True when a new placement differs enough from the old one to re-render. */
-export function placementChanged(a: Placement | null, b: Placement | null): boolean {
-  if (!a || !b) return a !== b;
-  return (
-    a.mode !== b.mode ||
-    a.side !== b.side ||
-    a.caretEdge !== b.caretEdge ||
-    a.arrowExempt !== b.arrowExempt ||
-    a.largeTarget !== b.largeTarget ||
-    Math.abs(a.top - b.top) > 0.5 ||
-    Math.abs(a.left - b.left) > 0.5 ||
-    Math.abs(a.width - b.width) > 0.5 ||
-    Math.abs(a.caret - b.caret) > 0.5 ||
-    Math.abs((a.arrowTo?.x ?? 0) - (b.arrowTo?.x ?? 0)) > 0.5 ||
-    Math.abs((a.arrowTo?.y ?? 0) - (b.arrowTo?.y ?? 0)) > 0.5
-  );
-}
-
 /** Data attributes describing a placement, for the popup audit. */
 export function placementAttrs(p: Placement | null, focus: Point | null): Record<string, string> {
   if (!p) return {};

@@ -204,11 +204,6 @@ export function totalOf(counts: ClsCounts): number {
   return CLS_ORDER.reduce((sum, c) => sum + (counts[c] ?? 0), 0);
 }
 
-/** The runs Browse's session rows add up to (Model compare runs not included). */
-export function sumRuns(sessions: readonly Pick<BrowseSession, 'run_count'>[]): number {
-  return sessions.reduce((sum, s) => sum + s.run_count, 0);
-}
-
 // ── Dates ──────────────────────────────────────────────────────
 
 /**

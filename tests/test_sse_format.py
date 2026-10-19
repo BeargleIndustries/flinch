@@ -158,6 +158,7 @@ def test_route_generator_closes_runner_before_db(sse_env, monkeypatch, run) -> N
     async def drive() -> str:
         resp = await flinch.app.api_start_experiment(sse_env["exp_id"], StartExperimentRequest())
         assert isinstance(resp, flinch.app.ClosingStreamingResponse)
+        order.clear()  # the route's 404 check opened and closed its own connection
         gen = resp.body_iterator
         first = await gen.__anext__()
         await gen.aclose()

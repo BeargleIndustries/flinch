@@ -8,6 +8,7 @@
 // get_stat_distribution); they sit here rather than in api/types.ts (T24 rule).
 
 import { CLS_ORDER, toCls, type Cls } from '$lib/cls';
+import { localDay } from '$lib/format';
 import type { ClsCounts } from '../class-bar';
 
 /** One row of GET /api/sessions/{id}/stat-runs. */
@@ -95,16 +96,6 @@ export function distributionCounts(dist: unknown): ClsCounts {
     if (n === null || n <= 0) continue;
     const cls = toCls(key);
     out[cls] = (out[cls] ?? 0) + Math.round(n);
-  }
-  return out;
-}
-
-/** Counts per badge from iteration rows (the live tape, or a detail without the distribution). */
-export function countsOf(classes: readonly (string | null)[]): ClsCounts {
-  const out: Partial<Record<Cls, number>> = {};
-  for (const c of classes) {
-    const cls = toCls(c);
-    out[cls] = (out[cls] ?? 0) + 1;
   }
   return out;
 }
@@ -251,11 +242,6 @@ export function runDate(
     date: localDay(d),
     time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
   };
-}
-
-/** A Date as the local "YYYY-MM-DD". */
-export function localDay(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** "812 ms" under a second, "1.4 s" from there, "" when missing. */
@@ -487,9 +473,4 @@ export function settle(run: LiveRun, as: LiveProbeState = 'stopped'): LiveRun {
       p.state === 'waiting' || p.state === 'running' ? { ...p, state: as } : p,
     ),
   };
-}
-
-/** The stat run ids the live run created, in order. */
-export function liveStatRunIds(run: LiveRun): number[] {
-  return run.probes.flatMap((p) => (p.statRunId === null ? [] : [p.statRunId]));
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { canTest, keyLabel, keyStatus, sortKeys, type KeyEntry } from './key-row';
+import type { SettingsKey } from '$lib/api/types';
+import { canTest, keyLabel, keyStatus, sortKeys } from './key-row';
 
-const entry = (provider: string, over: Partial<KeyEntry> = {}): KeyEntry => ({
+const entry = (provider: string, over: Partial<SettingsKey> = {}): SettingsKey => ({
   env_var: `${provider.toUpperCase()}_API_KEY`,
   provider,
   label: provider,

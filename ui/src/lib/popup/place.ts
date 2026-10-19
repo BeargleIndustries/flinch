@@ -97,8 +97,6 @@ export interface Placement {
 
 export const DEFAULT_GAP = 10;
 export const DEFAULT_EDGE_PAD = 12;
-/** Narrower than this, the tour card docks as a bottom sheet (decision 4). */
-export const DEFAULT_SHEET_BELOW = 760;
 /** Radius of the ring drawn around the focus point in inset mode. */
 export const FOCUS_RING_R = 14;
 /** Arrows longer than this are not drawn (and fail the popup audit). */
@@ -695,30 +693,4 @@ export function jumped(before: PlacedSnapshot, after: PlacedSnapshot): boolean {
   if (before.side !== after.side || before.mode !== after.mode) return true;
   const moved = Math.hypot(after.box.left - before.box.left, after.box.top - before.box.top);
   return moved > 24;
-}
-
-// ---------------------------------------------------------------------------
-// Audit flags (shared by place.test.ts and the dev popup audit)
-// ---------------------------------------------------------------------------
-
-export interface PlacementFlags {
-  inViewport: boolean;
-  overlapsTarget: boolean;
-  coversFocus: boolean;
-  overlapsAvoid: boolean;
-}
-
-export function placementFlags(
-  box: RectLike,
-  vp: { w: number; h: number },
-  target: RectLike | null,
-  focus: Point | null,
-  avoid: RectLike[],
-): PlacementFlags {
-  return {
-    inViewport: insideViewport(box, vp, 0),
-    overlapsTarget: target ? intersects(box, target) : false,
-    coversFocus: focus ? coversPoint(box, focus, FOCUS_RING_R) : false,
-    overlapsAvoid: avoid.some((a) => a.width > 0 && a.height > 0 && intersects(box, a)),
-  };
 }

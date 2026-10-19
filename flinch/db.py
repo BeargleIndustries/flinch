@@ -1038,12 +1038,17 @@ def delete_coach_example(conn, example_id: int) -> None:
 
 
 def delete_run(conn, run_id: int) -> None:
-    conn.execute("DELETE FROM annotations WHERE run_id = ?", (run_id,))
-    conn.execute("DELETE FROM run_turns WHERE run_id = ?", (run_id,))
-    # Coach examples hold their own text; keep them, unlinked (A-M3)
-    conn.execute("UPDATE coach_examples SET run_id = NULL WHERE run_id = ?", (run_id,))
-    conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-    conn.commit()
+    """Delete a run and its annotations and turns in one transaction."""
+    try:
+        conn.execute("DELETE FROM annotations WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM run_turns WHERE run_id = ?", (run_id,))
+        # Coach examples hold their own text; keep them, unlinked (A-M3)
+        conn.execute("UPDATE coach_examples SET run_id = NULL WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # --- Annotation CRUD ---

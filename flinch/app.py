@@ -2980,11 +2980,6 @@ async def _claim_study(experiment_id: int) -> object:
     return token
 
 
-def _owns_study(experiment_id: int, token: object) -> bool:
-    entry = _active_studies.get(experiment_id)
-    return entry is not None and entry.token is token
-
-
 def _rate_config(req: StartExperimentRequest) -> dict:
     """The request's per-provider limits as plain ints and dicts for RateLimiterPool (B36)."""
     return {
@@ -2993,56 +2988,29 @@ def _rate_config(req: StartExperimentRequest) -> dict:
     }
 
 
-@app.post("/api/experiments/{experiment_id}/start")
-async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
-    """Start experiment execution with SSE progress stream."""
+async def _study_stream(
+    experiment_id: int, req: StartExperimentRequest, *, retry_failed: bool, create_cells: bool = False,
+) -> ClosingStreamingResponse:
+    """Claim the study and stream its run as SSE; the claim is released when the stream ends (I33).
+
+    `create_cells` adds the study's pending cells first (Start); `retry_failed`
+    sets failed cells back to pending first (Resume).
+    """
     from flinch.rate_limiter import RateLimiterPool
     from flinch.runner import ExperimentRunner
 
-    backend = _runner.backend if _runner else None
-    token = await _claim_study(experiment_id)
-
-    async def event_stream(token: object):
-        if not _owns_study(experiment_id, token):
-            yield _sse("error", {"error": "This study is already running."})
-            return
-        async with get_async_db() as db_conn:
-            await create_experiment_responses(db_conn, experiment_id)
-            await db_conn.commit()
-            pool = RateLimiterPool(_rate_config(req))
-            runner = ExperimentRunner(db_conn, pool, backend=backend)
-            async with contextlib.aclosing(
-                _sse_stream(runner.run_experiment(experiment_id), name_of=_dict_event)
-            ) as s:
-                async for chunk in s:
-                    yield chunk
-
-    return _sse_response(event_stream(token), release=functools.partial(_release, experiment_id, token))
-
-
-@app.post("/api/experiments/{experiment_id}/pause")
-async def api_pause_experiment(experiment_id: int):
     async with get_async_db() as db_conn:
-        await update_experiment(db_conn, experiment_id, status="paused")
-        await db_conn.commit()
-    return {"paused": True}
-
-
-@app.post("/api/experiments/{experiment_id}/resume")
-async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
-    """Resume experiment execution; `retry_failed` sets failed cells back to pending first."""
-    from flinch.rate_limiter import RateLimiterPool
-    from flinch.runner import ExperimentRunner
-
+        if not await get_experiment(db_conn, experiment_id):
+            raise HTTPException(404, "Experiment not found")
     backend = _runner.backend if _runner else None
     token = await _claim_study(experiment_id)
 
-    async def event_stream(token: object):
-        if not _owns_study(experiment_id, token):
-            yield _sse("error", {"error": "This study is already running."})
-            return
+    async def event_stream():
         async with get_async_db() as db_conn:
-            if req.retry_failed:
+            if create_cells:
+                await create_experiment_responses(db_conn, experiment_id)
+                await db_conn.commit()
+            if retry_failed:
                 await db.reset_failed_responses(db_conn, experiment_id)
             pool = RateLimiterPool(_rate_config(req))
             runner = ExperimentRunner(db_conn, pool, backend=backend)
@@ -3052,7 +3020,30 @@ async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest 
                 async for chunk in s:
                     yield chunk
 
-    return _sse_response(event_stream(token), release=functools.partial(_release, experiment_id, token))
+    return _sse_response(event_stream(), release=functools.partial(_release, experiment_id, token))
+
+
+@app.post("/api/experiments/{experiment_id}/start")
+async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
+    """Start experiment execution with SSE progress stream."""
+    return await _study_stream(experiment_id, req, retry_failed=False, create_cells=True)
+
+
+@app.post("/api/experiments/{experiment_id}/pause")
+async def api_pause_experiment(experiment_id: int):
+    """Mark a running study paused; its workers stop before their next cell. Any other status stays."""
+    async with get_async_db() as db_conn:
+        await db_conn.execute(
+            "UPDATE experiments SET status = 'paused' WHERE id = ? AND status = 'running'", (experiment_id,)
+        )
+        await db_conn.commit()
+    return {"paused": True}
+
+
+@app.post("/api/experiments/{experiment_id}/resume")
+async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
+    """Resume experiment execution; `retry_failed` sets failed cells back to pending first."""
+    return await _study_stream(experiment_id, req, retry_failed=req.retry_failed)
 
 
 @app.post("/api/experiments/{experiment_id}/classify")

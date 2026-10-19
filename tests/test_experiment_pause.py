@@ -184,6 +184,26 @@ def test_case5_no_pending_cells_ends_completed(app_client, fake_target, keyword_
     assert _sends(fake_target) == sends
 
 
+def test_pause_after_completion_keeps_completed(app_client, fake_target, keyword_classifier) -> None:
+    """`POST /pause` only pauses a running study: a finished one stays `completed`."""
+    exp_id = _study(app_client, 1, 2)
+    app_client.post(f"/api/experiments/{exp_id}/start", json={"concurrency_per_provider": ONE_AT_A_TIME})
+    assert _status(app_client, exp_id) == "completed"
+
+    assert app_client.post(f"/api/experiments/{exp_id}/pause").status_code == 200
+    assert _status(app_client, exp_id) == "completed"
+
+
+def test_start_and_resume_missing_study_404(app_client) -> None:
+    """Start and Resume on a study that does not exist are 404 and claim nothing."""
+    import flinch.app
+
+    for route in ("start", "resume"):
+        resp = app_client.post(f"/api/experiments/999999/{route}", json={"concurrency_per_provider": {}})
+        assert resp.status_code == 404, route
+    assert 999999 not in flinch.app._active_studies
+
+
 # ---- cases 6 to 10: a real socket -------------------------------------------------------------
 
 
@@ -213,7 +233,7 @@ def test_case6_disconnect_pauses(live_server, env, fake_target, keyword_classifi
         assert client.get(f"/api/experiments/{exp_id}/progress").json()["active"] is False
 
 
-def test_case7_concurrent_starts_one_409(live_server, fake_target, keyword_classifier, monkeypatch, run) -> None:
+def test_case7_double_start_one_409(live_server, fake_target, keyword_classifier, monkeypatch, run) -> None:
     """Two concurrent `/start` calls: one 200 and one 409 with the I33 copy."""
     import flinch.app
 
@@ -255,7 +275,7 @@ def test_case7_concurrent_starts_one_409(live_server, fake_target, keyword_class
     assert owner_events[-1] == "paused"
 
 
-def test_case8_pause_then_resume_sends_each_cell_once(live_server, env, fake_target, keyword_classifier, run) -> None:
+def test_case8_pause_resume_sends_each_cell_once(live_server, env, fake_target, keyword_classifier, run) -> None:
     """Pause, then Resume, with `FakeTarget(delay_s=0.5)`: the send count equals the cell count."""
     fake_target.delay_s = 0.5
     with httpx.Client(base_url=live_server, timeout=10) as client:

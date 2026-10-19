@@ -19,7 +19,7 @@
   import { deleteApiKey, setApiKey } from '$lib/tauri';
   import KeyRow from './KeyRow.svelte';
   import SettingsSection from './SettingsSection.svelte';
-  import { sortKeys, type KeyEntry, type KeyResult } from './key-row';
+  import { sortKeys, type KeyResult } from './key-row';
   import { keyStore } from './key-store';
 
   const store = keyStore(isTauri(), {
@@ -45,13 +45,13 @@
     await Promise.all([load(), capabilities.checkHealth()]);
   }
 
-  async function save(entry: KeyEntry, key: string): Promise<KeyResult> {
+  async function save(entry: SettingsKey, key: string): Promise<KeyResult> {
     const r = await store.save(entry, key);
     if (r.ok) await refresh();
     return r;
   }
 
-  async function remove(entry: KeyEntry): Promise<void> {
+  async function remove(entry: SettingsKey): Promise<void> {
     try {
       await store.remove(entry);
     } finally {

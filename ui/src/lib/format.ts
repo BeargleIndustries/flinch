@@ -104,6 +104,13 @@ export function formatDate(iso: string | null | undefined): string {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hh}:${mm}`;
 }
 
+/** A Date as the local "YYYY-MM-DD". */
+export function localDay(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
 /** `s` cut to `n` characters, with "…" added when anything was cut. */
 export function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;

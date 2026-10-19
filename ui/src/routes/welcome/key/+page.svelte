@@ -13,7 +13,7 @@
   import { ROUTES, type RouteDef } from '$lib/api/endpoints';
   import type { SettingsKey } from '$lib/api/types';
   import KeyRow from '$lib/components/settings/KeyRow.svelte';
-  import { sortKeys, type KeyEntry, type KeyResult } from '$lib/components/settings/key-row';
+  import { sortKeys, type KeyResult } from '$lib/components/settings/key-row';
   import { keyStore } from '$lib/components/settings/key-store';
   import StepShell from '$lib/components/welcome/StepShell.svelte';
   import { GHOST, PRIMARY } from '$lib/components/welcome/styles';
@@ -55,13 +55,13 @@
     await Promise.all([load(), capabilities.checkHealth()]);
   }
 
-  async function save(entry: KeyEntry, key: string): Promise<KeyResult> {
+  async function save(entry: SettingsKey, key: string): Promise<KeyResult> {
     const r = await store.save(entry, key);
     if (r.ok) await refresh();
     return r;
   }
 
-  async function remove(entry: KeyEntry): Promise<void> {
+  async function remove(entry: SettingsKey): Promise<void> {
     try {
       await store.remove(entry);
     } finally {

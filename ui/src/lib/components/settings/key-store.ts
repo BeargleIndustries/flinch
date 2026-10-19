@@ -11,9 +11,10 @@ import type {
   SetKeyResponse,
   TestKeyResponse,
   UpdateKeysResponse,
+  SettingsKey,
   ValidateKeyResponse,
 } from '$lib/api/types';
-import type { KeyEntry, KeyResult } from './key-row';
+import type { KeyResult } from './key-row';
 
 export type KeyStoreKind = 'credential-manager' | 'env-file';
 
@@ -26,11 +27,11 @@ export interface KeyStoreDeps {
 export interface KeyStore {
   kind: KeyStoreKind;
   /** Validate, then store the key. */
-  save: (entry: KeyEntry, key: string) => Promise<KeyResult>;
+  save: (entry: SettingsKey, key: string) => Promise<KeyResult>;
   /** Delete the stored key; throws when the sidecar refuses. */
-  remove: (entry: KeyEntry) => Promise<void>;
+  remove: (entry: SettingsKey) => Promise<void>;
   /** Ask the provider whether the key the sidecar holds works. */
-  test: (entry: KeyEntry) => Promise<KeyResult>;
+  test: (entry: SettingsKey) => Promise<KeyResult>;
 }
 
 /** Error text from a provider, with the key itself blanked out if the SDK echoed it. */
@@ -42,7 +43,7 @@ export function scrub(error: string | null | undefined, key: string): string {
 export function keyStore(desktop: boolean, deps: KeyStoreDeps): KeyStore {
   const { request } = deps;
 
-  async function save(entry: KeyEntry, raw: string): Promise<KeyResult> {
+  async function save(entry: SettingsKey, raw: string): Promise<KeyResult> {
     const key = raw.trim();
     const body = { provider: entry.provider, key };
     const v = await request<ValidateKeyResponse>(ROUTES.validateKey, { body });
@@ -58,7 +59,7 @@ export function keyStore(desktop: boolean, deps: KeyStoreDeps): KeyStore {
     return { ok: true };
   }
 
-  async function remove(entry: KeyEntry): Promise<void> {
+  async function remove(entry: SettingsKey): Promise<void> {
     if (desktop) {
       await deps.deleteApiKey(entry.provider);
       const r = await request<SetKeyResponse>(ROUTES.clearRuntimeKey, {
@@ -70,7 +71,7 @@ export function keyStore(desktop: boolean, deps: KeyStoreDeps): KeyStore {
     }
   }
 
-  async function test(entry: KeyEntry): Promise<KeyResult> {
+  async function test(entry: SettingsKey): Promise<KeyResult> {
     const r = await request<TestKeyResponse>(ROUTES.testKey, {
       body: { provider: entry.provider },
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupLabel, isListed, providerOf, type ModelGroup } from './model-picker';
+import { groupLabel, isListed, type ModelGroup } from './model-picker';
 
 const GROUPS: ModelGroup[] = [
   {
@@ -34,10 +34,8 @@ describe('model picker', () => {
     );
   });
 
-  it('knows which ids are listed and under which provider', () => {
+  it('knows which ids are listed', () => {
     expect(isListed('gpt-4o', GROUPS)).toBe(true);
     expect(isListed('grok-3', GROUPS)).toBe(false);
-    expect(providerOf('claude-sonnet-4-6', GROUPS)).toBe('anthropic');
-    expect(providerOf('grok-3', GROUPS)).toBeNull();
   });
 });

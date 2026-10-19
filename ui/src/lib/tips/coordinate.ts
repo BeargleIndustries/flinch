@@ -9,10 +9,8 @@
 // Flinch port (brief 5.5): the prefix is `flinch:tip_seen:`, and reads and
 // writes go through prefs.ts (brief 4.3), so blocked storage never throws.
 
-import { PREFIX, readBool, remove, writeBool } from '$lib/prefs';
+import { readBool, writeBool } from '$lib/prefs';
 import { tipsRegistry } from './tips-registry';
-
-const STORAGE_PREFIX = `${PREFIX}tip_seen:`;
 
 /** `stepRef` is the tour's current step id; `anchors` are the anchors it points at. */
 export function markTipsSeenForStep(stepRef: string, anchors: readonly string[] = []): void {
@@ -20,22 +18,6 @@ export function markTipsSeenForStep(stepRef: string, anchors: readonly string[] 
     const matchesStep = tip.tutorialStepId === stepRef;
     const matchesTarget = anchors.some((a) => tip.target === `[data-tip="${a}"]`);
     if (matchesStep || matchesTarget) markTipSeen(tip.id);
-  }
-}
-
-/** Forget every "tip seen" flag, including ones for tips no longer in the registry. */
-export function resetAllTips(): void {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    const ids: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(STORAGE_PREFIX)) ids.push(k.slice(STORAGE_PREFIX.length));
-    }
-    for (const tip of tipsRegistry) ids.push(tip.id);
-    for (const id of ids) remove(`tip_seen:${id}`);
-  } catch {
-    /* storage unavailable */
   }
 }
 

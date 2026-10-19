@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tipsRegistry, type TipDef } from './tips-registry';
-import { isTipSeen, markTipSeen, markTipsSeenForStep, resetAllTips } from './coordinate';
+import { isTipSeen, markTipSeen, markTipsSeenForStep } from './coordinate';
 
 /** A Storage stand-in with the parts coordinate.ts and prefs.ts use. */
 function fakeStorage() {
@@ -70,20 +70,9 @@ describe('tips coordination', () => {
     expect(isTipSeen('send-button')).toBe(false);
   });
 
-  it('resets every flag, including tips no longer in the registry', () => {
-    markTipSeen('send-button');
-    store.setItem('flinch:tip_seen:retired-tip', 'true');
-    store.setItem('flinch:tour_seen', 'true');
-    resetAllTips();
-    expect(isTipSeen('send-button')).toBe(false);
-    expect(store.m.has('flinch:tip_seen:retired-tip')).toBe(false);
-    expect(store.m.get('flinch:tour_seen')).toBe('true');
-  });
-
   it('treats missing storage as "not seen" and never throws', () => {
     vi.stubGlobal('localStorage', undefined);
     expect(isTipSeen('send-button')).toBe(false);
     expect(() => markTipSeen('send-button')).not.toThrow();
-    expect(() => resetAllTips()).not.toThrow();
   });
 });

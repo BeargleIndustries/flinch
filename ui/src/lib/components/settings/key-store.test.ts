@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { RequestOptions } from '$lib/api/client';
 import { ROUTES, type RouteDef } from '$lib/api/endpoints';
-import type { KeyEntry } from './key-row';
+import type { SettingsKey } from '$lib/api/types';
 import { keyStore, scrub, type KeyStoreDeps } from './key-store';
 
 type Call = { route: RouteDef; opts?: RequestOptions } | { shell: string; args: string[] };
 
-const entry: KeyEntry = {
+const entry: SettingsKey = {
   env_var: 'TOGETHER_API_KEY',
   provider: 'meta',
   label: 'Together AI (Llama)',

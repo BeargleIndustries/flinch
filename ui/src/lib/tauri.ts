@@ -100,12 +100,6 @@ export async function sidecarUrl(): Promise<string> {
   return call<string>('sidecar_url');
 }
 
-/** The sidecar's recent stderr lines. */
-export async function sidecarStderr(): Promise<string[]> {
-  if (!isTauri()) return [];
-  return call<string[]>('sidecar_stderr');
-}
-
 export async function runtimeStatus(): Promise<RuntimeStatus> {
   if (!isTauri()) return { ready: true, installed: true, current: true };
   return call<RuntimeStatus>('runtime_status');
@@ -124,14 +118,8 @@ export async function restartSidecar(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// API keys (Windows Credential Manager; reads are booleans only)
+// API keys (Windows Credential Manager)
 // ---------------------------------------------------------------------------
-
-/** Provider to "a key is stored". */
-export async function getApiKeys(): Promise<Record<string, boolean>> {
-  if (!isTauri()) return {};
-  return call<Record<string, boolean>>('get_api_keys');
-}
 
 export async function setApiKey(provider: string, key: string): Promise<void> {
   if (!isTauri()) return;
@@ -218,7 +206,6 @@ export const onBootstrapProgress = (cb: (p: BootstrapProgress) => void) =>
 export const onBootstrapLog = (cb: (line: string) => void) => on<string>('bootstrap:log', cb);
 export const onBootstrapError = (cb: (e: BootstrapError) => void) =>
   on<BootstrapError>('bootstrap:error', cb);
-export const onSidecarReady = (cb: () => void) => on<null>('sidecar:ready', () => cb());
 export const onSidecarCrashed = (cb: (e: SidecarCrashed) => void) =>
   on<SidecarCrashed>('sidecar:crashed', cb);
 export const onSidecarRestarted = (cb: (e: SidecarRestarted) => void) =>

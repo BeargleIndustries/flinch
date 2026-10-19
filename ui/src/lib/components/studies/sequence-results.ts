@@ -205,14 +205,6 @@ export function strategyChoices(rows: readonly ThresholdRow[]): StrategyChoice[]
     .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
 }
 
-/** Rows that belong to `strategyId` (all with null). */
-export function filterThresholds(
-  rows: readonly ThresholdRow[],
-  strategyId: number | null,
-): ThresholdRow[] {
-  return strategyId === null ? [...rows] : rows.filter((r) => r.strategy_id === strategyId);
-}
-
 /** Bar width in percent of the deepest threshold on screen (0 for none). */
 export function thresholdWidth(turns: number | null, rows: readonly ThresholdRow[]): number {
   if (turns === null) return 0;

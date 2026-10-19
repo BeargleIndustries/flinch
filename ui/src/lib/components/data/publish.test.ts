@@ -15,7 +15,6 @@ import {
   formProblems,
   isFormat,
   isTemplate,
-  isoDay,
   previewsAsPage,
   templateLabel,
   themeSampleHtml,
@@ -82,11 +81,6 @@ describe('templates and formats', () => {
 });
 
 describe('names', () => {
-  it('formats a local day with zero padding', () => {
-    expect(isoDay(day)).toBe('2026-10-07');
-    expect(isoDay(new Date(2026, 0, 1))).toBe('2026-01-01');
-  });
-
   it('names a document "{template}-{YYYY-MM-DD}"', () => {
     expect(documentName('pushback_summary', day)).toBe('pushback_summary-2026-10-07');
   });

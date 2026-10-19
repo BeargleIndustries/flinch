@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -60,13 +59,9 @@ def variants_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def client(variants_dir: Path) -> Iterator:
-    from fastapi.testclient import TestClient
-
-    import flinch.app
-
-    with TestClient(flinch.app.app) as c:
-        yield c
+def client(variants_dir: Path, app_client):
+    """conftest's `app_client`, started after `variants_dir` is patched in."""
+    return app_client
 
 
 def _files(client) -> dict[str, dict]:

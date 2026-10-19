@@ -4,7 +4,6 @@ import {
   defaultPick,
   excludedCounts,
   excludedSequences,
-  filterThresholds,
   isFound,
   orderedRuns,
   parseEffectiveness,
@@ -196,11 +195,6 @@ describe('thresholds across probes', () => {
       { id: 1, name: 'alpha' },
       { id: 2, name: 'zeta' },
     ]);
-  });
-
-  it('filters by strategy, all with null', () => {
-    expect(filterThresholds(rows, 2).map((r) => r.sequence_id)).toEqual([1, 3]);
-    expect(filterThresholds(rows, null)).toHaveLength(3);
   });
 
   it('scales bars to the deepest threshold, none for null', () => {

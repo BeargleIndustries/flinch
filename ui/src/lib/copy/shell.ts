@@ -93,10 +93,6 @@ export const SHELL = {
   railShow: 'Show probes',
   railNoSession: 'Pick or make a session to see its probes.',
 
-  // Placeholder screens (until each screen's task lands)
-  notBuiltTitle: 'Not built yet',
-  notBuiltBody: 'This screen arrives in a later build of Flinch 0.9.',
-
   // Shortcuts overlay (7.10)
   shortcutsTitle: 'Keyboard shortcuts',
   shortcutsLead: 'S, P, K, N and R work in the Probe section when no text field has focus.',

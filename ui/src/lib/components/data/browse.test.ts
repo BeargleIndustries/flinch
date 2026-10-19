@@ -21,7 +21,6 @@ import {
   runPreview,
   sessionTally,
   showConversation,
-  sumRuns,
   toClsCounts,
   toFindings,
   toSequences,
@@ -105,10 +104,6 @@ describe('sessionTally and counts', () => {
 
   it('never gives a negative unknown', () => {
     expect(sessionTally(s(1, 1, 1)).unknown).toBe(0);
-  });
-
-  it('sums the run counts', () => {
-    expect(sumRuns([s(2), s(3), s(0)])).toBe(5);
   });
 
   it('folds a sidecar class map into the five classes', () => {

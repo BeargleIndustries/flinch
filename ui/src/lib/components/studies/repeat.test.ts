@@ -2,14 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   applyEvent,
   clampRepeats,
-  countsOf,
   distribution,
   distributionCounts,
   excerpt,
   initialLive,
   latencyLabel,
-  liveStatRunIds,
-  localDay,
   medianLatency,
   pctLabel,
   rateLabel,
@@ -22,6 +19,7 @@ import {
   type LiveRun,
   type StatSummary,
 } from './repeat';
+import { localDay } from '$lib/format';
 
 describe('roundShares', () => {
   it('gives whole numbers that add up to 100', () => {
@@ -74,15 +72,7 @@ describe('distributionCounts', () => {
   });
 });
 
-describe('countsOf and summaryCounts', () => {
-  it('counts classes, null as unknown', () => {
-    expect(countsOf(['refused', 'refused', null, 'complied'])).toEqual({
-      refused: 2,
-      unknown: 1,
-      complied: 1,
-    });
-  });
-
+describe('summaryCounts', () => {
   it('reads a summary, with runs outside the four badges as unknown', () => {
     const s = summary({ total: 5, refused: 2, complied: 1 });
     expect(summaryCounts(s)).toEqual({
@@ -279,7 +269,6 @@ describe('the live run', () => {
     expect(run.total).toBe(4);
     expect(run.finished).toBe(true);
     expect(run.lastStatRunId).toBe(8);
-    expect(liveStatRunIds(run)).toEqual([7, 8]);
     expect(run.probes[0].cells.map((c) => [c.cls, c.latencyMs])).toEqual([
       ['refused', 40],
       ['refused', 60],

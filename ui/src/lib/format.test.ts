@@ -3,7 +3,7 @@
 process.env.TZ = 'UTC';
 
 import { describe, expect, it } from 'vitest';
-import { formatDate, formatResponse, pct, truncate } from './format';
+import { formatDate, formatResponse, localDay, pct, truncate } from './format';
 
 describe('formatResponse', () => {
   it('splits paragraphs on blank lines and keeps line breaks inside one', () => {
@@ -103,5 +103,12 @@ describe('truncate', () => {
   it('leaves short text alone', () => {
     expect(truncate('abc', 3)).toBe('abc');
     expect(truncate('', 3)).toBe('');
+  });
+});
+
+describe('localDay', () => {
+  it('formats a local day with zero padding', () => {
+    expect(localDay(new Date(2026, 9, 7, 23, 30))).toBe('2026-10-07');
+    expect(localDay(new Date(2026, 0, 1))).toBe('2026-01-01');
   });
 });

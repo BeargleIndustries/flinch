@@ -12,10 +12,11 @@
   import ConfirmButton from '../ConfirmButton.svelte';
   import { friendlyError } from '$lib/errors';
   import { KEY_ROW } from '$lib/copy/settings';
-  import { canTest, keyLabel, keyStatus, type KeyEntry, type KeyResult } from './key-row';
+  import type { SettingsKey } from '$lib/api/types';
+  import { canTest, keyLabel, keyStatus, type KeyResult } from './key-row';
 
   interface Props {
-    entry: KeyEntry;
+    entry: SettingsKey;
     expanded?: boolean;
     /** Validate and store the key. */
     onSave: (key: string) => Promise<KeyResult>;

@@ -129,5 +129,3 @@ export const SCREENS = {
     lead: 'Make a session and send your first probe.',
   },
 } satisfies Record<string, string | ((...args: never[]) => string) | WelcomeStep>;
-
-export type ScreenKey = keyof typeof SCREENS;

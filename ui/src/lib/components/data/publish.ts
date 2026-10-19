@@ -17,6 +17,7 @@
 import { pathFor } from '$lib/api/client';
 import { ROUTES } from '$lib/api/endpoints';
 import type { PublicationExportBody } from '$lib/api/types';
+import { localDay } from '$lib/format';
 
 export const TEMPLATES = [
   'comparison_table',
@@ -63,16 +64,9 @@ export function usesTheme(format: Format): boolean {
   return previewsAsPage(format);
 }
 
-/** "YYYY-MM-DD" of `d` in local time. */
-export function isoDay(d: Date): string {
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${dd}`;
-}
-
 /** Brief 9.3: "{template}-{YYYY-MM-DD}". */
 export function documentName(template: Template, today: Date): string {
-  return `${template}-${isoDay(today)}`;
+  return `${template}-${localDay(today)}`;
 }
 
 /** The download route's file name: spaces become underscores, then the format's extension. */

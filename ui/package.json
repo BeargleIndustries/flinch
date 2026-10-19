@@ -11,6 +11,7 @@
     "test": "svelte-kit sync && vitest run",
     "lint": "prettier --check .",
     "format": "prettier --write .",
+    "endpoints:snapshot": "vite-node scripts/endpoints-snapshot.ts",
     "test:e2e": "playwright test",
     "prepare": "svelte-kit sync || echo \"\""
   },

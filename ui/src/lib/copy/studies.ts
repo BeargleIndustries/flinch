@@ -1,8 +1,8 @@
 // Studies section copy (brief 8). The research-question readouts brief A.6
 // names live in screens.ts; everything else a Studies screen says lives here
 // (brief 5.7 rule 9) and is in COPY_FILES. T21 adds Framings (8.1), T22
-// Conditions (8.2) and T23 the study's Results, Raters and Export tabs;
-// later Studies tasks add their own objects.
+// Conditions (8.2), T23 the study's Results, Raters and Export tabs and T24
+// Repeat runs (8.3); later Studies tasks add their own objects.
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -520,4 +520,93 @@ export const CONDITIONS_RESULTS = {
   },
   reportNotReady: 'Finish the study and run statistics first.',
   exportEmpty: 'The sidecar sent an empty document.',
+} as const;
+
+/** Repeat runs (brief 8.3, T24). The research question is SCREENS.repeat. */
+export const REPEAT = {
+  title: 'Repeat runs',
+
+  // Set up
+  setupEyebrow: 'Set up',
+  setupTitle: 'Probes and repeats',
+  setupReadout:
+    "Every call is a fresh conversation with this session's model and system prompt. No pushback, no coach.",
+  probes: 'Probes',
+  probesWhy: "From this session's list in the rail. Pick several to run them one after another.",
+  noProbes: 'This session has no probes. Add one from the rail first.',
+  times: 'Times per probe',
+  timesHint: '1 to 100. Ten is usually enough to see a split.',
+  plan: (probes: number, n: number) =>
+    `${probes} ${plural(probes, 'probe', 'probes')} × ${n} = ${probes * n} ${plural(probes * n, 'call', 'calls')}`,
+  runSelected: 'Run selected',
+  runSelectedWhy: 'Sends each picked probe that many times, one call after another.',
+  runEvery: (n: number) => `Run every probe in this session (${n})`,
+  runEveryWhy: "Every probe in this session's list, each sent that many times.",
+  pickFirst: 'Pick at least one probe.',
+  busy: 'A repeat run is already going in this session.',
+  stripLabel: (probes: number, n: number) =>
+    probes === 1 ? `Repeat run: 1 probe × ${n}` : `Repeat runs: ${probes} probes × ${n}`,
+
+  // The live run
+  liveEyebrow: (model: string | null) => (model ? `On ${model}` : 'Repeat run'),
+  liveRunning: (probes: number, n: number) =>
+    `Repeating ${probes} ${plural(probes, 'probe', 'probes')} × ${n}`,
+  liveStopping: 'Stopping…',
+  liveFinished: (calls: number) => `Finished: ${calls} ${plural(calls, 'call', 'calls')}`,
+  liveStopped: (done: number, total: number) => `Stopped after ${done} of ${total} calls`,
+  liveFailed: 'The repeat run stopped with an error',
+  liveReadout:
+    'Each square is one fresh call. One colour all the way along is a rule; a mix is a coin flip.',
+  liveStoppedReadout:
+    'Stopping closes the stream, and the sidecar stops after the call in flight. The sidecar has no stop request for repeat runs, so the stopped run stays "running" in the list until Flinch restarts, then shows as failed.',
+  progress: 'Calls',
+  close: 'Close',
+  closeWhy: 'Hide this panel. The runs stay in the list below.',
+  probeWaiting: 'Waiting',
+  probeFailed: (msg: string) => `Did not run: ${msg}`,
+  probeStopped: 'Stopped',
+  slotTitle: (i: number, word: string, latency: string) =>
+    latency ? `Call ${i}: ${word}, ${latency}` : `Call ${i}: ${word}`,
+  slotPending: (i: number) => `Call ${i}: waiting`,
+  slotFailed: (i: number, msg: string) => `Call ${i} failed: ${msg}`,
+  tapeLabel: (name: string, done: number, total: number) =>
+    `${name}: ${done} of ${total} calls back`,
+
+  // Results: the list
+  resultsEyebrow: 'In this session',
+  resultsTitle: 'Results',
+  resultsCount: (n: number) => `${n} ${plural(n, 'run', 'runs')}`,
+  resultsReadout: 'Newest first. Pick a run to see how its calls split and read each response.',
+  empty: 'No repeat runs in this session yet.',
+  emptyBody: 'Pick a probe above, choose how many times, and run it.',
+  refusedOf: (refused: number, total: number, rate: string | null) =>
+    rate ? `Refused ${refused} of ${total} (${rate})` : `Refused ${refused} of ${total}`,
+  nCalls: (n: number) => `N = ${n}`,
+  loadAgain: 'Load again',
+  openRun: (name: string, date: string) => `${name}, ${date}`,
+
+  // Results: the selected run
+  pickOne: 'Pick a run on the left to see how it split.',
+  reading: 'Reading the run…',
+  detailEyebrow: (model: string) => `On ${model}`,
+  distTitle: 'How the calls split',
+  unanimous: (word: string, n: number) =>
+    n === 1 ? `One call, ${word}.` : `Every call came back ${word}: ${n} of ${n}.`,
+  split: (word: string, pct: string) => `A split. ${word} came up most, ${pct} of the time.`,
+  noCalls: 'No call in this run came back.',
+  share: 'of calls',
+  colCount: 'Calls',
+  colShare: 'Share',
+  iterationsTitle: 'Each call',
+  median: (label: string) => `median ${label}`,
+  colIteration: 'Call',
+  colBadge: 'Badge',
+  colLatency: 'Latency',
+  colResponse: 'Response',
+  showAll: 'Show all',
+  showLess: 'Show less',
+  showAllFor: (i: number) => `Show all of call ${i}'s response`,
+  showLessFor: (i: number) => `Show less of call ${i}'s response`,
+  noText: 'No response text',
+  noIterations: 'No calls recorded for this run.',
 } as const;

@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Repeat runs (brief 8.3): one probe sent many times, each in a fresh conversation. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import RepeatRuns from '$lib/components/studies/RepeatRuns.svelte';
 </script>
 
-<ScreenPlaceholder title="Repeat runs" question={SCREENS.repeat} needsSession />
+<RepeatRuns />

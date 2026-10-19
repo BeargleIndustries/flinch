@@ -50,4 +50,5 @@ export const COPY_FILES = [
   'lib/copy/shell.ts',
   'lib/copy/rail.ts',
   'lib/copy/probe.ts',
+  'lib/copy/settings.ts',
 ];

@@ -455,6 +455,56 @@ export interface ProviderKeyBody {
   key: string;
 }
 
+/** POST /api/settings/keys */
+export interface UpdateKeysResponse {
+  ok: boolean;
+  keys: SettingsKey[];
+}
+
+/** POST /api/settings/test-key: `message` when it worked, `error` when not. */
+export interface TestKeyResponse {
+  ok: boolean;
+  message?: string;
+  error?: string;
+}
+
+/** POST and DELETE /api/settings/set-key */
+export interface SetKeyResponse {
+  ok: boolean;
+  error?: string;
+}
+
+/** POST /api/settings/validate-key */
+export interface ValidateKeyResponse {
+  valid: boolean;
+  error: string | null;
+}
+
+/** One local model from Ollama's tag list (`id` is `ollama:{name}`). */
+export interface OllamaModel {
+  id: string;
+  name: string;
+}
+
+/** GET /api/settings/ollama */
+export interface OllamaSettings {
+  base_url: string;
+  available: boolean;
+}
+
+/** POST /api/settings/ollama */
+export interface OllamaSettingsSaved {
+  base_url: string;
+  available: boolean;
+  models: OllamaModel[];
+}
+
+/** GET and POST /api/settings/coach-default */
+export interface CoachDefault {
+  backend: string;
+  model: string;
+}
+
 /** DELETE /api/dashboard/clear-all */
 export interface ClearAllBody {
   confirm: string;

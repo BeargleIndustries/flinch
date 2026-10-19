@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Scorecard (brief 9.2): models against the policy claims linked to probes, and this session's compliance. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import Scorecard from '$lib/components/data/Scorecard.svelte';
 </script>
 
-<ScreenPlaceholder title="Scorecard" question={SCREENS.scorecard} />
+<Scorecard />

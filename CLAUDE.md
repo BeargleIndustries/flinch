@@ -38,7 +38,7 @@ Vault overview: `C:\Users\Brad\Documents\Dropbox\Claude\Vault\projects\flinch\fl
 - `flinch/seed.py`: default coach profile and seed examples
 - `flinch/playbook.md`: methodology primer
 - `flinch/probes/`: Markdown probe sets
-- `data/flinch.db`: SQLite database in dev mode. In packaged desktop mode: `%APPDATA%/Flinch/flinch.db`.
+- `data/flinch.db`: SQLite database in dev mode. In packaged desktop mode: `%APPDATA%/com.beargle.flinch/flinch.db`.
 
 ### App (`ui/`, SvelteKit, static adapter)
 - `ui/src/routes/`: screens. `probe/` (the probe loop), `studies/` (framings, conditions, repeat, sequences, compare, baselines), `data/` (browse, scorecard, publish, coach), `guide/`, `welcome/` (first run, including the desktop Python setup step that listens for `bootstrap:progress`).

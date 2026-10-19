@@ -379,15 +379,10 @@ test('sources and results', async ({ page }) => {
 // appear, the statistics table downloads, and the Export tab's report row
 // unlocks and downloads.
 //
-// fixme until the sidecar is fixed (reported from T23; no Python changes in
-// that task): with the fake model every reply has the same word count, so a
-// metric has zero variance in both groups, scipy's ttest_ind returns NaN and
-// POST /analyze answers 500 ("Out of range float values are not JSON
-// compliant"). The NaN rows are saved first, so GET /condition-comparison
-// answers 500 from then on. GET /analysis/export answers 500 on any study:
-// stats.export_analysis_csv selects `result_json`, but the column is
-// `results`. Remove the fixme once both are fixed.
-test.fixme('statistics and the report', async ({ page }) => {
+// With the fake model every reply has the same word count, so a metric has
+// zero variance in both groups and its t-test p-value is NaN; the sidecar
+// stores and returns that as null (T23b), so this also guards that path.
+test('statistics and the report', async ({ page }) => {
   test.setTimeout(120_000);
   const R = CONDITIONS_RESULTS;
   const name = `E2E statistics ${stamp()}`;

@@ -222,8 +222,11 @@ class ExperimentReporter:
         md = "| Comparison | Metric | Cohen's d | 95% CI | p-value |\n|---|---|---|---|---|\n"
         for pair, metrics in data.items():
             for metric, vals in metrics.items():
-                sig = "***" if vals.get("p_value", 1) < 0.001 else "**" if vals.get("p_value", 1) < 0.01 else "*" if vals.get("p_value", 1) < 0.05 else ""
-                md += f"| {pair} | {metric} | {vals['cohens_d']}{sig} | [{vals.get('ci_lower', 'N/A')}, {vals.get('ci_upper', 'N/A')}] | {vals.get('p_value', 'N/A')} |\n"
+                # A null p-value (the test could not run, e.g. zero variance) is not significant.
+                p = vals.get("p_value")
+                p_cmp = 1 if p is None else p
+                sig = "***" if p_cmp < 0.001 else "**" if p_cmp < 0.01 else "*" if p_cmp < 0.05 else ""
+                md += f"| {pair} | {metric} | {vals['cohens_d']}{sig} | [{vals.get('ci_lower', 'N/A')}, {vals.get('ci_upper', 'N/A')}] | {'N/A' if p is None else p} |\n"
         return {"markdown": md}
 
     def _format_agreement_table(self, data: dict) -> dict:

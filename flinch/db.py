@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import sqlite3
 from datetime import UTC
@@ -3963,8 +3964,34 @@ async def list_eval_ratings(db, experiment_id):
 
 # --- Analysis CRUD ---
 
+def json_safe(value):
+    """Return ``value`` with every NaN or +/-inf float replaced by None.
+
+    Walks dicts, lists and tuples; numpy scalars are converted to plain Python
+    numbers first. Statistics such as a t-test on two zero-variance groups
+    yield NaN, which strict JSON (and FastAPI responses) cannot carry.
+    """
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if hasattr(value, "tolist") and callable(value.tolist):
+        # numpy scalar or array: tolist() gives plain Python numbers.
+        return json_safe(value.tolist())
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def load_analysis_json(text):
+    """Parse a stored analysis payload, mapping NaN/Infinity literals to None."""
+    return json_safe(json.loads(text, parse_constant=lambda _c: None))
+
+
 async def save_analysis_result(db, experiment_id, analysis_type, results, scope="full", model_id=None, parameters=None):
-    """Save analysis result."""
+    """Save analysis result. NaN and +/-inf are stored as null."""
+    if isinstance(results, str):
+        results = load_analysis_json(results)
     cur = await db.execute(
         """INSERT INTO analysis_results
            (experiment_id, analysis_type, scope, model_id, parameters, results)
@@ -3974,8 +4001,8 @@ async def save_analysis_result(db, experiment_id, analysis_type, results, scope=
             analysis_type,
             scope,
             model_id,
-            json.dumps(parameters or {}),
-            json.dumps(results) if not isinstance(results, str) else results,
+            json.dumps(json_safe(parameters or {}), allow_nan=False),
+            json.dumps(json_safe(results), allow_nan=False),
         ),
     )
     await db.commit()
@@ -3995,7 +4022,7 @@ async def list_analysis_results(db, experiment_id):
         for field in ("parameters", "results"):
             if d.get(field):
                 try:
-                    d[field] = json.loads(d[field])
+                    d[field] = load_analysis_json(d[field])
                 except (json.JSONDecodeError, TypeError):
                     pass
         result.append(d)
@@ -4088,9 +4115,8 @@ async def get_condition_comparison(db, experiment_id):
             continue
         results_raw = ar.get("results")
         if isinstance(results_raw, str):
-            import json as _json
             try:
-                analysis_results[atype] = _json.loads(results_raw)
+                analysis_results[atype] = load_analysis_json(results_raw)
             except Exception:
                 analysis_results[atype] = results_raw
         elif isinstance(results_raw, dict):

@@ -61,8 +61,8 @@ def fake_target(monkeypatch: pytest.MonkeyPatch) -> FakeTargetFactory:
     def make_target(self, model_name: str, system_prompt: str = "") -> FakeTarget:
         return factory(model_name, system_prompt)
 
-    def stat_make_target(model_name: str, client=None) -> FakeTarget:
-        return factory(model_name)
+    def stat_make_target(model_name: str, system_prompt: str = "", client=None) -> FakeTarget:
+        return factory(model_name, system_prompt)
 
     monkeypatch.setattr(runner.Runner, "_make_target", make_target)
     monkeypatch.setattr(runner.ExperimentRunner, "_create_target", make_target)

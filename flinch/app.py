@@ -2092,8 +2092,10 @@ async def create_sequence(session_id: int, body: CreateSequenceRequest):
     if not strategy:
         raise HTTPException(404, "Strategy not found")
     seq_id = db.create_sequence(_conn, session_id, body.probe_id, body.strategy_id, body.mode, body.max_warmup_turns, use_narrative_engine=body.use_narrative_engine)
-    # Also create the first sequence_run
-    run_id = db.create_sequence_run(_conn, seq_id, body.max_warmup_turns)
+    # Interactive sequences get their first run now; automatic runs create their own.
+    run_id = None
+    if body.mode == "interactive":
+        run_id = db.create_sequence_run(_conn, seq_id, body.max_warmup_turns)
     seq = db.get_sequence(_conn, seq_id)
     seq["current_run_id"] = run_id
     return seq
@@ -2232,7 +2234,7 @@ async def create_sequence_batch(session_id: int, body: CreateSequenceBatchReques
 
     # Create sequences for each probe, linked to batch
     for pid in body.probe_ids:
-        warmup = body.fixed_n if body.mode == "fixed_n" and body.fixed_n else body.max_warmup_turns
+        warmup = body.fixed_n if body.mode == "fixed_n" and body.fixed_n is not None else body.max_warmup_turns
         db.create_sequence(_conn, session_id, pid, body.strategy_id, body.mode, warmup, batch_id=batch_id)
 
     return db.get_sequence_batch(_conn, batch_id)
@@ -2249,7 +2251,8 @@ async def estimate_sequence_batch(batch_id: int):
     b = db.get_sequence_batch(_conn, batch_id)
     if not b:
         raise HTTPException(404, "Batch not found")
-    estimate = _runner.estimate_cost(b["probes_total"], b["max_warmup_turns"], b["mode"])
+    turns = b["fixed_n"] if b["mode"] == "fixed_n" and b["fixed_n"] is not None else b["max_warmup_turns"]
+    estimate = _runner.estimate_sequence_cost(b["probes_total"], turns, b["mode"])
     # Save estimate to batch
     db.update_sequence_batch(_conn, batch_id, estimated_cost_usd=estimate["estimated_cost_usd"])
     return estimate
@@ -2651,12 +2654,21 @@ async def start_stat_run(session_id: int, req: StartStatRunRequest):
     if not session:
         raise HTTPException(404, "Session not found")
 
+    runner = _runner
+    target_model = session["target_model"]
+    system_prompt = session.get("system_prompt") or ""
+
+    def make_session_target():
+        # Each iteration gets a fresh target with the session's model and system prompt.
+        return runner._make_target(target_model, system_prompt)
+
     async def event_generator():
         try:
             async for event in run_statistical_batch(
-                _conn, session_id, req.probe_ids, session["target_model"],
-                req.repeat_count, _runner.backend if _runner else None,
-                _runner.client if _runner else None,
+                _conn, session_id, req.probe_ids, target_model,
+                req.repeat_count, runner.backend if runner else None,
+                make_target=make_session_target if runner else None,
+                system_prompt=system_prompt,
             ):
                 event_type = event["event"]
                 event_data = json.dumps(event["data"])
@@ -2973,6 +2985,8 @@ async def api_estimate_experiment(experiment_id: int):
     """Cost/time estimate before running."""
     async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
+        if not exp:
+            raise HTTPException(404, "Experiment not found")
         conditions = await list_conditions(db_conn, experiment_id)
         prompts = await list_experiment_prompts(db_conn, experiment_id)
     model_ids = json.loads(exp.get("model_ids", "[]")) if isinstance(exp.get("model_ids"), str) else exp.get("model_ids", [])

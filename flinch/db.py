@@ -2956,6 +2956,8 @@ def get_stat_run_summary(conn, stat_run_id: int) -> dict | None:
         "negotiated": counts["negotiated"],
         "complied": counts["complied"],
         "consistency_rate": consistency_rate,
+        "created_at": stat_run["created_at"],
+        "status": stat_run["status"],
     }
 
 

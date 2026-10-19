@@ -6,12 +6,13 @@ import os
 from datetime import UTC, datetime
 
 from flinch import db
+from flinch import target as flinch_target
 from flinch.classifier import classify
 from flinch.coach import NARRATIVE_ENGINE_SYSTEM_PROMPT, Coach, NarrativeCoach
 from flinch.llm import LLMBackend
 from flinch.models import Classification, PushbackSource
 from flinch.rate_limiter import ProviderRateLimiter, RateLimiterPool
-from flinch.target import ClaudeTarget, GeminiTarget, OllamaTarget, OpenAITarget, TargetModel
+from flinch.target import BaseModelTarget, TargetModel
 
 logger = logging.getLogger(__name__)
 
@@ -32,45 +33,8 @@ class Runner:
         return self._client
 
     def _make_target(self, model_name: str, system_prompt: str = "") -> TargetModel:
-        """Factory: dispatch to correct target based on model name prefix."""
-        if model_name.startswith("claude-"):
-            if not self._client:
-                raise ValueError(
-                    "Anthropic API key required to test Claude models. "
-                    "Set ANTHROPIC_API_KEY or choose a different target model."
-                )
-            return ClaudeTarget(model=model_name, client=self._client, system_prompt=system_prompt)
-        elif model_name.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
-            return OpenAITarget(model_name, system_prompt=system_prompt)
-        elif model_name.startswith("gemini-"):
-            return GeminiTarget(model_name, system_prompt=system_prompt)
-        elif model_name.startswith("grok-"):
-            # xAI uses OpenAI-compatible API
-            return OpenAITarget(
-                model_name,
-                system_prompt=system_prompt,
-                api_key=os.environ.get("XAI_API_KEY"),
-                base_url="https://api.x.ai/v1",
-            )
-        elif model_name.startswith("meta-llama/") or model_name.startswith("llama-"):
-            # Together AI for Meta models
-            return OpenAITarget(
-                model_name,
-                system_prompt=system_prompt,
-                api_key=os.environ.get("TOGETHER_API_KEY"),
-                base_url="https://api.together.xyz/v1",
-            )
-        elif model_name.startswith("ollama:"):
-            # Ollama local models
-            return OllamaTarget(
-                model=model_name,
-                system_prompt=system_prompt,
-            )
-        else:
-            raise ValueError(
-                f"Unknown model prefix for '{model_name}'. "
-                "Supported: claude-*, gpt-*, o1-*, o3-*, o4-*, gemini-*, grok-*, meta-llama/*, ollama:*"
-            )
+        """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+        return flinch_target.make_target(model_name, system_prompt, anthropic_client=self._client)
 
     def _get_target(self, session_id: int) -> TargetModel:
         """Get or create a target model for a session."""
@@ -432,217 +396,6 @@ class Runner:
             return self._make_target(session["target_model"], NARRATIVE_ENGINE_SYSTEM_PROMPT)
         return self._get_target(session_id)
 
-
-class ExperimentRunner:
-    """Runs the full prompt × model × condition matrix for experiments."""
-
-    MAX_RETRIES = 5
-    BACKOFF_BASE = 1.0  # seconds
-    BACKOFF_MAX = 60.0
-
-    def __init__(self, async_db, rate_pool: RateLimiterPool, backend=None):
-        self.db = async_db
-        self.rate_pool = rate_pool
-        self.backend = backend or "anthropic"
-        self._paused = False
-
-    def _get_provider(self, model_id: str) -> str:
-        """Determine provider from model ID."""
-        if model_id.startswith("ollama:"):
-            return "ollama"
-        model_lower = model_id.lower()
-        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
-            return "anthropic"
-        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
-            return "openai"
-        elif "gemini" in model_lower:
-            return "google"
-        elif any(x in model_lower for x in ["grok"]):
-            return "xai"
-        else:
-            return "together"
-
-    async def run_experiment(self, experiment_id: int):
-        """Execute full matrix, yielding SSE progress events."""
-        from flinch.db import (
-            get_experiment_progress,
-            get_pending_responses,
-            update_experiment,
-            update_experiment_response,
-        )
-
-        # Mark experiment as running
-        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(UTC).isoformat())
-
-        # Group pending cells by provider for parallel execution
-        pending = await get_pending_responses(self.db, experiment_id, limit=50000)
-        if not pending:
-            yield {"type": "complete", "message": "No pending responses"}
-            return
-
-        by_provider = {}
-        for cell in pending:
-            provider = self._get_provider(cell["model_id"])
-            by_provider.setdefault(provider, []).append(cell)
-
-        total = len(pending)
-        completed = 0
-        failed = 0
-
-        yield {"type": "started", "total": total}
-
-        results_queue: asyncio.Queue = asyncio.Queue()
-
-        cell_count = 0
-
-        async def provider_worker(provider, cells):
-            nonlocal completed, failed, cell_count
-            limiter = self.rate_pool.get(provider)
-            for cell in cells:
-                if self._paused:
-                    break
-                # Check DB for pause signal every 10 cells
-                cell_count += 1
-                if cell_count % 10 == 0:
-                    cursor = await self.db.execute(
-                        "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
-                    )
-                    row = await cursor.fetchone()
-                    if row and row[0] == "paused":
-                        break
-                try:
-                    await self._run_single_cell(cell, limiter)
-                    completed += 1
-                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"]})
-                except Exception as e:
-                    failed += 1
-                    await update_experiment_response(self.db, cell["id"], status="failed", error_message=str(e))
-                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"], "error": str(e)})
-
-        tasks = [asyncio.create_task(provider_worker(p, cells)) for p, cells in by_provider.items()]
-
-        while True:
-            try:
-                event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
-                yield event
-            except TimeoutError:
-                if all(t.done() for t in tasks):
-                    break
-                yield {"type": "heartbeat"}
-
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Final status
-        progress = await get_experiment_progress(self.db, experiment_id)  # noqa: F841
-        final_status = "completed"
-        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(UTC).isoformat())
-
-        yield {"type": "complete", "completed": completed, "failed": failed, "total": total}
-
-    async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
-        """Execute one matrix cell with retry logic."""
-        from flinch.db import update_experiment_response
-
-        model_id = cell["model_id"]
-        system_prompt = cell.get("condition_system_prompt", "")
-        prompt_text = cell.get("prompt_text") or cell.get("probe_text", "")
-        response_id = cell["id"]
-
-        target = self._create_target(model_id, system_prompt)
-        released = False
-
-        for attempt in range(self.MAX_RETRIES):
-            released = False
-            try:
-                await limiter.acquire()
-                try:
-                    resp = await target.send(prompt_text)
-                finally:
-                    limiter.release()
-                    released = True
-
-                limiter.record_usage(
-                    input_tokens=resp.input_tokens or 0,
-                    output_tokens=resp.output_tokens or 0,
-                )
-
-                await update_experiment_response(
-                    self.db, response_id,
-                    response_text=resp.text,
-                    latency_ms=resp.latency_ms,
-                    token_count_input=resp.input_tokens,
-                    token_count_output=resp.output_tokens,
-                    finish_reason=resp.finish_reason,
-                    status="completed",
-                    attempt_count=attempt + 1,
-                    completed_at=datetime.now(UTC).isoformat(),
-                )
-                return
-
-            except Exception as e:
-                if not released:
-                    try:
-                        limiter.release()
-                    except ValueError:
-                        pass
-                limiter.record_retry()
-                if attempt < self.MAX_RETRIES - 1:
-                    backoff = min(self.BACKOFF_BASE * (2 ** attempt), self.BACKOFF_MAX)
-                    logger.warning(f"Retry {attempt+1} for cell {response_id}: {e}, waiting {backoff}s")
-                    await asyncio.sleep(backoff)
-                else:
-                    raise
-
-    def _create_target(self, model_id: str, system_prompt: str):
-        """Create appropriate TargetModel instance."""
-        from flinch.target import (
-            BaseModelTarget,
-            ClaudeTarget,
-            GeminiTarget,
-            OllamaTarget,
-            OpenAITarget,
-        )
-
-        provider = self._get_provider(model_id)
-        # Check if it's a known base model
-        if model_id in BaseModelTarget.BASE_MODELS:
-            return BaseModelTarget(model=model_id, system_prompt=system_prompt)
-        if provider == "ollama":
-            return OllamaTarget(model=model_id, system_prompt=system_prompt)
-        elif provider == "anthropic":
-            return ClaudeTarget(model=model_id, system_prompt=system_prompt)
-        elif provider in ("openai", "xai", "together"):
-            base_url = None
-            if provider == "xai":
-                base_url = "https://api.x.ai/v1"
-            elif provider == "together":
-                base_url = "https://api.together.xyz/v1"
-            return OpenAITarget(model=model_id, system_prompt=system_prompt, base_url=base_url)
-        elif provider == "google":
-            return GeminiTarget(model=model_id, system_prompt=system_prompt)
-        else:
-            raise ValueError(f"Unknown provider for model: {model_id}")
-
-    async def pause(self, experiment_id: int):
-        """Pause execution."""
-        from flinch.db import update_experiment
-        self._paused = True
-        await update_experiment(self.db, experiment_id, status="paused")
-
-    def estimate_cost(self, total_cells: int, avg_input_tokens: int = 500, avg_output_tokens: int = 1000) -> dict:
-        """Estimate cost for the experiment."""
-        pricing = {
-            "anthropic": {"input": 0.003, "output": 0.015},   # Sonnet
-            "openai": {"input": 0.005, "output": 0.015},       # GPT-4o
-            "google": {"input": 0.00125, "output": 0.005},     # Gemini Pro
-            "together": {"input": 0.0009, "output": 0.0009},   # Llama
-        }
-        estimated_cost = 0.0
-        for p, rates in pricing.items():
-            estimated_cost += (avg_input_tokens / 1000 * rates["input"] + avg_output_tokens / 1000 * rates["output"])
-        estimated_cost *= total_cells / len(pricing)
-        return {"estimated_cost_usd": round(estimated_cost, 2), "total_cells": total_cells}
-
     # ── Narrative Momentum Methods ─────────────────────────────────
 
     def _make_narrative_coach(self, strategy: dict, probe: dict, use_narrative_engine: bool = False, session_id: int | None = None) -> NarrativeCoach:
@@ -688,7 +441,6 @@ class ExperimentRunner:
 
         strategy = db.get_strategy_template(self._conn, seq["strategy_id"])
         probe = db.get_probe(self._conn, seq["probe_id"])
-        session = db.get_session(self._conn, seq["session_id"])  # noqa: F841
 
         # Get existing turns to build conversation history
         existing_turns = db.list_sequence_turns(self._conn, sequence_run_id)
@@ -810,6 +562,7 @@ class ExperimentRunner:
             probe_classification=probe_classification.value,
             completed_at=now,
         )
+        db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
         return {
             "turns": result_turns,
@@ -828,7 +581,6 @@ class ExperimentRunner:
 
         strategy = db.get_strategy_template(self._conn, seq["strategy_id"])
         probe = db.get_probe(self._conn, seq["probe_id"])
-        session = db.get_session(self._conn, seq["session_id"])  # noqa: F841
         warmup_count = seq["max_warmup_turns"]
         use_ne = bool(seq.get("use_narrative_engine"))
 
@@ -890,8 +642,12 @@ class ExperimentRunner:
                 turn_number += 2
 
             # Probe turn (N) — adapt probe to story context then send
-            adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = (await target.reply(adapted_probe)).text
+            if conversation_history:
+                adapted_probe = await coach.adapt_probe_to_story(conversation_history)
+                probe_response = (await target.reply(adapted_probe)).text
+            else:
+                adapted_probe = probe["prompt_text"]
+                probe_response = (await target.send(adapted_probe)).text
             probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -907,6 +663,7 @@ class ExperimentRunner:
                 probe_classification=probe_classification.value,
                 completed_at=now,
             )
+            db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
             return {
                 "sequence_run_id": run_id,
@@ -917,6 +674,7 @@ class ExperimentRunner:
 
         except Exception:
             db.update_sequence_run(self._conn, run_id, status="failed")
+            db.update_sequence(self._conn, sequence_id, status="failed")
             raise
 
     async def run_sequence_auto_stream(self, sequence_id: int):
@@ -1000,8 +758,12 @@ class ExperimentRunner:
                 }
 
             # Probe turn — adapt to story context
-            adapted_probe = await coach.adapt_probe_to_story(conversation_history)
-            probe_response = (await target.reply(adapted_probe)).text
+            if conversation_history:
+                adapted_probe = await coach.adapt_probe_to_story(conversation_history)
+                probe_response = (await target.reply(adapted_probe)).text
+            else:
+                adapted_probe = probe["prompt_text"]
+                probe_response = (await target.send(adapted_probe)).text
             probe_classification = await classify(probe_response, probe["prompt_text"], self._backend)
 
             db.add_sequence_turn(self._conn, run_id, turn_number, "probe", adapted_probe, None, "probe")
@@ -1013,6 +775,7 @@ class ExperimentRunner:
                 probe_classification=probe_classification.value,
                 completed_at=now,
             )
+            db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
             yield {
                 "event": "complete",
@@ -1028,6 +791,7 @@ class ExperimentRunner:
 
         except Exception as e:
             db.update_sequence_run(self._conn, run_id, status="failed")
+            db.update_sequence(self._conn, sequence_id, status="failed")
             yield {
                 "event": "error",
                 "data": {"error": str(e), "sequence_run_id": run_id},
@@ -1052,6 +816,7 @@ class ExperimentRunner:
         results = []
         threshold_found = False
         threshold_at = None
+        errored = False
 
         for n in range(max_turns, -1, -1):  # max_turns down to 0
             # Run a full sequence at this warmup count
@@ -1087,17 +852,22 @@ class ExperimentRunner:
                     "warmup_count": n,
                     "probe_classification": "error",
                     "error": str(e),
+                    "sequence_run_id": run_id,
                 })
+                errored = True
                 break
 
         # If we went all the way to 0 without refusal, threshold is 0
-        if not threshold_found and results:
+        if not threshold_found and not errored and results:
             last_run_id = results[-1]["sequence_run_id"]
             db.update_sequence_run(self._conn, last_run_id, threshold_found=1)
             threshold_at = 0
 
         now = __import__("datetime").datetime.utcnow().isoformat()
-        db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
+        if errored:
+            db.update_sequence(self._conn, sequence_id, status="failed")
+        else:
+            db.update_sequence(self._conn, sequence_id, status="completed", completed_at=now)
 
         return {
             "sequence_id": sequence_id,
@@ -1184,7 +954,7 @@ class ExperimentRunner:
 
         return {"probe_classification": probe_classification.value}
 
-    def estimate_cost(self, probe_count: int, max_turns: int, mode: str = "whittle") -> dict:  # noqa: F811
+    def estimate_sequence_cost(self, probe_count: int, max_turns: int, mode: str = "whittle") -> dict:
         """Estimate cost for a batch sequence run.
 
         Rough estimates per turn:
@@ -1323,3 +1093,188 @@ class ExperimentRunner:
                 "completed": completed,
             },
         }
+
+
+class ExperimentRunner:
+    """Runs the full prompt × model × condition matrix for experiments."""
+
+    MAX_RETRIES = 5
+    BACKOFF_BASE = 1.0  # seconds
+    BACKOFF_MAX = 60.0
+
+    def __init__(self, async_db, rate_pool: RateLimiterPool, backend=None):
+        self.db = async_db
+        self.rate_pool = rate_pool
+        self.backend = backend or "anthropic"
+        self._paused = False
+
+    def _get_provider(self, model_id: str) -> str:
+        """Determine provider from model ID."""
+        if model_id.startswith("ollama:"):
+            return "ollama"
+        model_lower = model_id.lower()
+        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
+            return "anthropic"
+        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
+            return "openai"
+        elif "gemini" in model_lower:
+            return "google"
+        elif any(x in model_lower for x in ["grok"]):
+            return "xai"
+        else:
+            return "together"
+
+    async def run_experiment(self, experiment_id: int):
+        """Execute full matrix, yielding SSE progress events."""
+        from flinch.db import (
+            get_pending_responses,
+            update_experiment,
+            update_experiment_response,
+        )
+
+        # Mark experiment as running
+        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(UTC).isoformat())
+
+        # Group pending cells by provider for parallel execution
+        pending = await get_pending_responses(self.db, experiment_id, limit=50000)
+        if not pending:
+            yield {"type": "complete", "message": "No pending responses"}
+            return
+
+        by_provider = {}
+        for cell in pending:
+            provider = self._get_provider(cell["model_id"])
+            by_provider.setdefault(provider, []).append(cell)
+
+        total = len(pending)
+        completed = 0
+        failed = 0
+
+        yield {"type": "started", "total": total}
+
+        results_queue: asyncio.Queue = asyncio.Queue()
+
+        cell_count = 0
+
+        async def provider_worker(provider, cells):
+            nonlocal completed, failed, cell_count
+            limiter = self.rate_pool.get(provider)
+            for cell in cells:
+                if self._paused:
+                    break
+                # Check DB for pause signal every 10 cells
+                cell_count += 1
+                if cell_count % 10 == 0:
+                    cursor = await self.db.execute(
+                        "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0] == "paused":
+                        break
+                try:
+                    await self._run_single_cell(cell, limiter)
+                    completed += 1
+                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"]})
+                except Exception as e:
+                    failed += 1
+                    await update_experiment_response(self.db, cell["id"], status="failed", error_message=str(e))
+                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"], "error": str(e)})
+
+        tasks = [asyncio.create_task(provider_worker(p, cells)) for p, cells in by_provider.items()]
+
+        while True:
+            try:
+                event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
+                yield event
+            except TimeoutError:
+                if all(t.done() for t in tasks):
+                    break
+                yield {"type": "heartbeat"}
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Final status
+        final_status = "completed"
+        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(UTC).isoformat())
+
+        yield {"type": "complete", "completed": completed, "failed": failed, "total": total}
+
+    async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
+        """Execute one matrix cell with retry logic."""
+        from flinch.db import update_experiment_response
+
+        model_id = cell["model_id"]
+        system_prompt = cell.get("condition_system_prompt", "")
+        prompt_text = cell.get("prompt_text") or cell.get("probe_text", "")
+        response_id = cell["id"]
+
+        target = self._create_target(model_id, system_prompt)
+        released = False
+
+        for attempt in range(self.MAX_RETRIES):
+            released = False
+            try:
+                await limiter.acquire()
+                try:
+                    resp = await target.send(prompt_text)
+                finally:
+                    limiter.release()
+                    released = True
+
+                limiter.record_usage(
+                    input_tokens=resp.input_tokens or 0,
+                    output_tokens=resp.output_tokens or 0,
+                )
+
+                await update_experiment_response(
+                    self.db, response_id,
+                    response_text=resp.text,
+                    latency_ms=resp.latency_ms,
+                    token_count_input=resp.input_tokens,
+                    token_count_output=resp.output_tokens,
+                    finish_reason=resp.finish_reason,
+                    status="completed",
+                    attempt_count=attempt + 1,
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
+                return
+
+            except Exception as e:
+                if not released:
+                    try:
+                        limiter.release()
+                    except ValueError:
+                        pass
+                limiter.record_retry()
+                if attempt < self.MAX_RETRIES - 1:
+                    backoff = min(self.BACKOFF_BASE * (2 ** attempt), self.BACKOFF_MAX)
+                    logger.warning(f"Retry {attempt+1} for cell {response_id}: {e}, waiting {backoff}s")
+                    await asyncio.sleep(backoff)
+                else:
+                    raise
+
+    def _create_target(self, model_id: str, system_prompt: str) -> TargetModel:
+        """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+        if model_id in BaseModelTarget.BASE_MODELS:
+            return BaseModelTarget(model=model_id, system_prompt=system_prompt)
+        return flinch_target.make_target(model_id, system_prompt, provider_hint=self._get_provider(model_id))
+
+    async def pause(self, experiment_id: int):
+        """Pause execution."""
+        from flinch.db import update_experiment
+        self._paused = True
+        await update_experiment(self.db, experiment_id, status="paused")
+
+    def estimate_cost(self, total_cells: int, avg_input_tokens: int = 500, avg_output_tokens: int = 1000) -> dict:
+        """Estimate cost for the experiment."""
+        pricing = {
+            "anthropic": {"input": 0.003, "output": 0.015},   # Sonnet
+            "openai": {"input": 0.005, "output": 0.015},       # GPT-4o
+            "google": {"input": 0.00125, "output": 0.005},     # Gemini Pro
+            "together": {"input": 0.0009, "output": 0.0009},   # Llama
+        }
+        estimated_cost = 0.0
+        for p, rates in pricing.items():
+            estimated_cost += (avg_input_tokens / 1000 * rates["input"] + avg_output_tokens / 1000 * rates["output"])
+        estimated_cost *= total_cells / len(pricing)
+        return {"estimated_cost_usd": round(estimated_cost, 2), "total_cells": total_cells}

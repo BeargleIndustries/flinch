@@ -230,15 +230,7 @@ class AIRaterPipeline:
         await save_ai_rating(self.db, rating_data, items_data)
 
     def _create_rater_target(self, rater_model: str):
-        """Create a TargetModel for the rater."""
-        from flinch.target import ClaudeTarget, GeminiTarget, OpenAITarget
+        """Thin wrapper over `flinch.target.make_target` (kept as a test patch point)."""
+        from flinch.target import make_target
 
-        model_lower = rater_model.lower()
-        if any(x in model_lower for x in ["claude", "haiku", "sonnet", "opus"]):
-            return ClaudeTarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
-        elif any(x in model_lower for x in ["gpt", "o3", "o4"]):
-            return OpenAITarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
-        elif "gemini" in model_lower:
-            return GeminiTarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
-        else:
-            return OpenAITarget(model=rater_model, system_prompt=RATER_SYSTEM_PROMPT)
+        return make_target(rater_model, RATER_SYSTEM_PROMPT)

@@ -255,10 +255,12 @@ class BaseModelTarget(OpenAITarget):
     }
 
     def __init__(self, model: str, system_prompt: str = "", **kwargs):
-        # Base models use Together API
+        # Base models use Together API, with the Together key (never the OpenAI key)
+        api_key = kwargs.pop("api_key", None) or _provider_key("TOGETHER_API_KEY", "Together AI", model)
         super().__init__(
             model=model,
             system_prompt="",  # No system prompt for base models
+            api_key=api_key,
             base_url="https://api.together.xyz/v1",
             **kwargs
         )
@@ -351,3 +353,84 @@ class OllamaTarget(OpenAITarget):
                 return resp.status_code == 200
         except Exception:
             return False
+
+
+XAI_BASE_URL = "https://api.x.ai/v1"
+TOGETHER_BASE_URL = "https://api.together.xyz/v1"
+
+_OPENAI_PREFIXES = ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")
+_TOGETHER_PREFIXES = ("meta-llama/", "llama-")
+
+
+def _provider_key(env_name: str, provider_label: str, model_name: str) -> str:
+    """Read a provider key; never fall back to another provider's key."""
+    key = os.environ.get(env_name)
+    if not key:
+        raise ValueError(
+            f"{provider_label} API key required to test '{model_name}'. "
+            f"Set {env_name} or choose a different target model."
+        )
+    return key
+
+
+def _provider_for_prefix(model_name: str) -> str | None:
+    if model_name.startswith("claude-"):
+        return "anthropic"
+    if model_name.startswith(_OPENAI_PREFIXES):
+        return "openai"
+    if model_name.startswith("gemini-"):
+        return "google"
+    if model_name.startswith("grok-"):
+        return "xai"
+    if model_name.startswith(_TOGETHER_PREFIXES):
+        return "together"
+    if model_name.startswith("ollama:"):
+        return "ollama"
+    return None
+
+
+def make_target(
+    model_name: str,
+    system_prompt: str = "",
+    anthropic_client: anthropic.AsyncAnthropic | None = None,
+    provider_hint: str | None = None,
+) -> TargetModel:
+    """The one target factory: pick the provider from the model id prefix.
+
+    When no prefix matches, `provider_hint` (anthropic, openai, google, xai,
+    together, ollama) decides. xAI and Together targets get their own keys and
+    never the OpenAI key.
+    """
+    provider = _provider_for_prefix(model_name) or provider_hint
+    if provider == "anthropic":
+        if anthropic_client is None and not os.environ.get("ANTHROPIC_API_KEY"):
+            raise ValueError(
+                "Anthropic API key required to test Claude models. "
+                "Set ANTHROPIC_API_KEY or choose a different target model."
+            )
+        return ClaudeTarget(model=model_name, client=anthropic_client, system_prompt=system_prompt)
+    if provider == "openai":
+        return OpenAITarget(model_name, system_prompt=system_prompt)
+    if provider == "google":
+        return GeminiTarget(model_name, system_prompt=system_prompt)
+    if provider == "xai":
+        return OpenAITarget(
+            model_name,
+            system_prompt=system_prompt,
+            api_key=_provider_key("XAI_API_KEY", "xAI", model_name),
+            base_url=XAI_BASE_URL,
+        )
+    if provider == "together":
+        return OpenAITarget(
+            model_name,
+            system_prompt=system_prompt,
+            api_key=_provider_key("TOGETHER_API_KEY", "Together AI", model_name),
+            base_url=TOGETHER_BASE_URL,
+        )
+    if provider == "ollama":
+        return OllamaTarget(model=model_name, system_prompt=system_prompt)
+    raise ValueError(
+        f"Unknown model prefix for '{model_name}'. "
+        "Supported: claude-*, gpt-*, o1-*, o3-*, o4-*, chatgpt-*, gemini-*, grok-*, "
+        "meta-llama/*, llama-*, ollama:*"
+    )

@@ -13,6 +13,12 @@ cd "$(dirname "$0")/.."
 
 step() { printf '\n== %s\n' "$*"; }
 
+# node:sqlite (ui/tests/e2e/batch-cancel.spec.ts) needs Node 22.13 or newer.
+if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)'; then
+  echo "Node 22.13 or newer is required (node:sqlite)" >&2
+  exit 1
+fi
+
 if [ -n "${CI:-}" ]; then
   step "pip install -e .[dev,multi-model,experiment]"
   python -m pip install -e ".[dev,multi-model,experiment]"

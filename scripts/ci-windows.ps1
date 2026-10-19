@@ -23,6 +23,12 @@ function Invoke-Native {
     }
 }
 
+# node:sqlite (ui/tests/e2e/batch-cancel.spec.ts) needs Node 22.13 or newer.
+$nodeVersion = [version]((& node --version).TrimStart('v'))
+if ($nodeVersion -lt [version]'22.13') {
+    throw 'Node 22.13 or newer is required (node:sqlite)'
+}
+
 Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
     Invoke-Native 'npm' @('--prefix', 'ui', 'ci')

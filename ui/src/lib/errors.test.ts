@@ -15,6 +15,8 @@ const CASES: [sample: string, expected: RegExp][] = [
   ['No runs in session to snapshot', /Run at least one probe before saving a baseline/],
   ['No active run for this sequence', /no turn waiting/],
   ['Batch already started', /already started\. Estimate a new batch/],
+  // F14: the 409 detail from /start and /resume (B03).
+  ['This study is already running.', /^This study is still running or stopping\. Try again/],
   ['Failed to fetch', /sidecar is not reachable/],
   ['NetworkError when attempting to fetch resource.', /sidecar is not reachable/],
   ['Load failed', /sidecar is not reachable/],

@@ -37,9 +37,14 @@ export function allFiles(): string[] {
   return walk(SRC).map((p) => relative(SRC, p).replace(/\\/g, '/'));
 }
 
-/**
- * The `.ts` files that hold user-facing copy (brief 13.2). T12 adds
- * `lib/tour/steps.ts`, `lib/copy/moves.ts`, `lib/copy/screens.ts`,
- * `lib/copy/errors-copy.ts` and `lib/guide/methodology.ts` as it writes them.
- */
-export const COPY_FILES = ['lib/glossary.ts', 'lib/tips/tips-registry.ts', 'lib/errors.ts'];
+/** The `.ts` files that hold user-facing copy (brief 13.2). */
+export const COPY_FILES = [
+  'lib/glossary.ts',
+  'lib/tips/tips-registry.ts',
+  'lib/tour/steps.ts',
+  'lib/copy/moves.ts',
+  'lib/copy/screens.ts',
+  'lib/copy/errors-copy.ts',
+  'lib/errors.ts',
+  'lib/guide/methodology.ts',
+];

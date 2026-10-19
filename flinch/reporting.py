@@ -245,7 +245,7 @@ class ExperimentReporter:
         exp = await get_experiment(self.db, experiment_id)
         tables = await self.generate_tables(experiment_id)
 
-        report = f"# {exp['name']} — Results Report\n\n"
+        report = f"# {exp['name']}: Results Report\n\n"
         report += f"**Generated:** {datetime.now(UTC).isoformat()}\n\n"
         report += f"## Experiment Description\n{exp.get('description', '')}\n\n"
 

@@ -1,7 +1,7 @@
 // Settings drawer copy (brief 9.7, D10, D11, D25). Brief A.6 has no keys for
 // the drawer, so its strings live here (brief 5.7 rule 9) and in COPY_FILES.
-// The settings sections and settings.spec.ts read them. KeyRow's own row
-// wording ("Set", "Not set", "Key works.") stays in KeyRow and key-row.ts.
+// The settings sections and settings.spec.ts read them; KEY_ROW is the
+// wording of one provider key row (KeyRow.svelte and key-row.ts).
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -50,4 +50,26 @@ export const SETTINGS = {
   copied: 'Copied',
   crashLogs: 'Crash logs',
   crashLogsNone: 'None',
+} as const;
+
+/** One provider key row (brief 9.7, 5.6 `KeyRow`). */
+export const KEY_ROW = {
+  set: 'Set',
+  setMasked: (masked: string) => `Set · ${masked}`,
+  notSet: 'Not set',
+  saved: 'Saved.',
+  didNotWork: (error: string) => `That key did not work: ${error}`,
+  works: 'Key works.',
+  testFailed: (error: string) => `Test failed: ${error}`,
+  test: 'Test',
+  testing: 'Testing…',
+  checkedWhenSaved: 'Checked when saved.',
+  remove: 'Remove',
+  removeConfirm: (label: string) => `Remove the ${label} key`,
+  cancel: 'Cancel',
+  replace: 'Replace',
+  add: 'Add a key',
+  field: (label: string) => `${label} API key`,
+  save: 'Save',
+  saving: 'Saving…',
 } as const;

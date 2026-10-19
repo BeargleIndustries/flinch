@@ -218,7 +218,7 @@ const EM_DASH = '\u2014';
  * linting nothing (plan F2: replaces Pry's literal 40). T11 sets it to 20;
  * T35 raises it to 80.
  */
-export const MIN_LINT_FILES = 20;
+export const MIN_LINT_FILES = 80;
 
 const lintFiles = [...allFiles().filter((f) => f.endsWith('.svelte')), ...COPY_FILES].sort();
 

@@ -3,6 +3,7 @@
   "{failed} failed" in danger when any failed, and "Cancel" when it can stop.
 -->
 <script lang="ts">
+  import { PROGRESS } from '$lib/copy/shell';
   import { progressLine, progressPct } from './stream-progress';
 
   interface Props {
@@ -23,13 +24,13 @@
     <span class="truncate text-text2">{label}</span>
     <span class="flex shrink-0 items-baseline gap-2 font-mono tabular-nums">
       <span class="text-text3">{progressLine(completed, total)}</span>
-      {#if failed > 0}<span class="text-danger">{failed} failed</span>{/if}
+      {#if failed > 0}<span class="text-danger">{PROGRESS.failed(failed)}</span>{/if}
       {#if onCancel}
         <button
           type="button"
           onclick={onCancel}
           class="font-sans text-text3 underline-offset-2 hover:text-text hover:underline focus:outline-none focus-visible:text-text focus-visible:underline"
-          >Cancel</button
+          >{PROGRESS.cancel}</button
         >
       {/if}
     </span>

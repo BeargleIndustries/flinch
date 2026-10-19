@@ -1,7 +1,8 @@
 <!--
   One provider key row in Settings (brief 9.7, 5.6): label, status
-  ("Set · {masked}" or "Not set"), "Add a key" or "Replace", and when set
-  "Test" and "Remove". Add or Replace reveals a password field and "Save".
+  (KEY_ROW.setMasked or notSet), add or replace, and when set test and
+  remove. Add or replace reveals a password field and save. The wording is
+  KEY_ROW in copy/settings.ts.
 
   The row owns the wording and the states; T19's KeysSection supplies the
   three actions, which pick the store (Credential Manager in the desktop app,
@@ -10,6 +11,7 @@
 <script lang="ts">
   import ConfirmButton from '../ConfirmButton.svelte';
   import { friendlyError } from '$lib/errors';
+  import { KEY_ROW } from '$lib/copy/settings';
   import { canTest, keyLabel, keyStatus, type KeyEntry, type KeyResult } from './key-row';
 
   interface Props {
@@ -45,9 +47,9 @@
       if (r.ok) {
         draft = '';
         editing = false;
-        note = { ok: true, text: 'Saved.' };
+        note = { ok: true, text: KEY_ROW.saved };
       } else {
-        note = { ok: false, text: `That key did not work: ${r.error}` };
+        note = { ok: false, text: KEY_ROW.didNotWork(r.error) };
       }
     } catch (e) {
       note = { ok: false, text: friendlyError(e).message };
@@ -63,10 +65,10 @@
     try {
       const r = await onTest();
       note = r.ok
-        ? { ok: true, text: 'Key works.' }
-        : { ok: false, text: `Test failed: ${r.error}` };
+        ? { ok: true, text: KEY_ROW.works }
+        : { ok: false, text: KEY_ROW.testFailed(r.error) };
     } catch (e) {
-      note = { ok: false, text: `Test failed: ${friendlyError(e).message}` };
+      note = { ok: false, text: KEY_ROW.testFailed(friendlyError(e).message) };
     } finally {
       busy = null;
     }
@@ -114,14 +116,14 @@
       {#if entry.is_set}
         {#if canTest(entry.provider)}
           <button type="button" class={linkBtn} disabled={busy !== null} onclick={test}>
-            {busy === 'test' ? 'Testing…' : 'Test'}
+            {busy === 'test' ? KEY_ROW.testing : KEY_ROW.test}
           </button>
         {:else}
-          <span class="text-xs text-text4">Checked when saved.</span>
+          <span class="text-xs text-text4">{KEY_ROW.checkedWhenSaved}</span>
         {/if}
         <ConfirmButton
-          label="Remove"
-          confirmLabel={`Remove the ${label} key`}
+          label={KEY_ROW.remove}
+          confirmLabel={KEY_ROW.removeConfirm(label)}
           danger
           onConfirm={remove}
           class="!px-2 !py-0.5"
@@ -137,7 +139,7 @@
           note = null;
         }}
       >
-        {open ? 'Cancel' : entry.is_set ? 'Replace' : 'Add a key'}
+        {open ? KEY_ROW.cancel : entry.is_set ? KEY_ROW.replace : KEY_ROW.add}
       </button>
     </div>
   </div>
@@ -148,8 +150,8 @@
         type="password"
         bind:value={draft}
         onkeydown={onFieldKey}
-        placeholder={`${label} API key`}
-        aria-label={`${label} API key`}
+        placeholder={KEY_ROW.field(label)}
+        aria-label={KEY_ROW.field(label)}
         autocomplete="off"
         spellcheck="false"
         class="min-w-0 flex-1 rounded-md border border-borderStrong bg-bg px-2.5 py-1.5 font-mono text-[13px] text-text placeholder:font-sans placeholder:text-text4 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
@@ -160,7 +162,7 @@
         disabled={!draft.trim() || busy !== null}
         class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accentHover focus:outline-none focus-visible:ring-2 focus-visible:ring-accentHover disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {busy === 'save' ? 'Saving…' : 'Save'}
+        {busy === 'save' ? KEY_ROW.saving : KEY_ROW.save}
       </button>
     </div>
   {/if}

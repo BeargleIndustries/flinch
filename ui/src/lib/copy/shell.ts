@@ -103,6 +103,18 @@ export const SHELL = {
   shortcutsFooter: 'Press ? or Escape to close',
 } as const;
 
+/** Job progress in StreamProgress and the status strip (brief 5.6), and the strip's error side. */
+export const PROGRESS = {
+  failed: (n: number) => `${n} failed`,
+  cancel: 'Cancel',
+  cancelling: 'Cancelling…',
+  show: 'Show',
+  statusRegion: 'Status',
+  details: 'Details',
+  hideDetails: 'Hide details',
+  dismiss: 'Dismiss',
+} as const;
+
 /** The guide menu (D12, brief 9.6): the button's label and its five items, in order. */
 export const GUIDE_MENU = {
   menuButton: 'Open the guide',

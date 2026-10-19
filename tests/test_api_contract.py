@@ -99,6 +99,25 @@ def test_no_store_header(app_client, fake_target, keyword_classifier) -> None:
     assert resp.headers["cache-control"] == "no-cache"
 
 
+def test_root_is_json(app_client) -> None:
+    """The sidecar is API-only: `/` answers JSON, not the old page (B35)."""
+    from flinch import __version__
+
+    resp = app_client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json() == {"name": "flinch", "version": __version__, "docs": "/docs"}
+
+
+def test_no_static_mount(app_client) -> None:
+    """No `/static` mount and no static folder in the package after the switch-over (B35)."""
+    import flinch.app
+
+    assert not any(getattr(r, "path", None) == "/static" for r in flinch.app.app.routes)
+    assert not (ROOT / "flinch" / "static").exists()
+    assert app_client.get("/static/index.html").status_code == 404
+
+
 def test_no_base_http_middleware() -> None:
     """Only pure ASGI middleware: BaseHTTPMiddleware breaks streaming disconnects (B32)."""
     from starlette.middleware.base import BaseHTTPMiddleware

@@ -155,8 +155,9 @@ export function sortComparisons(rows: unknown): ComparisonSummary[] {
 }
 
 /**
- * The sidecar names a comparison "Compare {date} {em dash} claude vs gpt";
- * the UI never shows an em dash (brief 5.7 rule 1), so it becomes a middle dot.
+ * Since 0.9 the sidecar names a comparison "Compare {date} · claude vs gpt".
+ * Names saved by 0.8 hold an em dash instead, which the UI never shows
+ * (brief 5.7 rule 1), so it becomes the same middle dot.
  */
 export function displayName(name: string): string {
   const emDash = String.fromCharCode(0x2014);

@@ -2,6 +2,8 @@
 // GET /api/settings/keys (tests/shapes.py `SettingsKey`); T13's types.ts
 // mirrors the same fields.
 
+import { KEY_ROW } from '$lib/copy/settings';
+
 export interface KeyEntry {
   env_var: string;
   provider: string;
@@ -38,8 +40,8 @@ export function keyLabel(entry: KeyEntry): string {
 
 /** "Set · {masked}" or "Not set". */
 export function keyStatus(entry: KeyEntry): string {
-  if (!entry.is_set) return 'Not set';
-  return entry.masked ? `Set · ${entry.masked}` : 'Set';
+  if (!entry.is_set) return KEY_ROW.notSet;
+  return entry.masked ? KEY_ROW.setMasked(entry.masked) : KEY_ROW.set;
 }
 
 /** Entries in KEY_ORDER; unknown providers keep their order after the known ones. */

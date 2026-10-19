@@ -7,8 +7,6 @@ import re
 import tomllib
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.9.0"
 
@@ -71,6 +69,5 @@ def test_cargo_version() -> None:
     assert _cargo_version() == VERSION
 
 
-@pytest.mark.skipif(not UI_PACKAGE.exists(), reason="ui/package.json is created in T10")
 def test_ui_package_version() -> None:
     assert json.loads(UI_PACKAGE.read_text(encoding="utf-8"))["version"] == VERSION

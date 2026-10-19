@@ -24,8 +24,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from flinch import __version__, db
@@ -101,7 +100,6 @@ _active_studies: dict[int, _StudyEntry] = {}
 # How long /start and /resume wait for the previous owner to release (K6).
 _STUDY_RELEASE_WAIT_S = 5.0
 
-STATIC_DIR = Path(__file__).parent / "static"
 PROBES_DIR = Path(__file__).parent / "probes"
 # FLINCH_VARIANTS_DIR lets the e2e sidecar save groups into a temp folder (I32).
 VARIANTS_DIR = Path(os.environ.get("FLINCH_VARIANTS_DIR") or Path(__file__).parent / "variants")
@@ -297,8 +295,6 @@ def _sse_response(gen: AsyncIterator[str], release: Callable[[], None] | None = 
     response.release = release
     return response
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # --- Request models ---
@@ -403,8 +399,9 @@ class ClearAllRequest(BaseModel):
 # --- Routes ---
 
 @app.get("/")
-async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+async def root():
+    """The sidecar is API-only; the app lives in ui/ (B35)."""
+    return {"name": "flinch", "version": __version__, "docs": "/docs"}
 
 
 # Version
@@ -1189,7 +1186,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
                 finding_text = f.get("finding", "")
                 probe_name = f.get("probe_name", "")
                 domain = f.get("probe_domain", "")
-                lines.append(f"{i}. **{probe_name}** ({domain}) — {journey}")
+                lines.append(f"{i}. **{probe_name}** ({domain}): {journey}")
                 lines.append(f"   > {finding_text}")
                 lines.append("")
         else:
@@ -1727,7 +1724,7 @@ async def compare_sessions(session_ids: str):
 
 @app.post("/api/compare/run")
 async def run_multi_model_compare(req: MultiModelCompareRequest):
-    """Run the same probe(s) against multiple models — creates real sessions/runs for persistence."""
+    """Run the same probe(s) against multiple models; creates real sessions/runs for persistence."""
     if len(req.models) < 2:
         raise HTTPException(400, "Need at least 2 models")
     if len(req.models) > 5:
@@ -1750,7 +1747,7 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
         short = model_name.split("-")[0] if "-" in model_name else model_name
         sid = db.create_session(
             _conn,
-            name=f"Compare {timestamp} — {short}",
+            name=f"Compare {timestamp} · {short}",
             target_model=model_name,
             coach_profile="standard",
             notes=f"Auto-created by multi-model comparison with {len(req.models)} models, {len(probes)} probes",
@@ -1819,7 +1816,7 @@ async def run_multi_model_compare(req: MultiModelCompareRequest):
 
     # Save comparison to DB for history/review
     timestamp = datetime.now().strftime("%m/%d %H:%M")
-    comparison_name = f"Compare {timestamp} — {' vs '.join(m.split('-')[0] for m in req.models)}"
+    comparison_name = f"Compare {timestamp} · {' vs '.join(m.split('-')[0] for m in req.models)}"
     comparison_id = db.save_comparison(
         _conn,
         name=comparison_name,
@@ -2359,7 +2356,7 @@ async def test_api_key(body: dict):
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            return {"ok": True, "message": f"Connected — {resp.model}"}
+            return {"ok": True, "message": f"Connected: {resp.model}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -2375,7 +2372,7 @@ async def test_api_key(body: dict):
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            return {"ok": True, "message": f"Connected — {resp.model}"}
+            return {"ok": True, "message": f"Connected: {resp.model}"}
         except ImportError:
             return {"ok": False, "error": "openai package not installed (pip install openai)"}
         except Exception as e:
@@ -2391,7 +2388,7 @@ async def test_api_key(body: dict):
             resp = await client.aio.models.generate_content(
                 model="gemini-2.5-flash", contents="Hi",
             )
-            return {"ok": True, "message": "Connected — Gemini"}
+            return {"ok": True, "message": "Connected: Gemini"}
         except ImportError:
             return {"ok": False, "error": "google-genai package not installed (pip install google-genai)"}
         except Exception as e:
@@ -2598,7 +2595,7 @@ async def export_all():
 
 @app.post("/api/sessions/{session_id}/stat-run")
 async def start_stat_run(session_id: int, req: StartStatRunRequest):
-    """Start a statistical run — runs probes N times each, streaming progress via SSE."""
+    """Start a statistical run: runs probes N times each, streaming progress via SSE."""
     from flinch.stat_runner import run_statistical_batch
 
     session = db.get_session(_conn, session_id)
@@ -3305,7 +3302,7 @@ async def api_condition_comparison(experiment_id: int):
 
 @app.get("/api/experiments/{experiment_id}/condition-export")
 async def api_condition_export_csv(experiment_id: int):
-    """Export all responses with metrics as CSV — one row per response."""
+    """Export all responses with metrics as CSV, one row per response."""
     async with get_async_db() as db_conn:
         async with db_conn.execute(
             """SELECT

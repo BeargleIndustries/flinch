@@ -10,6 +10,7 @@
 <script lang="ts">
   import { status } from '$lib/stores/status.svelte';
   import { occupied, OCCUPIED } from '$lib/popup/occupied.svelte';
+  import { PROGRESS } from '$lib/copy/shell';
   import { progressLine, progressPct } from './stream-progress';
 
   const ERROR_MS = 8000;
@@ -68,7 +69,7 @@
 <div
   bind:this={strip}
   role="region"
-  aria-label="Status"
+  aria-label={PROGRESS.statusRegion}
   data-status-strip
   class="fixed inset-x-0 bottom-0 z-[45] flex h-9 items-center gap-6 border-t border-border bg-surface/95 px-4 text-xs backdrop-blur"
 >
@@ -93,9 +94,11 @@
         >{progressLine(job.completed, job.total)}</span
       >
       {#if job.failed > 0}
-        <span class="shrink-0 font-mono tabular-nums text-danger">{job.failed} failed</span>
+        <span class="shrink-0 font-mono tabular-nums text-danger"
+          >{PROGRESS.failed(job.failed)}</span
+        >
       {/if}
-      <a href={job.route} class="shrink-0 {link}">Show</a>
+      <a href={job.route} class="shrink-0 {link}">{PROGRESS.show}</a>
       {#if job.cancel}
         <button
           type="button"
@@ -103,7 +106,7 @@
           disabled={cancelling}
           class="shrink-0 text-text3 hover:text-text focus:outline-none focus-visible:text-text disabled:opacity-50"
         >
-          {cancelling ? 'Cancelling…' : 'Cancel'}
+          {cancelling ? PROGRESS.cancelling : PROGRESS.cancel}
         </button>
       {/if}
     {:else if notice}
@@ -127,14 +130,14 @@
           aria-expanded={detailsOpen}
           aria-controls="status-details-{uid}"
           onclick={() => (detailsOpen = !detailsOpen)}
-          class="shrink-0 {link}">{detailsOpen ? 'Hide details' : 'Details'}</button
+          class="shrink-0 {link}">{detailsOpen ? PROGRESS.hideDetails : PROGRESS.details}</button
         >
       {/if}
       <button
         type="button"
         onclick={() => status.dismissError(err.id)}
         class="shrink-0 text-text3 hover:text-text focus:outline-none focus-visible:text-text"
-        >Dismiss</button
+        >{PROGRESS.dismiss}</button
       >
       {#if detailsOpen && err.details}
         <div

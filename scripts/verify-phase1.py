@@ -174,16 +174,14 @@ def run_case(label: str, port: int, db_path: Path | None) -> None:
             fail(f"/api/settings/capabilities values must be booleans: {caps!r}")
         log(f"/api/settings/capabilities OK: {caps}")
 
-        # T35 makes this check unconditional once `/` stops serving the legacy page.
         status, body = http_get(f"http://127.0.0.1:{port}/")
         try:
             root = json.loads(body)
         except json.JSONDecodeError:
-            log("GET / does not answer JSON yet; skipping the root check")
-        else:
-            if status != 200 or not isinstance(root, dict) or root.get("name") != "flinch":
-                fail(f'GET / expected 200 with {{"name": "flinch"}}, got {status}: {root!r}')
-            log("GET / OK")
+            fail(f"GET / body is not JSON: {body[:200]!r}")
+        if status != 200 or not isinstance(root, dict) or root.get("name") != "flinch":
+            fail(f'GET / expected 200 with {{"name": "flinch"}}, got {status}: {root!r}')
+        log("GET / OK")
 
         if db_path is not None:
             if not db_path.exists():

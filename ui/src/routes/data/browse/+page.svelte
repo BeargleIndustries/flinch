@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Browse (brief 9.1): everything this install has recorded. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import Browse from '$lib/components/data/Browse.svelte';
 </script>
 
-<ScreenPlaceholder title="Browse" question={SCREENS.browse} />
+<Browse />

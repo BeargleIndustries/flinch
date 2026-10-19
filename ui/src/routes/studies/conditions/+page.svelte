@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Conditions studies (brief 8.2.1): every study, newest first. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import ConditionsList from '$lib/components/studies/ConditionsList.svelte';
 </script>
 
-<ScreenPlaceholder title="Conditions" question={SCREENS['conditions.list']} />
+<ConditionsList />

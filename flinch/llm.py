@@ -170,12 +170,13 @@ def get_best_available_backend() -> LLMBackend | None:
     # Try Ollama as last resort
     try:
         import httpx
-        resp = httpx.get("http://localhost:11434/api/tags", timeout=2)
+        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
         if resp.status_code == 200:
             models = resp.json().get("models", [])
             if models:
                 return OpenAICompatibleBackend(
-                    base_url="http://localhost:11434/v1",
+                    base_url=f"{ollama_url}/v1",
                     api_key="ollama",
                     default_model=models[0]["name"],
                 )

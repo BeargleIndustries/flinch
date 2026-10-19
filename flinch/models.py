@@ -215,7 +215,7 @@ class ExperimentStatus(str, Enum):  # noqa: UP042 (StrEnum changes str() output)
 
 class ConditionCreate(BaseModel):
     label: str = Field(..., min_length=1, max_length=100)
-    system_prompt: str = Field(..., min_length=1)
+    system_prompt: str = Field(default="", max_length=10000)
     description: str = ""
     sort_order: int = 0
 

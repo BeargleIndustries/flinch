@@ -481,6 +481,10 @@
   },
   {
     "method": "GET",
+    "path": "/api/settings/capabilities"
+  },
+  {
+    "method": "GET",
     "path": "/api/settings/coach-default"
   },
   {

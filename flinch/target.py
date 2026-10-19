@@ -287,9 +287,16 @@ class OllamaTarget(OpenAITarget):
 
     DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
+    @staticmethod
+    def default_base_url() -> str:
+        """`LOCAL_MODEL_URL`, else the Settings Ollama URL (`OLLAMA_BASE_URL`) plus /v1."""
+        return os.environ.get("LOCAL_MODEL_URL") or (
+            os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1"
+        )
+
     def __init__(self, model: str, system_prompt: str = "",
                  base_url: str | None = None, **kwargs):
-        url = base_url or os.environ.get("LOCAL_MODEL_URL", self.DEFAULT_BASE_URL)
+        url = base_url or self.default_base_url()
         # Strip "ollama:" prefix if present — the server just wants the bare model name
         bare_model = model.removeprefix("ollama:")
         # OpenAI client requires an api_key; local servers don't need one
@@ -309,7 +316,7 @@ class OllamaTarget(OpenAITarget):
         OpenAI-compatible /v1/models.  Returns bare model name strings.
         Returns empty list if server is unreachable.
         """
-        url = base_url or os.environ.get("LOCAL_MODEL_URL", cls.DEFAULT_BASE_URL)
+        url = base_url or cls.default_base_url()
         ollama_base = url.rstrip("/").removesuffix("/v1")
 
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -336,7 +343,7 @@ class OllamaTarget(OpenAITarget):
     @classmethod
     async def is_available(cls, base_url: str | None = None) -> bool:
         """Check if the local model server is reachable."""
-        url = base_url or os.environ.get("LOCAL_MODEL_URL", cls.DEFAULT_BASE_URL)
+        url = base_url or cls.default_base_url()
         ollama_base = url.rstrip("/").removesuffix("/v1")
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:

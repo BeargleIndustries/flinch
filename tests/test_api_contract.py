@@ -45,3 +45,67 @@ def test_settings_keys_shape(app_client, monkeypatch: pytest.MonkeyPatch) -> Non
     by_provider = {e["provider"]: e for e in entries}
     assert by_provider["anthropic"]["is_set"] is True
     assert by_provider["openai"]["is_set"] is False
+
+
+def test_health_shape(app_client) -> None:
+    """Version, database path and the number of keys set (B21)."""
+    import os
+
+    from flinch import __version__
+
+    resp = app_client.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"status", "version", "db_path", "keys_set"}
+    assert body["status"] == "ok"
+    assert body["version"] == __version__
+    assert body["db_path"] == str(Path(os.environ["FLINCH_DB_PATH"]).resolve())
+    # conftest sets ANTHROPIC_API_KEY and unsets the other four.
+    assert body["keys_set"] == 1
+
+
+def test_capabilities_shape(app_client) -> None:
+    """Four booleans from the installed packages (B21)."""
+    import importlib.util
+
+    resp = app_client.get("/api/settings/capabilities")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"pdf", "experiment_extras", "openai_sdk", "google_sdk"}
+    assert all(isinstance(v, bool) for v in body.values())
+    assert body["openai_sdk"] is (importlib.util.find_spec("openai") is not None)
+    extras = all(importlib.util.find_spec(m) for m in ("numpy", "scipy", "krippendorff"))
+    assert body["experiment_extras"] is extras
+
+
+def test_no_store_header(app_client, fake_target, keyword_classifier) -> None:
+    """API and health responses are never cached; SSE keeps its own no-cache (B32)."""
+    import flinch.app
+    from flinch import db
+
+    for path in ("/api/version", "/health", "/api/settings/capabilities"):
+        resp = app_client.get(path)
+        assert resp.headers["cache-control"] == "no-store", path
+    assert app_client.get("/api/sessions/999999").headers["cache-control"] == "no-store"
+    assert "no-store" not in app_client.get("/").headers.get("cache-control", "")
+
+    session_id = db.create_session(flinch.app._conn, "SSE header check", target_model="fake-model")
+    probe_id = db.create_probe(flinch.app._conn, "sse-probe", "test", "Say hello.")
+    resp = app_client.post(
+        f"/api/sessions/{session_id}/batch", json={"probe_ids": [probe_id], "delay_ms": 0}
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert resp.headers["cache-control"] == "no-cache"
+
+
+def test_no_base_http_middleware() -> None:
+    """Only pure ASGI middleware: BaseHTTPMiddleware breaks streaming disconnects (B32)."""
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    import flinch.app
+
+    classes = [m.cls for m in flinch.app.app.user_middleware]
+    assert flinch.app.NoStoreMiddleware in classes
+    offenders = [c for c in classes if isinstance(c, type) and issubclass(c, BaseHTTPMiddleware)]
+    assert not offenders

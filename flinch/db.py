@@ -8,6 +8,8 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
+from flinch import __version__
+
 try:
     import aiosqlite
 except ImportError:
@@ -483,6 +485,12 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     results TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- App settings that survive a sidecar restart (JSON-encoded values)
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -587,6 +595,33 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
         )""")
         conn.commit()
     return conn
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default=None):
+    """Read a JSON-encoded value from app_settings, or `default` when absent."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    return json.loads(row[0])
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
+    """Write a JSON-encoded value to app_settings."""
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, json.dumps(value)),
+    )
+    conn.commit()
+
+
+def sweep_interrupted_runs(conn: sqlite3.Connection) -> None:
+    """Settle rows a crashed sidecar left `running` (I16)."""
+    conn.execute("UPDATE experiments SET status = 'paused' WHERE status = 'running'")
+    conn.execute("UPDATE batch_runs SET status = 'cancelled' WHERE status = 'running'")
+    for table in ("stat_runs", "sequence_batches", "sequences", "sequence_runs"):
+        conn.execute(f"UPDATE {table} SET status = 'failed' WHERE status = 'running'")
+    conn.commit()
 
 
 def get_async_db():
@@ -2523,7 +2558,7 @@ def delete_comparison(conn, comparison_id):
 def export_all_data(conn):
     """Assemble all data for bulk export."""
     result = {
-        "flinch_version": "0.2",
+        "flinch_version": __version__,
         "export_type": "full_export",
     }
 

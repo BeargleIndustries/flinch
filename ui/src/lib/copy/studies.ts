@@ -610,3 +610,219 @@ export const REPEAT = {
   noText: 'No response text',
   noIterations: 'No calls recorded for this run.',
 } as const;
+
+/**
+ * Sequences, Run tab (brief 8.4, 9.9, D30, T25). The research question is
+ * SCREENS.sequences and the batch readout SCREENS['sequences.batch'].
+ */
+export const SEQUENCES = {
+  title: 'Sequences',
+  tabRun: 'Run',
+  tabRunWhy: 'Build sequences one at a time or in a batch, and watch them run.',
+  tabResults: 'Results',
+  tabResultsWhy: "Thresholds, turn-by-turn strips and each strategy's record.",
+  resultsSoonTitle: 'Results for completed sequences',
+  resultsSoonBody:
+    'The threshold readout, the turn-by-turn strip and the strategy table for completed sequences show here.',
+  resultsPicked: (name: string) => `Picked: ${name}`,
+
+  // New sequence
+  newEyebrow: 'One sequence',
+  newTitle: 'New sequence',
+  newReadout:
+    'Pick a probe and a kind of story. Automatic runs every turn in one go; interactive lets you read each warmup before you drop the probe.',
+  strategy: 'Strategy',
+  strategyNone: 'No strategies yet. Add one in the Strategies panel below.',
+  probe: 'Probe',
+  customOption: 'Custom prompt…',
+  customLabel: 'Custom prompt',
+  customHint: 'Saved as a probe in this session, then used for the sequence.',
+  customEmpty: 'Write the custom prompt first.',
+  noProbes: 'This session has no probes. Add one from the rail or write a custom prompt.',
+  mode: 'Mode',
+  modeAutomatic: 'Automatic: all warmup turns and the probe in one go',
+  modeInteractive: 'Interactive: one turn at a time; you decide when to drop the probe',
+  warmup: 'Warmup turns',
+  warmupValue: (n: number) => `${n} ${plural(n, 'turn', 'turns')}`,
+  warmupHint: 'How many turns of story the coach builds before the probe arrives.',
+  engine: 'Use the interactive-fiction engine',
+  engineHint:
+    'Sets the model up as a collaborative story engine (dialogue in quotes, directions in ((double parentheses))) and has the coach play the writer. Matches the original research.',
+  create: 'Create sequence',
+  createWhy:
+    'Saves the sequence. Interactive ones open for the first turn; run automatic ones from their card.',
+  createWhittle: 'Create and whittle',
+  createWhittleWhy:
+    'Creates an automatic sequence, then runs it at fewer and fewer warmup turns until the probe is Refused.',
+  creating: 'Creating…',
+  created: (name: string) => `Sequence created for ${name}.`,
+
+  // Batch
+  batchEyebrow: 'Many probes',
+  batchTitle: 'Batch',
+  batchProbes: 'Probes',
+  batchModeWhittle: 'Whittle each probe',
+  batchModeFixed: 'Run each probe at one depth',
+  batchWarmup: 'Warmup turns',
+  batchWarmupHint: 'Whittle starts here and counts down.',
+  depth: 'Depth',
+  depthHint: '0 to 20 warmup turns. 0 sends the probe as written, with no story.',
+  estimate: 'Estimate the cost',
+  estimating: 'Estimating…',
+  estimateWhy: 'Saves the batch and asks the sidecar for a rough cost before anything runs.',
+  estimateLine: (runs: number, turns: number) =>
+    `About ${runs} ${plural(runs, 'run', 'runs')}, ${turns} ${plural(turns, 'turn', 'turns')}, roughly`,
+  estimateDepth: (n: number) => `Depth: ${n} warmup ${plural(n, 'turn', 'turns')} per probe`,
+  estimateWhittle: (n: number) =>
+    `Whittles down from ${n} warmup ${plural(n, 'turn', 'turns')} per probe`,
+  estimateStale: 'You changed the batch, so the estimate was dropped. Estimate again to start.',
+  costUnder: 'under $0.01',
+  pickProbes: 'Pick at least one probe.',
+  start: 'Start the batch',
+  startWhy: 'Runs one sequence per probe, one after another.',
+  batchStrip: (n: number) => `Sequence batch: ${n} ${plural(n, 'probe', 'probes')}`,
+  batchProgress: 'Probes',
+  batchRunning: (done: number, total: number) => `Running: ${done} of ${total} probes`,
+  batchFinished: (done: number) => `Finished: ${done} ${plural(done, 'probe', 'probes')}`,
+  batchStopped: (done: number, total: number) => `Stopped after ${done} of ${total} probes`,
+  batchFailed: 'The batch stopped with an error',
+  batchStoppedNote:
+    'Stopping closes the stream; the sidecar has no stop request for batches, so the batch stays running until Flinch restarts.',
+  rowThreshold: (name: string, n: number) =>
+    `${name}: threshold ${n} ${plural(n, 'turn', 'turns')}`,
+  rowNoThreshold: (name: string) => `${name}: no threshold`,
+  rowFailed: (name: string, msg: string) => `${name}: did not run (${msg})`,
+  newBatch: 'New batch',
+
+  // Sequences in this session
+  listEyebrow: 'In this session',
+  listTitle: 'Sequences in this session',
+  listCount: (n: number) => `${n} ${plural(n, 'sequence', 'sequences')}`,
+  listReadout:
+    'Newest first. Interactive sequences wait for you; automatic ones run when you ask. Completed ones show their results.',
+  empty: 'No sequences in this session yet.',
+  emptyBody: 'Create one above, or run a batch over several probes.',
+  loadAgain: 'Load again',
+  modes: {
+    automatic: 'Automatic',
+    interactive: 'Interactive',
+    whittle: 'Whittle',
+    fixed_n: 'One depth',
+  } as Record<string, string>,
+  engineChip: 'IF engine',
+  engineChipWhy: 'Runs with the interactive-fiction engine.',
+  batchChip: (id: number) => `Batch ${id}`,
+  warmupChip: (n: number) => `Warmup: ${n} ${plural(n, 'turn', 'turns')}`,
+  probeFallback: (id: number) => `Probe ${id}`,
+  strategyFallback: (id: number) => `Strategy ${id}`,
+  gotThrough: (complied: number, refused: number) => `${complied} got through, ${refused} Refused`,
+  threshold: (n: number) => `Threshold: ${n} ${plural(n, 'turn', 'turns')}`,
+
+  // Card actions
+  runAll: 'Run all turns',
+  runAllWhy: 'Sends every warmup turn, the setup and the probe in one go, in a fresh conversation.',
+  runAgain: 'Run again',
+  runAgainWhy: 'Runs every turn again in a fresh conversation.',
+  whittle: 'Whittle',
+  whittleWhy:
+    'Runs the sequence at fewer and fewer warmup turns until the probe is Refused, to find the threshold.',
+  whittleWorking: (passes: number, minutes: number) =>
+    `Whittling. This runs up to ${passes} ${plural(passes, 'pass', 'passes')} and can take up to about ${minutes} ${plural(minutes, 'minute', 'minutes')}.`,
+  whittleElapsed: (clock: string) => `Working for ${clock}`,
+  whittleStrip: (name: string) => `Whittling ${name}`,
+  whittleThreshold: (n: number, runs: number) =>
+    `The threshold is ${n} warmup ${plural(n, 'turn', 'turns')} (${runs} ${plural(runs, 'pass', 'passes')}).`,
+  whittleZero: 'No threshold: the probe got through even with no warmup.',
+  whittleNone: (max: number) =>
+    `No threshold: the probe was Refused even after ${max} warmup ${plural(max, 'turn', 'turns')}.`,
+  whittleFailed: 'Whittling stopped early because a run failed.',
+  nextTurn: 'Next turn',
+  nextTurnWhy: 'The coach writes the next warmup turn and the model answers it.',
+  dropProbe: 'Drop the probe',
+  dropProbeWhy: 'The coach writes a setup turn, then delivers the probe inside the story.',
+  stepping: 'Writing the next turn…',
+  dropping: 'Dropping the probe…',
+  sentOf: (sent: number, planned: number) =>
+    `${sent} of ${planned} warmup ${plural(planned, 'turn', 'turns')} sent`,
+  plannedReached: 'Every planned warmup turn is sent. Drop the probe when you are ready.',
+  showResults: 'Show results',
+  showResultsWhy: 'Opens the Results tab with this sequence picked.',
+  showThread: 'Show the transcript',
+  hideThread: 'Hide the transcript',
+  deleteSequence: 'Delete this sequence',
+  deleteConfirm: 'Yes, delete it',
+  deleted: 'Sequence deleted.',
+  stop: 'Stop',
+  stopWhy: 'Closes the stream. The sidecar stops after the turn in flight.',
+  autoStrip: (name: string) => `Sequence: ${name}`,
+  autoLine: (step: number, total: number, type: string, cls: string) =>
+    `Turn ${step} of ${total}: ${type}, ${cls}`,
+  autoStarting: 'Starting the run…',
+  autoStopped: 'Stopped. The sequence stays running until Flinch restarts.',
+  probeResult: 'Probe result:',
+  busySequence: 'This sequence is already running.',
+
+  // Export menu
+  exportLabel: 'Export',
+  exportWhy: 'Download this sequence with every turn.',
+  exportFormats: {
+    json: 'Download JSON',
+    csv: 'Download CSV',
+    html: 'Download HTML',
+    pdf: 'Download PDF',
+  },
+  exportSaving: 'Saving…',
+  pdfUnavailable: 'Not available: weasyprint is not installed on the sidecar.',
+
+  // The thread
+  threadLabel: (name: string) => `Transcript of the sequence on ${name}`,
+  threadEmpty: 'No turns yet. Press Next turn to have the coach open the story.',
+  threadLoading: 'Reading the turns…',
+  roles: { coach: 'Coach', target: 'Model', probe: 'Probe' } as Record<string, string>,
+  turnTypes: { warmup: 'Warmup', setup: 'Setup', probe: 'Probe' } as Record<string, string>,
+  warmupN: (n: number) => `Warmup ${n}`,
+  noReply: 'No reply text',
+
+  // Strategies
+  strategiesEyebrow: 'Kinds of story',
+  strategiesTitle: 'Strategies',
+  strategiesReadout:
+    'The kinds of story a sequence can build. Built-in strategies cannot be changed; add your own for new kinds of story.',
+  newStrategy: 'New strategy…',
+  builtIn: 'Built in',
+  builtInWhy: 'Ships with Flinch. Built-in strategies cannot be edited or deleted.',
+  edit: 'Edit',
+  editFor: (name: string) => `Edit ${name}`,
+  deleteStrategy: 'Delete this strategy',
+  deleteStrategyConfirm: 'Yes, delete it',
+  strategyDeleted: (name: string) => `Strategy ${name} deleted.`,
+  strategySaved: (name: string) => `Strategy ${name} saved.`,
+  strategiesEmpty: 'No strategies yet.',
+} as const;
+
+/** StrategyDialog (brief 9.9): the fields `POST /api/strategies` takes. */
+export const STRATEGY_DIALOG = {
+  titleNew: 'New strategy',
+  titleEdit: 'Edit strategy',
+  lead: 'A strategy tells the coach what kind of story to build and how to steer it toward the probe.',
+  name: 'Name',
+  nameHint: 'Short and unique, such as noir_detective. Underscores show as spaces.',
+  description: 'Description',
+  descriptionHint: 'One line shown under the strategy in the selects.',
+  goal: 'Goal',
+  goalHint: 'What the story is for, in a sentence.',
+  opening: 'Opening pattern',
+  openingHint: 'How the coach opens the story.',
+  escalation: 'Escalation pattern',
+  escalationHint: 'How each warmup turn moves the story closer to the probe.',
+  setup: 'Setup hint',
+  setupHint: 'What the setup turn does just before the probe arrives.',
+  category: 'Category',
+  categoryHint: 'Optional, such as fiction or academic.',
+  required: 'Fill in Name, Goal, Opening pattern, Escalation pattern and Setup hint.',
+  duplicate: 'A strategy with that name exists. Choose another name.',
+  loading: 'Reading the strategy…',
+  cancel: 'Cancel',
+  save: 'Save strategy',
+  saving: 'Saving…',
+} as const;

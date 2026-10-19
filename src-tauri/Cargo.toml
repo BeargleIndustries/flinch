@@ -1,6 +1,6 @@
 [package]
 name = "flinch"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 description = "AI content restriction consistency research"
 license = "MIT"
@@ -21,6 +21,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
+# Minor versions match ui/package.json @tauri-apps/plugin-* (the CLI checks major.minor).
+tauri-plugin-dialog = "~2.7"
+tauri-plugin-fs = "~2.5"
+tauri-plugin-shell = "~2.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

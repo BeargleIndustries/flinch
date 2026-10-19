@@ -106,7 +106,9 @@ pub fn sidecar_needs_reinstall() -> bool {
     }
 }
 
-#[allow(dead_code)]
+/// The runtime is installed and its flinch package matches the bundled one
+/// (P01). After an app upgrade this is false until `bootstrap_runtime`
+/// reinstalls the package, so the shell never launches a stale sidecar.
 pub fn is_runtime_current() -> bool {
     is_runtime_ready() && !sidecar_needs_reinstall()
 }

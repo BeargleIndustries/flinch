@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Flinch",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "identifier": "com.beargle.flinch",
   "app": {
     "withGlobalTauri": true,
@@ -16,12 +16,15 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost http://tauri.localhost; connect-src 'self' ipc: http://ipc.localhost http://tauri.localhost http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: blob: http://tauri.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'",
-      "devCsp": "default-src 'self' ipc: http://ipc.localhost http://tauri.localhost; connect-src 'self' ipc: http://ipc.localhost http://tauri.localhost http://127.0.0.1:* ws://127.0.0.1:* http://localhost:5173 ws://localhost:5173 http://localhost:1420; img-src 'self' data: blob: http://tauri.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost http://tauri.localhost; connect-src 'self' ipc: http://ipc.localhost http://tauri.localhost http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: blob: http://tauri.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src blob:",
+      "devCsp": "default-src 'self' ipc: http://ipc.localhost http://tauri.localhost; connect-src 'self' ipc: http://ipc.localhost http://tauri.localhost http://127.0.0.1:* ws://127.0.0.1:* http://localhost:5173 ws://localhost:5173 http://localhost:1420; img-src 'self' data: blob: http://tauri.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; frame-src blob:"
     }
   },
   "build": {
-    "frontendDist": "../ui/legacy"
+    "frontendDist": "../ui/build",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeDevCommand": "npm run dev --prefix ./ui",
+    "beforeBuildCommand": "npm run build --prefix ./ui"
   },
   "bundle": {
     "active": true,
@@ -43,7 +46,6 @@
       "../README.md",
       "../flinch/*.py",
       "../flinch/playbook.md",
-      "../flinch/static/**/*",
       "../flinch/strategies/**/*",
       "../flinch/seeds/**/*",
       "../flinch/themes/**/*",

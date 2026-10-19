@@ -63,16 +63,10 @@ def test_full_export_version(app_client) -> None:
     assert db.export_all_data(flinch.app._conn)["flinch_version"] == VERSION
 
 
-@pytest.mark.skipif(
-    _tauri_conf_version() != VERSION, reason="src-tauri/tauri.conf.json is set to 0.9.0 in T34a"
-)
 def test_tauri_conf_version() -> None:
     assert _tauri_conf_version() == VERSION
 
 
-@pytest.mark.skipif(
-    _cargo_version() != VERSION, reason="src-tauri/Cargo.toml is set to 0.9.0 in T34a"
-)
 def test_cargo_version() -> None:
     assert _cargo_version() == VERSION
 

@@ -259,6 +259,8 @@ class CreateExperimentRequest(BaseModel):
     random_seed: int | None = None
     config: dict = Field(default_factory=dict)
     conditions: list[ConditionCreate] = Field(default_factory=list)
+    # Runs per (condition, prompt, model) cell, stored in config (B11)
+    repetitions: int = Field(default=1, ge=1, le=50)
 
 
 class Experiment(BaseModel):

@@ -76,8 +76,9 @@ async def _run_pipeline() -> None:
 
         await db_module.create_experiment_responses(db, exp_id)
         pending = await db_module.get_pending_responses(db, exp_id, limit=100)
-        expected_cells = 5 * 3 * 2  # prompts x conditions x models
+        expected_cells = 5 * 3 * 2  # prompts x conditions x models x 1 repetition
         assert len(pending) == expected_cells
+        assert {cell["repetition"] for cell in pending} == {0}
 
         # Phase 2: simulated responses
         label_by_condition = {cid: label for label, cid in conditions.items()}
@@ -146,9 +147,12 @@ async def _run_pipeline() -> None:
 
         # Phase 5: Prolific export
         exporter = ProlificExporter(db)
-        await exporter.generate_tasks(exp_id, prompt_count=5, model_ids=["test-model-1"])
+        tasks = await exporter.generate_tasks(exp_id, prompt_count=5, model_ids=["test-model-1"])
+        assert tasks["task_count"] == 5 * 3  # prompts x raters_per_task
+        again = await exporter.generate_tasks(exp_id, prompt_count=5, model_ids=["test-model-1"])
+        assert again["task_count"] == 0
         csv_output = await exporter.export_csv(exp_id)
-        assert len(csv_output) > 50
+        assert len(csv_output.strip().splitlines()) == 1 + 15
 
         # Phase 6: statistics
         stat_analyzer = ExperimentAnalyzer(db)

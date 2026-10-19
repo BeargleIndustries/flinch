@@ -456,7 +456,7 @@ class ExperimentAnalyzer:
         return results
 
     async def compute_paired_analysis(self, experiment_id: int) -> dict:
-        """Wilcoxon signed-rank test — responses paired by prompt_id.
+        """Wilcoxon signed-rank test: responses paired by (prompt_id, model_id), repetition 0 (I11).
         This is the PRIMARY analysis since responses are naturally paired.
         Fetches all metrics in one query per condition pair, then filters in Python.
         """
@@ -477,22 +477,22 @@ class ExperimentAnalyzer:
                 cid1 = cond_ids[labels[i]]
                 cid2 = cond_ids[labels[j]]
 
-                # Single query: fetch all metrics for both conditions, joined on prompt_id
+                # Single query: fetch all metrics for both conditions, joined on prompt and model
                 async with self.db.execute(f"""
                     SELECT a.prompt_id, {', '.join(f'a.{c}' for c in metrics_cols)},
                            {', '.join(f'b.{c}' for c in metrics_cols)}
                     FROM (
-                        SELECT er.prompt_id, {col_select}
+                        SELECT er.prompt_id, er.model_id, {col_select}
                         FROM response_metrics rm
                         JOIN experiment_responses er ON er.id = rm.response_id
-                        WHERE er.experiment_id = ? AND er.condition_id = ?
+                        WHERE er.experiment_id = ? AND er.condition_id = ? AND er.repetition = 0
                     ) a
                     JOIN (
-                        SELECT er.prompt_id, {col_select}
+                        SELECT er.prompt_id, er.model_id, {col_select}
                         FROM response_metrics rm
                         JOIN experiment_responses er ON er.id = rm.response_id
-                        WHERE er.experiment_id = ? AND er.condition_id = ?
-                    ) b ON a.prompt_id = b.prompt_id
+                        WHERE er.experiment_id = ? AND er.condition_id = ? AND er.repetition = 0
+                    ) b ON a.prompt_id = b.prompt_id AND a.model_id = b.model_id
                 """, (experiment_id, cid1, experiment_id, cid2)) as cursor:
                     rows = await cursor.fetchall()
 

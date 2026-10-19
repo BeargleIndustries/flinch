@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS experiment_responses (
     condition_id INTEGER NOT NULL REFERENCES experiment_conditions(id) ON DELETE CASCADE,
     prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
     model_id TEXT NOT NULL,
+    repetition INTEGER NOT NULL DEFAULT 0,
     response_text TEXT,
     raw_response TEXT,
     latency_ms INTEGER,
@@ -378,7 +379,7 @@ CREATE TABLE IF NOT EXISTS experiment_responses (
     created_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
     classification TEXT,
-    UNIQUE(experiment_id, condition_id, prompt_id, model_id)
+    UNIQUE(experiment_id, condition_id, prompt_id, model_id, repetition)
 );
 
 CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_status
@@ -544,6 +545,145 @@ def _migrate_experiment_responses_table(conn):
     conn.commit()
 
 
+# Columns carried over by the repetition rebuild (B11), in 0.8 order.
+_RESPONSE_COLUMNS_08 = (
+    "id", "experiment_id", "condition_id", "prompt_id", "model_id", "response_text",
+    "raw_response", "latency_ms", "token_count_input", "token_count_output", "finish_reason",
+    "status", "error_message", "attempt_count", "created_at", "completed_at", "classification",
+)
+
+# Tables whose keys point into or out of experiment_responses (A-m3: scoped check).
+REPETITION_KEY_CHECK_TABLES = ("experiment_responses", "response_metrics", "ai_rating_items", "eval_ratings")
+
+_RESPONSES_REPETITION_DDL = """CREATE TABLE experiment_responses_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    condition_id INTEGER NOT NULL REFERENCES experiment_conditions(id) ON DELETE CASCADE,
+    prompt_id INTEGER NOT NULL REFERENCES experiment_prompts(id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    repetition INTEGER NOT NULL DEFAULT 0,
+    response_text TEXT,
+    raw_response TEXT,
+    latency_ms INTEGER,
+    token_count_input INTEGER,
+    token_count_output INTEGER,
+    finish_reason TEXT,
+    status TEXT DEFAULT 'pending',
+    error_message TEXT,
+    attempt_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT,
+    classification TEXT,
+    UNIQUE(experiment_id, condition_id, prompt_id, model_id, repetition)
+)"""
+
+
+def _backup_before_repetition_migration(conn: sqlite3.Connection, path: Path) -> None:
+    """Write `{db}.bak-0.8` with the online backup API, once, and verify it (I31).
+
+    The backup API reads through `conn`, so pages still in the WAL are included.
+    An existing backup that passes `integrity_check` is kept; a damaged one is
+    replaced. The copy is switched to rollback-journal mode so it is one file.
+    """
+    if str(path) == ":memory:":
+        return
+    bak = Path(f"{path}.bak-0.8")
+    if bak.exists():
+        check = sqlite3.connect(str(bak))
+        try:
+            if check.execute("PRAGMA integrity_check").fetchone()[0] == "ok":
+                return
+        except sqlite3.DatabaseError:
+            pass
+        finally:
+            check.close()
+    tmp = Path(f"{bak}.tmp")
+    tmp.unlink(missing_ok=True)
+    dst = sqlite3.connect(str(tmp))
+    try:
+        conn.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")
+        result = dst.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        dst.close()
+    if result != "ok":
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Backup before the repetition migration failed its integrity check: {result}")
+    os.replace(tmp, bak)
+
+
+def _migrate_experiment_responses_repetition(conn: sqlite3.Connection, path: Path) -> None:
+    """Rebuild experiment_responses with a `repetition` column (B11, R1).
+
+    Backs up first, turns foreign keys off outside the transaction (dropping the
+    table with keys on would cascade-delete metrics and ratings), keeps ids,
+    carries `sqlite_sequence`, backfills `experiment_prompts.custom_prompt_text`
+    from probes (R23), and runs a scoped key check before commit. Any problem
+    rolls the whole rebuild back and raises.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(experiment_responses)").fetchall()}
+    if "repetition" in cols:
+        return
+    conn.commit()
+    _backup_before_repetition_migration(conn, path)
+    assert not conn.in_transaction
+    conn.execute("PRAGMA foreign_keys=OFF")
+    isolation = conn.isolation_level
+    conn.isolation_level = None  # explicit BEGIN/COMMIT below
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'experiment_responses'"
+            ).fetchone()
+            old_seq = row[0] if row else None
+            conn.execute(_RESPONSES_REPETITION_DDL)
+            src = ", ".join(_RESPONSE_COLUMNS_08)
+            dst = src.replace("model_id,", "model_id, repetition,", 1)
+            sel = src.replace("model_id,", "model_id, 0,", 1)
+            conn.execute(
+                f"INSERT INTO experiment_responses_new ({dst}) SELECT {sel} FROM experiment_responses"
+            )
+            conn.execute("DROP TABLE experiment_responses")
+            conn.execute("ALTER TABLE experiment_responses_new RENAME TO experiment_responses")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_status "
+                "ON experiment_responses(experiment_id, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_expr_resp_exp_cond_prompt_model "
+                "ON experiment_responses(experiment_id, condition_id, prompt_id, model_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_expr_resp_model ON experiment_responses(model_id)"
+            )
+            if old_seq is not None:
+                updated = conn.execute(
+                    "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'experiment_responses'",
+                    (old_seq,),
+                ).rowcount
+                if not updated:
+                    conn.execute(
+                        "INSERT INTO sqlite_sequence (name, seq) VALUES ('experiment_responses', ?)",
+                        (old_seq,),
+                    )
+            conn.execute(
+                "UPDATE experiment_prompts SET custom_prompt_text = "
+                "(SELECT prompt_text FROM probes WHERE probes.id = experiment_prompts.probe_id) "
+                "WHERE custom_prompt_text IS NULL AND probe_id IS NOT NULL"
+            )
+            for table in REPETITION_KEY_CHECK_TABLES:
+                if conn.execute(f"PRAGMA foreign_key_check({table})").fetchone():
+                    raise RuntimeError(f"Repetition migration found broken references in {table}")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.isolation_level = isolation
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     # Re-read env var at call time so FLINCH_DB_PATH set after module import is respected
     path = db_path or Path(os.environ.get("FLINCH_DB_PATH", str(DB_PATH)))
@@ -556,6 +696,7 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     _migrate_sessions_table(conn)
     _migrate_response_metrics_table(conn)
     _migrate_experiment_responses_table(conn)
+    _migrate_experiment_responses_repetition(conn, path)
     # Migrations: add columns that may not exist in older DBs
     try:
         conn.execute("ALTER TABLE sessions ADD COLUMN system_prompt TEXT DEFAULT ''")
@@ -3335,7 +3476,8 @@ async def list_experiment_prompts(db, experiment_id):
 
 async def create_experiment_responses(db, experiment_id):
     """Pre-create all response matrix cells (pending) for the experiment.
-    For each prompt × condition × model, insert a row with status='pending'.
+    For each prompt × condition × model × repetition, insert a row with status='pending'
+    (`config.repetitions`, default 1, B11).
     Uses INSERT OR IGNORE to support resume (don't duplicate existing cells)."""
     exp = await get_experiment(db, experiment_id)
     if not exp:
@@ -3345,6 +3487,7 @@ async def create_experiment_responses(db, experiment_id):
     if isinstance(base_model_ids, str):
         base_model_ids = json.loads(base_model_ids) if base_model_ids else []
     all_model_ids = model_ids + base_model_ids
+    repetitions = int((exp.get("config") or {}).get("repetitions", 1))
 
     async with db.execute(
         "SELECT id FROM experiment_conditions WHERE experiment_id = ?", (experiment_id,)
@@ -3359,16 +3502,18 @@ async def create_experiment_responses(db, experiment_id):
     for cond_row in cond_rows:
         for prompt_row in prompt_rows:
             for model_id in all_model_ids:
-                cells.append((
-                    experiment_id,
-                    cond_row["id"],
-                    prompt_row["id"],
-                    model_id,
-                ))
+                for repetition in range(repetitions):
+                    cells.append((
+                        experiment_id,
+                        cond_row["id"],
+                        prompt_row["id"],
+                        model_id,
+                        repetition,
+                    ))
     await db.executemany(
         """INSERT OR IGNORE INTO experiment_responses
-           (experiment_id, condition_id, prompt_id, model_id, status)
-           VALUES (?, ?, ?, ?, 'pending')""",
+           (experiment_id, condition_id, prompt_id, model_id, repetition, status)
+           VALUES (?, ?, ?, ?, ?, 'pending')""",
         cells,
     )
     await db.commit()
@@ -3467,6 +3612,7 @@ async def get_pending_responses(db, experiment_id, limit=100, after_id=0):
                er.condition_id,
                er.prompt_id,
                er.model_id,
+               er.repetition,
                er.attempt_count,
                ec.label as condition_label,
                ec.system_prompt as condition_system_prompt,
@@ -3626,8 +3772,11 @@ async def list_ai_ratings(db, experiment_id):
 
 # --- Eval Task CRUD ---
 
-async def create_eval_tasks(db, tasks):
-    """Bulk insert eval_tasks rows."""
+async def create_eval_tasks(db, tasks) -> int:
+    """Bulk insert eval_tasks rows; a task whose tracking_id exists is skipped (B14).
+
+    Returns the number of rows actually inserted.
+    """
     rows = [
         (
             t["experiment_id"],
@@ -3640,13 +3789,16 @@ async def create_eval_tasks(db, tasks):
         )
         for t in tasks
     ]
+    before = db.total_changes
     await db.executemany(
-        """INSERT INTO eval_tasks
+        """INSERT OR IGNORE INTO eval_tasks
            (experiment_id, batch_id, prompt_id, target_model_id, blinding_order, tracking_id, status)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
+    inserted = db.total_changes - before
     await db.commit()
+    return inserted
 
 
 async def list_eval_tasks(db, experiment_id):

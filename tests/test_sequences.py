@@ -230,7 +230,7 @@ def test_fixed_n_batch(seq_env, fixed_n: int) -> None:
 
 def test_experiment_estimate(app_client) -> None:
     exp = app_client.post("/api/experiments", json={
-        "name": "est", "model_ids": ["gpt-4o", "claude-sonnet-4-6"],
+        "name": "est", "model_ids": ["gpt-4o", "claude-sonnet-4-6"], "repetitions": 2,
         "conditions": [{"label": "a"}, {"label": "b"}],
     }).json()["experiment"]
     app_client.post(f"/api/experiments/{exp['id']}/prompts", json=[
@@ -239,8 +239,9 @@ def test_experiment_estimate(app_client) -> None:
     resp = app_client.post(f"/api/experiments/{exp['id']}/estimate")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["cells"] == body["prompts"] * body["conditions"] * body["models"] == 12
-    assert body["estimate"]["total_cells"] == 12
+    assert body["repetitions"] == 2
+    assert body["cells"] == body["prompts"] * body["conditions"] * body["models"] * body["repetitions"] == 24
+    assert body["estimate"]["total_cells"] == 24
     assert isinstance(body["estimate"]["estimated_cost_usd"], float)
 
     assert app_client.post("/api/experiments/999999/estimate").status_code == 404

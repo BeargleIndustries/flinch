@@ -78,6 +78,7 @@ class UpdateExperimentRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     config: dict | None = None
+    repetitions: int | None = Field(default=None, ge=1, le=50)  # merged into config (B11)
     # status is NOT allowed here - managed by pipeline
 
 # App state
@@ -2808,7 +2809,7 @@ async def api_create_experiment(req: CreateExperimentRequest):
         exp_id = await create_experiment(
             db_conn, req.name, req.description,
             model_ids=req.model_ids, base_model_ids=req.base_model_ids,
-            random_seed=req.random_seed, config=req.config,
+            random_seed=req.random_seed, config={**req.config, "repetitions": req.repetitions},
         )
         for cond in req.conditions:
             await create_condition(db_conn, exp_id, cond.label, cond.system_prompt, cond.description, cond.sort_order)
@@ -2839,6 +2840,14 @@ async def api_get_experiment(experiment_id: int):
 async def api_update_experiment(experiment_id: int, req: UpdateExperimentRequest):
     async with get_async_db() as db_conn:
         updates = {k: v for k, v in req.model_dump().items() if v is not None}
+        repetitions = updates.pop("repetitions", None)
+        if repetitions is not None:
+            if "config" not in updates:
+                exp = await get_experiment(db_conn, experiment_id)
+                if not exp:
+                    raise HTTPException(404, "Experiment not found")
+                updates["config"] = exp.get("config") or {}
+            updates["config"] = {**updates["config"], "repetitions": repetitions}
         if updates:
             await update_experiment(db_conn, experiment_id, **updates)
             await db_conn.commit()
@@ -2926,11 +2935,15 @@ async def api_estimate_experiment(experiment_id: int):
     model_ids = json.loads(exp.get("model_ids", "[]")) if isinstance(exp.get("model_ids"), str) else exp.get("model_ids", [])
     base_ids = json.loads(exp.get("base_model_ids", "[]")) if isinstance(exp.get("base_model_ids"), str) else exp.get("base_model_ids", [])
     total_models = len(model_ids) + len(base_ids)
-    total_cells = len(prompts) * len(conditions) * total_models
+    repetitions = int((exp.get("config") or {}).get("repetitions", 1))
+    total_cells = len(prompts) * len(conditions) * total_models * repetitions
     from flinch.runner import ExperimentRunner
     runner = ExperimentRunner(None, None)
     estimate = runner.estimate_cost(total_cells)
-    return {"estimate": estimate, "cells": total_cells, "prompts": len(prompts), "conditions": len(conditions), "models": total_models}
+    return {
+        "estimate": estimate, "cells": total_cells, "prompts": len(prompts),
+        "conditions": len(conditions), "models": total_models, "repetitions": repetitions,
+    }
 
 
 def _release(experiment_id: int, token: object) -> None:
@@ -3107,9 +3120,12 @@ async def api_generate_prolific(experiment_id: int, req: GenerateProlificExportR
     from flinch.prolific import ProlificExporter
     async with get_async_db() as db_conn:
         exporter = ProlificExporter(db_conn)
-        result = await exporter.generate_tasks(
-            experiment_id, req.prompt_count, req.model_ids, req.raters_per_task, req.batch_id,
-        )
+        try:
+            result = await exporter.generate_tasks(
+                experiment_id, req.prompt_count, req.model_ids, req.raters_per_task, req.batch_id,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
     return result
 
 
@@ -3220,8 +3236,24 @@ async def api_get_metrics(experiment_id: int):
 
 
 @app.get("/api/experiments/{experiment_id}/export")
-async def api_export_experiment(experiment_id: int):
-    """Full experiment data export as JSON."""
+async def api_export_experiment(experiment_id: int, format: str = "json"):
+    """Full experiment data export as JSON, or every response row as JSON Lines (B06)."""
+    if format == "jsonl":
+        async def rows():
+            # Own connection: the handler's would be closed before the body streams.
+            async with get_async_db() as db_conn:
+                async with db_conn.execute(
+                    "SELECT * FROM experiment_responses WHERE experiment_id = ? ORDER BY id",
+                    (experiment_id,),
+                ) as cur:
+                    async for row in cur:
+                        yield json.dumps(dict(row), default=str) + "\n"
+
+        return ClosingStreamingResponse(
+            rows(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="study-{experiment_id}-responses.jsonl"'},
+        )
     async with get_async_db() as db_conn:
         exp = await get_experiment(db_conn, experiment_id)
         conditions = await list_conditions(db_conn, experiment_id)
@@ -3231,11 +3263,16 @@ async def api_export_experiment(experiment_id: int):
         evals = await list_eval_tasks(db_conn, experiment_id)
         analysis = await list_analysis_results(db_conn, experiment_id)
         metrics = await get_response_metrics(db_conn, experiment_id)
-    return {
+    body = {
         "experiment": exp, "conditions": conditions, "prompts": prompts,
         "progress": progress, "ratings": ratings, "eval_tasks": evals,
         "analysis": analysis, "metrics": metrics,
     }
+    return Response(
+        content=json.dumps(body, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="study-{experiment_id}.json"'},
+    )
 
 
 @app.get("/api/experiments/{experiment_id}/preregistration")
@@ -3266,6 +3303,8 @@ async def api_condition_export_csv(experiment_id: int):
                 COALESCE(ep.custom_prompt_text, p.prompt_text) AS probe_text,
                 COALESCE(ep.domain, p.domain, '') AS domain,
                 ec.label      AS condition_label,
+                er.model_id,
+                er.repetition,
                 ec.system_prompt,
                 er.classification,
                 er.response_text,
@@ -3289,7 +3328,7 @@ async def api_condition_export_csv(experiment_id: int):
             LEFT JOIN response_metrics rm ON rm.response_id = er.id
             WHERE er.experiment_id = ?
               AND er.status = 'completed'
-            ORDER BY ec.sort_order, ec.id, ep.sort_order, ep.id""",
+            ORDER BY ec.sort_order, ec.id, ep.sort_order, ep.id, er.model_id, er.repetition""",
             (experiment_id,),
         ) as cur:
             rows = await cur.fetchall()

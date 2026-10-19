@@ -25,7 +25,7 @@
   <Panel eyebrow={PROBE.cardEyebrow} title={probe?.name ?? PROBE.cardEyebrow}>
     {#snippet actions()}
       {#if probe?.domain}<span class={chip}>{probe.domain}</span>{/if}
-      {#each probe?.tags ?? [] as tag (tag)}
+      {#each [...new Set(probe?.tags ?? [])] as tag (tag)}
         <span class="{chip} text-text4">#{tag}</span>
       {/each}
     {/snippet}

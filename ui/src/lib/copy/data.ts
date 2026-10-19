@@ -20,7 +20,7 @@ export const BROWSE = {
   tileComparisons: 'Comparisons',
   tileSequences: 'Sequences',
   tileSessionsWhy: 'Sessions you made. Model compare sessions are not counted.',
-  tileRunsWhy: 'Every probe run, Model compare runs included.',
+  tileRunsWhy: 'Every probe run. Model compare runs are not counted.',
   firstResponses: 'First responses across every run',
   overviewLoading: 'Reading what this install has recorded…',
   exportAll: 'Export everything (JSON)',

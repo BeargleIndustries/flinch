@@ -36,8 +36,8 @@ Thumbs.db
 # Internal docs
 AUDIT.md
 
-# User data
-sessions/
+# User data (repo root only; ui/src/routes/data/browse/sessions/ is source)
+/sessions/
 
 # Rust / Cargo / Tauri
 target/

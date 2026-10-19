@@ -32,3 +32,25 @@ def test_model_compare_sessions_excluded_from_dashboard(app_client) -> None:
     assert browse == {kept}
     stats = app_client.get("/api/dashboard/stats").json()
     assert stats["total_sessions"] == len(browse) == 1
+
+
+def test_dashboard_run_counts_exclude_model_compare_sessions(app_client) -> None:
+    conn = flinch.app._conn
+    probe_id = db.create_probe(conn, "p-counts", "", "hello")
+    kept = db.create_session(conn, "kept")
+    hidden = db.create_session(conn, "compare", notes=MODEL_COMPARE_NOTES)
+    kept_run = db.create_run(conn, probe_id, kept, "claude-test")
+    hidden_run = db.create_run(conn, probe_id, hidden, "claude-test")
+    conn.execute(
+        "UPDATE runs SET initial_classification = 'refused' WHERE id = ?", (kept_run,)
+    )
+    conn.execute(
+        "UPDATE runs SET initial_classification = 'complied' WHERE id = ?", (hidden_run,)
+    )
+    conn.commit()
+
+    stats = db.get_dashboard_stats(conn)
+    assert stats["total_sessions"] == 1
+    assert stats["total_runs"] == 1
+    assert stats["classification_breakdown"] == {"refused": 1}
+    assert [s["id"] for s in db.list_all_sessions_summary(conn)] == [kept]

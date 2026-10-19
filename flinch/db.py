@@ -2928,8 +2928,14 @@ def get_dashboard_stats(conn):
         ).fetchone()[0]
     except Exception:
         stats["total_sessions"] = 0
-    for table, key in [("runs", "total_runs"),
-                       ("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
+    try:
+        stats["total_runs"] = conn.execute(
+            "SELECT COUNT(*) FROM runs r JOIN sessions s ON s.id = r.session_id "
+            f"WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS}"
+        ).fetchone()[0]
+    except Exception:
+        stats["total_runs"] = 0
+    for table, key in [("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
         try:
             stats[key] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         except Exception:
@@ -2950,7 +2956,9 @@ def get_dashboard_stats(conn):
     # Classification breakdown from runs
     try:
         rows = conn.execute(
-            "SELECT COALESCE(initial_classification, 'unknown') as cls, COUNT(*) FROM runs GROUP BY cls"
+            "SELECT COALESCE(r.initial_classification, 'unknown') as cls, COUNT(*) "
+            "FROM runs r JOIN sessions s ON s.id = r.session_id "
+            f"WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS} GROUP BY cls"
         ).fetchall()
         stats["classification_breakdown"] = {r[0]: r[1] for r in rows}
     except Exception:

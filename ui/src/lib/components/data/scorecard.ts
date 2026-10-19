@@ -1,7 +1,7 @@
 // Scorecard logic (brief 9.2, D16, D21; plan T30). Pure, so scorecard.test.ts
 // covers it; the store and the components only wire it to requests and markup.
 //
-// Against policies: POST /api/scorecard/generate {name, models, session_ids,
+// Across models: POST /api/scorecard/generate {name, models, session_ids,
 // stat_run_ids} returns {snapshot_id, results}; GET /api/scorecard/{id} returns
 // the saved row with `results` decoded; GET /api/scorecards lists them. The
 // results shape is `flinch/db.py` compute_scorecard: by_model[model].by_claim[]
@@ -31,19 +31,19 @@ const strList = (v: unknown): string[] =>
 const numList = (v: unknown): number[] =>
   Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : [];
 
-// ── Against policies ──────────────────────────────────────────────────
+// ── Across models ──────────────────────────────────────────────────
 
 /** The sidecar's enforcement words (after B27). */
 export type Enforcement = 'consistent' | 'over' | 'under' | 'context_dependent';
 
 /** What a cell shows: the four verdicts plus No data. */
-export type Verdict = 'matches' | 'over' | 'under' | 'context' | 'none';
+export type Verdict = 'consistent' | 'over' | 'under' | 'context' | 'none';
 
 /** Legend and cell order. */
-export const VERDICTS: readonly Verdict[] = ['matches', 'over', 'under', 'context', 'none'];
+export const VERDICTS: readonly Verdict[] = ['consistent', 'over', 'under', 'context', 'none'];
 
 const VERDICT_OF: Record<Enforcement, Verdict> = {
-  consistent: 'matches',
+  consistent: 'consistent',
   over: 'over',
   under: 'under',
   context_dependent: 'context',
@@ -286,7 +286,7 @@ export function claimIndex(
 
 /** How many cells carry each verdict, for the summary line over the grid. */
 export function verdictCounts(rows: readonly GridRow[]): Record<Verdict, number> {
-  const out: Record<Verdict, number> = { matches: 0, over: 0, under: 0, context: 0, none: 0 };
+  const out: Record<Verdict, number> = { consistent: 0, over: 0, under: 0, context: 0, none: 0 };
   for (const r of rows) for (const c of r.cells) out[c.verdict] += 1;
   return out;
 }
@@ -597,7 +597,7 @@ export function barWidth(rate: number | null): number {
 
 export type ScorecardTab = 'policies' | 'session';
 
-/** `?tab=session` opens This session; anything else opens Against policies. */
+/** `?tab=session` opens This session; anything else opens Across models. */
 export function asScorecardTab(v: string | null | undefined): ScorecardTab {
   return v === 'session' ? 'session' : 'policies';
 }

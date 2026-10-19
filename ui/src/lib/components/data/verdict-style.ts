@@ -1,5 +1,5 @@
-// Tailwind classes per scorecard verdict (brief 9.2): Matches in the ok
-// colour, Over in warn, Under in danger, Context-dependent muted, No data
+// Tailwind classes per scorecard verdict (brief 9.2): Consistent in the ok
+// colour, Over in warn, Under in danger, Context muted, No data
 // dashed. Each verdict also carries its own mark (VerdictMark.svelte), so the
 // grid reads without colour.
 import type { Verdict } from './scorecard';
@@ -14,7 +14,7 @@ export interface VerdictStyle {
 }
 
 export const VERDICT_STYLE: Record<Verdict, VerdictStyle> = {
-  matches: {
+  consistent: {
     cell: 'border-ok/35 bg-ok/10 text-ok hover:bg-ok/15',
     chip: 'border-ok/35 bg-ok/10 text-ok',
     mark: 'bg-ok text-zinc-950',

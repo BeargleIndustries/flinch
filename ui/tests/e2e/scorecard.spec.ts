@@ -6,7 +6,7 @@
 //    and run; refuse-me (the fake refuses "[REFUSE]") is linked through the
 //    API to google hate-speech, also should-refuse, and run. The scorecard
 //    reads "Under" for the first (the model refused less than the policy
-//    says, B27) and "Matches" for the second; the Under cell lists the run
+//    says, B27) and "Consistent" for the second; the Under cell lists the run
 //    with a link to /probe/runs/{id}; Generate again saves a second scorecard
 //    and the saved list opens the first.
 // 3. This session: providers then categories with a bar each, and the
@@ -147,9 +147,19 @@ test('before any link: the scorecard has no rows and points to Probe; This sessi
     'aria-selected',
     'true',
   );
+  // The brief's words, literally (9.2).
+  await expect(page.getByRole('tab', { name: 'Across models', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'This session', exact: true })).toBeVisible();
+  expect(SCORECARD.verdicts).toEqual({
+    consistent: 'Consistent',
+    over: 'Over',
+    under: 'Under',
+    context: 'Context',
+    none: 'No data',
+  });
   // The legend gives each cell word one sentence.
   const legend = page.getByTestId('scorecard-legend');
-  for (const v of ['matches', 'over', 'under', 'context', 'none'] as const) {
+  for (const v of ['consistent', 'over', 'under', 'context', 'none'] as const) {
     await expect(legend.locator(`[data-verdict="${v}"]`)).toContainText(SCORECARD.verdicts[v]);
     await expect(legend.locator(`[data-verdict="${v}"]`)).toContainText(SCORECARD.legend[v]);
   }
@@ -170,7 +180,7 @@ test('before any link: the scorecard has no rows and points to Probe; This sessi
   await expect(page).toHaveURL(/\/probe$/);
 });
 
-test('a complied run linked to a should-refuse claim reads Under, a refused one reads Matches', async ({
+test('a complied run linked to a should-refuse claim reads Under, a refused one reads Consistent', async ({
   page,
 }) => {
   const seed = readSeed();
@@ -215,13 +225,13 @@ test('a complied run linked to a should-refuse claim reads Under, a refused one 
   // Under: should refuse, refused 0 of 2.
   const under = cell(page, harassment.id);
   await expect(under).toHaveAttribute('data-verdict', 'under');
-  await expect(under.getByTestId('scorecard-cell-word')).toHaveText(SCORECARD.verdicts.under);
+  await expect(under.getByTestId('scorecard-cell-word')).toHaveText('Under');
   await expect(under).toHaveAttribute('title', SCORECARD.cellTitle(0, 2, 2));
-  // Matches: should refuse, refused 1 of 1.
-  const matches = cell(page, hate.id);
-  await expect(matches).toHaveAttribute('data-verdict', 'matches');
-  await expect(matches.getByTestId('scorecard-cell-word')).toHaveText(SCORECARD.verdicts.matches);
-  await expect(matches).toHaveAttribute('title', SCORECARD.cellTitle(1, 0, 1));
+  // Consistent: should refuse, refused 1 of 1.
+  const consistent = cell(page, hate.id);
+  await expect(consistent).toHaveAttribute('data-verdict', 'consistent');
+  await expect(consistent.getByTestId('scorecard-cell-word')).toHaveText('Consistent');
+  await expect(consistent).toHaveAttribute('title', SCORECARD.cellTitle(1, 0, 1));
   await expect(
     page.locator(`[data-testid="scorecard-row"][data-claim-id="${harassment.id}"]`),
   ).toContainText(`openai · ${harassment.claim_id}`);
@@ -229,7 +239,7 @@ test('a complied run linked to a should-refuse claim reads Under, a refused one 
   // The cell's runs, each linking to its own screen.
   await under.click();
   const detail = page.getByTestId('scorecard-detail');
-  await expect(detail.getByTestId('scorecard-detail-verdict')).toHaveText(SCORECARD.verdicts.under);
+  await expect(detail.getByTestId('scorecard-detail-verdict')).toHaveText('Under');
   await expect(detail.getByTestId('scorecard-detail-counts')).toHaveText(
     SCORECARD.cellTitle(0, 2, 2),
   );
@@ -242,7 +252,7 @@ test('a complied run linked to a should-refuse claim reads Under, a refused one 
     'href',
     `/probe/runs/${answerRunId}`,
   );
-  await matches.click();
+  await consistent.click();
   await expect(detail).toHaveAttribute('data-claim-id', String(hate.id));
   await expect(
     detail.locator(`[data-testid="scorecard-detail-run"][data-run-id="${refuseRunId}"]`),
@@ -264,7 +274,7 @@ test('a complied run linked to a should-refuse claim reads Under, a refused one 
     'data-snapshot-id',
     first ?? '',
   );
-  await expect(cell(page, hate.id)).toHaveAttribute('data-verdict', 'matches');
+  await expect(cell(page, hate.id)).toHaveAttribute('data-verdict', 'consistent');
 
   // Another scorecard on screen closes the open cell.
   await expect(detail).toHaveCount(0);

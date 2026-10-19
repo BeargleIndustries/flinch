@@ -1,7 +1,7 @@
 // Scorecard state (brief 9.2, plan T30). Every request goes through
 // status.track; screens call these from an $effect inside `untrack`.
 //
-// Against policies reads GET /api/sessions (sources and models), GET
+// Across models reads GET /api/sessions (sources and models), GET
 // /api/sessions/{id}/stat-runs for each session with runs (repeat-run
 // sources), GET /api/policies (provider and slug per claim), GET
 // /api/scorecards; Generate is POST /api/scorecard/generate and Open is GET

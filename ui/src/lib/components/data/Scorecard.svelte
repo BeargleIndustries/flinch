@@ -1,9 +1,9 @@
 <!--
   Scorecard (brief 9.2, D16, D21; formerly Policy Scorecard and Compliance
   Scorecard). No rail (D15). Opens with its research question, then two tabs:
-  - Against policies: build a scorecard from sessions and repeat runs, the grid
-    of models against linked policy claims (Matches, Over, Under,
-    Context-dependent, No data; B27 direction), the legend, a cell's runs, and
+  - Across models: build a scorecard from sessions and repeat runs, the grid
+    of models against linked policy claims (Consistent, Over, Under,
+    Context, No data; B27 direction), the legend, a cell's runs, and
     the saved scorecards.
   - This session: the current session's compliance, grouped by provider then
     category (Appendix C item 40), with a ClassBar and counts per group.

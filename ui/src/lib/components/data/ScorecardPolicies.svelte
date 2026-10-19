@@ -1,5 +1,5 @@
 <!--
-  Against policies (brief 9.2): the build panel and the scorecard on screen
+  Across models (brief 9.2): the build panel and the scorecard on screen
   on the left; the saved scorecards (GET /api/scorecards, "Open" loads GET
   /api/scorecard/{id}) and the legend, one sentence per cell word, on the
   right.

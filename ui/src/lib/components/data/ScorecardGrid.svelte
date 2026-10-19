@@ -2,7 +2,7 @@
   The scorecard on screen (brief 9.2): name, date, what it read, a tally of
   verdicts, then a grid with one row per linked policy claim (provider and
   slug, text, category, expected behaviour, severity) and one column per
-  model. Each cell is Matches, Over, Under, Context-dependent (B27) or No
+  model. Each cell is Consistent, Over, Under, Context (B27) or No
   data; its title is "{refused} Refused, {complied} Complied of {total}".
   Picking a cell opens ScorecardCell with the runs behind it. With no linked
   runs at all the grid gives way to an empty state pointing to Probe.
@@ -96,7 +96,7 @@
       </div>
     {:else}
       <ul class="mt-3 flex flex-wrap gap-1.5 px-4" aria-label={SCORECARD.legendTitle}>
-        {#each ['matches', 'over', 'under', 'context', 'none'] as const as v (v)}
+        {#each ['consistent', 'over', 'under', 'context', 'none'] as const as v (v)}
           {#if tally[v] > 0}
             <li
               class="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] {VERDICT_STYLE[

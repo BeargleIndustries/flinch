@@ -96,7 +96,7 @@ function run(over: Partial<SessionRun> & { id: number }): SessionRun {
 
 describe('toVerdict (B27 words)', () => {
   it('maps every enforcement word', () => {
-    expect(toVerdict('consistent')).toBe('matches');
+    expect(toVerdict('consistent')).toBe('consistent');
     expect(toVerdict('over')).toBe('over');
     expect(toVerdict('under')).toBe('under');
     expect(toVerdict('context_dependent')).toBe('context');
@@ -211,12 +211,12 @@ describe('buildGrid', () => {
     const hate = rows[0];
     expect(hate.provider).toBe('google');
     expect(hate.cells.map((c) => [c.model, c.verdict])).toEqual([
-      ['m1', 'matches'],
+      ['m1', 'consistent'],
       ['m2', 'none'],
     ]);
     expect(rows[2].cells[0].verdict).toBe('under');
     expect(rows[1].cells[1].verdict).toBe('context');
-    expect(verdictCounts(rows)).toEqual({ matches: 1, over: 0, under: 1, context: 1, none: 3 });
+    expect(verdictCounts(rows)).toEqual({ consistent: 1, over: 0, under: 1, context: 1, none: 3 });
   });
 
   it('keeps a claim no longer in the policy list, without provider or slug', () => {

@@ -1,8 +1,8 @@
 <!--
   A scorecard verdict's mark: a small square with a symbol, so a cell reads
-  without colour. Equal for Matches, an up arrow for Over (enforced more than
+  without colour. Equal for Consistent, an up arrow for Over (enforced more than
   the policy claims), a down arrow for Under (enforced less), an asterisk for
-  Context-dependent, a dash for No data.
+  Context, a dash for No data.
 -->
 <script lang="ts">
   import { ArrowDown, ArrowUp, Asterisk, Equal, Minus } from 'lucide-svelte';
@@ -12,7 +12,7 @@
   let { verdict }: { verdict: Verdict } = $props();
 
   const ICONS = {
-    matches: Equal,
+    consistent: Equal,
     over: ArrowUp,
     under: ArrowDown,
     context: Asterisk,

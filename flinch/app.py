@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import html as html_mod
 import importlib.util
@@ -10,11 +11,13 @@ import logging
 import os
 import sqlite3
 import uuid
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import anthropic
+import anyio
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -205,6 +208,71 @@ class NoStoreMiddleware:
 
 
 app.add_middleware(NoStoreMiddleware)
+
+
+# ─── Server-sent events (B05, I2, I27) ───────────────────────────────────────
+
+def _sse(name: str, data: dict) -> str:
+    """One SSE block. Every streaming route emits only through this."""
+    return f"event: {name}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _dict_event(e: dict) -> tuple[str, dict]:
+    """Name a flat event dict by its `type` or `event` key; the whole dict is the data."""
+    return (e.get("type") or e.get("event") or "message", e)
+
+
+async def _sse_stream(
+    agen: AsyncIterator[dict],
+    name_of: Callable[[dict], tuple[str, dict]] = lambda e: (e.get("event") or "message", e.get("data", {})),
+) -> AsyncIterator[str]:
+    """Turn a runner generator's events into `_sse` blocks, closing the source on exit."""
+    try:
+        async with contextlib.aclosing(agen) as g:
+            async for item in g:
+                name, data = name_of(item)
+                yield _sse(name, data)
+    except Exception as e:
+        logging.getLogger("flinch").exception("SSE stream failed")
+        yield _sse("error", {"error": f"{type(e).__name__}: {e}"})
+
+
+class ClosingStreamingResponse(StreamingResponse):
+    """A StreamingResponse that closes its body generator when the response ends.
+
+    Starlette never calls `aclose()` on `body_iterator` (starlette 0.50.0
+    `responses.py` `stream_response`), so a generator suspended at a `yield`
+    when the client disconnects would only be finalized by the garbage
+    collector, after its database connection is gone. The shielded `finally`
+    closes it deterministically, also when the body never started (a no-op
+    then). `release`, when set, is called after the close in the same shielded
+    block (run ownership, T07).
+    """
+
+    release: Callable[[], None] | None = None
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    aclose = getattr(self.body_iterator, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
+                finally:
+                    if self.release is not None:
+                        self.release()
+
+
+def _sse_response(gen: AsyncIterator[str], release: Callable[[], None] | None = None) -> ClosingStreamingResponse:
+    response = ClosingStreamingResponse(
+        gen,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+    response.release = release
+    return response
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -639,20 +707,18 @@ async def run_batch(session_id: int, req: BatchRequest):
     if not probe_ids:
         raise HTTPException(400, "No probes available to run")
 
-    async def event_generator():
+    async def event_stream():
         try:
-            async for event in _runner.run_batch(session_id, probe_ids, req.delay_ms):
-                event_type = event["event"]
-                event_data = json.dumps(event["data"])
-                yield f"event: {event_type}\ndata: {event_data}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(_runner.run_batch(session_id, probe_ids, req.delay_ms))
+            ) as s:
+                async for chunk in s:
+                    yield chunk
         except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            # Raised before a batch row exists (no runner), so no batch_id.
+            yield _sse("error", {"error": str(e)})
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_response(event_stream())
 
 
 @app.post("/api/sessions/{session_id}/batch-conditions")
@@ -2129,18 +2195,11 @@ async def run_sequence_auto(sequence_id: int):
         raise HTTPException(404, "Sequence not found")
 
     async def event_stream():
-        import traceback as _tb
-        try:
-            async for event in _runner.run_sequence_auto_stream(sequence_id):
-                evt_type = event.get("event", "message")
-                data = json.dumps(event.get("data", {}))
-                yield f"event: {evt_type}\ndata: {data}\n\n"
-        except Exception as e:
-            _tb.print_exc()
-            err_data = json.dumps({"error": f"{type(e).__name__}: {e}"})
-            yield f"event: error\ndata: {err_data}\n\n"
+        async with contextlib.aclosing(_sse_stream(_runner.run_sequence_auto_stream(sequence_id))) as s:
+            async for chunk in s:
+                yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 @app.post("/api/sequences/{sequence_id}/run-turn")
 async def run_sequence_turn(sequence_id: int):
@@ -2265,11 +2324,12 @@ async def start_sequence_batch(batch_id: int):
     if b["status"] != "pending":
         raise HTTPException(400, f"Batch already {b['status']}")
 
-    async def generate():
-        async for event in _runner.run_sequence_batch(batch_id):
-            yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+    async def event_stream():
+        async with contextlib.aclosing(_sse_stream(_runner.run_sequence_batch(batch_id))) as s:
+            async for chunk in s:
+                yield chunk
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 # ── Narrative Momentum: Analysis ───────────────────────────────
@@ -2662,25 +2722,18 @@ async def start_stat_run(session_id: int, req: StartStatRunRequest):
         # Each iteration gets a fresh target with the session's model and system prompt.
         return runner._make_target(target_model, system_prompt)
 
-    async def event_generator():
-        try:
-            async for event in run_statistical_batch(
-                _conn, session_id, req.probe_ids, target_model,
-                req.repeat_count, runner.backend if runner else None,
-                make_target=make_session_target if runner else None,
-                system_prompt=system_prompt,
-            ):
-                event_type = event["event"]
-                event_data = json.dumps(event["data"])
-                yield f"event: {event_type}\ndata: {event_data}\n\n"
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    async def event_stream():
+        source = run_statistical_batch(
+            _conn, session_id, req.probe_ids, target_model,
+            req.repeat_count, runner.backend if runner else None,
+            make_target=make_session_target if runner else None,
+            system_prompt=system_prompt,
+        )
+        async with contextlib.aclosing(_sse_stream(source)) as s:
+            async for chunk in s:
+                yield chunk
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_response(event_stream())
 
 
 @app.get("/api/sessions/{session_id}/stat-runs")
@@ -2953,25 +3006,25 @@ async def api_bulk_import_prompts(experiment_id: int, req: BulkPromptImportReque
 @app.post("/api/experiments/{experiment_id}/prompts/import-hh")
 async def api_import_hh_prompts(experiment_id: int, req: HHImportRequest):
     """Import stratified sample from Anthropic HH-RLHF dataset."""
-    import json as json_mod
+
+    async def hh_import(db_conn):
+        result = await HHRLHFImporter().import_to_experiment(
+            db_conn=db_conn,
+            experiment_id=experiment_id,
+            target_count=req.target_count,
+            subsets=req.subsets,
+            stratification=req.stratification,
+            seed=req.seed,
+        )
+        yield {"type": "complete", **result}
 
     async def event_stream():
-        try:
-            importer = HHRLHFImporter()
-            async with get_async_db() as db_conn:
-                result = await importer.import_to_experiment(
-                    db_conn=db_conn,
-                    experiment_id=experiment_id,
-                    target_count=req.target_count,
-                    subsets=req.subsets,
-                    stratification=req.stratification,
-                    seed=req.seed,
-                )
-            yield f"data: {json_mod.dumps({'event': 'complete', **result})}\n\n"
-        except Exception as e:
-            yield f"data: {json_mod.dumps({'event': 'error', 'error': str(e)})}\n\n"
+        async with get_async_db() as db_conn:
+            async with contextlib.aclosing(_sse_stream(hh_import(db_conn), name_of=_dict_event)) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.get("/api/experiments/{experiment_id}/prompts")
@@ -3002,8 +3055,6 @@ async def api_estimate_experiment(experiment_id: int):
 @app.post("/api/experiments/{experiment_id}/start")
 async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
     """Start experiment execution with SSE progress stream."""
-    import json as json_mod
-
     from flinch.rate_limiter import RateLimiterPool
     from flinch.runner import ExperimentRunner
 
@@ -3013,10 +3064,13 @@ async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
             await db_conn.commit()
             pool = RateLimiterPool(req.concurrency_per_provider)
             runner = ExperimentRunner(db_conn, pool)
-            async for event in runner.run_experiment(experiment_id):
-                yield f"data: {json_mod.dumps(event)}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(runner.run_experiment(experiment_id), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.post("/api/experiments/{experiment_id}/pause")
@@ -3030,8 +3084,6 @@ async def api_pause_experiment(experiment_id: int):
 @app.post("/api/experiments/{experiment_id}/resume")
 async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
     """Resume experiment execution."""
-    import json as json_mod
-
     from flinch.rate_limiter import RateLimiterPool
     from flinch.runner import ExperimentRunner
 
@@ -3039,10 +3091,13 @@ async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest 
         async with get_async_db() as db_conn:
             pool = RateLimiterPool(req.concurrency_per_provider)
             runner = ExperimentRunner(db_conn, pool)
-            async for event in runner.run_experiment(experiment_id):
-                yield f"data: {json_mod.dumps(event)}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(runner.run_experiment(experiment_id), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.get("/api/experiments/{experiment_id}/progress")
@@ -3054,22 +3109,23 @@ async def api_experiment_progress(experiment_id: int):
 @app.post("/api/experiments/{experiment_id}/metrics")
 async def api_compute_metrics(experiment_id: int, force: bool = False):
     """Compute NLP metrics for all responses. SSE stream."""
-    import json as json_mod
 
     async def event_stream():
         from flinch.metrics import ResponseMetricsAnalyzer
         async with get_async_db() as db_conn:
             analyzer = ResponseMetricsAnalyzer()
-            async for event in analyzer.analyze_experiment(db_conn, experiment_id, force=force):
-                yield f"data: {json_mod.dumps(event)}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(analyzer.analyze_experiment(db_conn, experiment_id, force=force), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.post("/api/experiments/{experiment_id}/rate")
 async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
     """Run AI rater pipeline. SSE stream."""
-    import json as json_mod
 
     async def event_stream():
         from flinch.rate_limiter import RateLimiterPool
@@ -3077,10 +3133,13 @@ async def api_run_raters(experiment_id: int, req: RunAIRatersRequest):
         async with get_async_db() as db_conn:
             pool = RateLimiterPool()
             pipeline = AIRaterPipeline(db_conn, req.rater_models, pool)
-            async for event in pipeline.rate_experiment(experiment_id):
-                yield f"data: {json_mod.dumps(event)}\n\n"
+            async with contextlib.aclosing(
+                _sse_stream(pipeline.rate_experiment(experiment_id), name_of=_dict_event)
+            ) as s:
+                async for chunk in s:
+                    yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return _sse_response(event_stream())
 
 
 @app.post("/api/experiments/{experiment_id}/prolific")

@@ -8,6 +8,8 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
+import anyio
+
 from flinch import __version__
 
 try:
@@ -652,7 +654,10 @@ class _AsyncDBContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._db:
-            await self._db.close()
+            # Shielded: a cancelled scope (client disconnect) re-delivers the
+            # cancel on every unshielded await and would leak the connection (I27).
+            with anyio.CancelScope(shield=True):
+                await self._db.close()
         return False
 
 

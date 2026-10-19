@@ -68,3 +68,9 @@ crash-*.log
 .worktree-env.ps1
 .cargo/
 ui/.e2e-ports.json
+
+# Local agent instructions and scratch, never part of the repo
+CLAUDE.md
+.claude/
+CODEBASE_MAP.md
+pytest-of-*/

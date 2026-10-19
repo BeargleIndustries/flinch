@@ -92,7 +92,7 @@ The first time it opens, Flinch sets up its own Python runtime in its app folder
 
 ## Privacy
 
-Your probes, responses, notes and studies stay in a SQLite database on your computer, at `%APPDATA%\Flinch\flinch.db`. API keys go in Windows Credential Manager, and the app hands them to the sidecar over a pipe when it starts, never through the environment. Flinch doesn't track usage.
+Your probes, responses, notes and studies stay in a SQLite database on your computer, at `%APPDATA%\com.beargle.flinch\flinch.db`. API keys go in Windows Credential Manager, and the app hands them to the sidecar over a pipe when it starts, never through the environment. Flinch doesn't track usage.
 
 It goes online for these:
 

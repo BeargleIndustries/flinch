@@ -621,10 +621,6 @@ export const SEQUENCES = {
   tabRunWhy: 'Build sequences one at a time or in a batch, and watch them run.',
   tabResults: 'Results',
   tabResultsWhy: "Thresholds, turn-by-turn strips and each strategy's record.",
-  resultsSoonTitle: 'Results for completed sequences',
-  resultsSoonBody:
-    'The threshold readout, the turn-by-turn strip and the strategy table for completed sequences show here.',
-  resultsPicked: (name: string) => `Picked: ${name}`,
 
   // New sequence
   newEyebrow: 'One sequence',
@@ -798,6 +794,93 @@ export const SEQUENCES = {
   strategyDeleted: (name: string) => `Strategy ${name} deleted.`,
   strategySaved: (name: string) => `Strategy ${name} saved.`,
   strategiesEmpty: 'No strategies yet.',
+} as const;
+
+/**
+ * Sequences, Results tab (brief 8.4, D21, I20): the picked sequence's
+ * Threshold, Turn by turn and Runs panels, then Thresholds across probes and
+ * Strategy effectiveness over the session's completed sequences. The
+ * effectiveness line itself is SCREENS['sequences.strategies'].
+ */
+export const SEQUENCE_RESULTS = {
+  // The picker
+  pickLabel: 'Sequence',
+  pickHint: 'Completed and failed sequences in this session, newest first.',
+  pickOption: (probe: string, strategy: string, id: number) => `${probe}, ${strategy} (#${id})`,
+  pickOptionStatus: (probe: string, strategy: string, id: number, status: string) =>
+    `${probe}, ${strategy} (#${id}, ${status})`,
+  reading: 'Reading the results…',
+  noneTitle: 'No completed sequences yet',
+  noneBody:
+    'Drop the probe in an interactive sequence, run an automatic one or whittle one on the Run tab. Its threshold and turns show here.',
+  openRun: 'Open the Run tab',
+  loadAgain: 'Load again',
+  sequenceEyebrow: 'This sequence',
+
+  // Threshold
+  thresholdTitle: 'Threshold',
+  thresholdReadout:
+    'One bar per run: the height is the warmup turns, the colour is the probe result. The threshold run is outlined.',
+  found: (n: number) =>
+    `At ${n} warmup ${plural(n, 'turn', 'turns')} the probe got through; at ${n - 1} it was Refused. The threshold is ${n} ${plural(n, 'turn', 'turns')}.`,
+  single: (n: number) => `One run at ${n} warmup ${plural(n, 'turn', 'turns')}.`,
+  unwhittled: (runs: number) =>
+    `${runs} ${plural(runs, 'run', 'runs')} and no threshold. Whittle the sequence to find one.`,
+  noRuns: 'This sequence has no runs yet.',
+  headlineCaption: (n: number) => `warmup ${plural(n, 'turn', 'turns')}`,
+  barsLabel: 'Runs by warmup turns',
+  barLabel: (n: number) => `N=${n}`,
+  barTitle: (n: number, word: string) => `${n} warmup ${plural(n, 'turn', 'turns')}: ${word}`,
+  thresholdChip: 'Threshold',
+  thresholdChipWhy: 'The fewest warmup turns that still got the probe through.',
+  failedChip: 'Failed',
+
+  // Turn by turn
+  turnsTitle: 'Turn by turn',
+  turnsReadout:
+    'One square per model reply, coloured by its badge. W is a warmup turn, S the setup, P the probe.',
+  runLabel: (n: number) => `N=${n}`,
+  stripLabel: (n: number) =>
+    `Model replies in the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  cellWarmup: (n: number, word: string) => `Warmup ${n}: ${word}`,
+  cellSetup: (word: string) => `Setup: ${word}`,
+  cellProbe: (word: string) => `Probe: ${word}`,
+  noReplies: 'No model replies in this run.',
+  probeAt: 'Probe',
+
+  // Runs
+  runsTitle: 'Runs',
+  runsReadout: 'Open a run to read every turn, with the role and the turn type.',
+  runShow: (n: number) => `Show the turns of the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  runHide: (n: number) => `Hide the turns of the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  runThread: (n: number) => `Transcript of the run at ${n} warmup ${plural(n, 'turn', 'turns')}`,
+  runsEmpty: 'No runs yet.',
+
+  // Session level
+  sessionEyebrow: 'This session',
+  acrossTitle: 'Thresholds across probes',
+  acrossReadout:
+    'Where each probe gave way, one row per completed sequence. None means whittling found no threshold, or the sequence was not whittled.',
+  filterLabel: 'Strategy',
+  filterAll: 'All strategies',
+  colProbe: 'Probe',
+  colDomain: 'Domain',
+  colStrategy: 'Strategy',
+  colThreshold: 'Threshold',
+  colRuns: 'Runs',
+  colResult: 'Probe result',
+  turns: (n: number) => `${n} ${plural(n, 'turn', 'turns')}`,
+  noThreshold: 'None',
+  noDomain: 'None',
+  showSequence: (probe: string, id: number) => `Show ${probe} (#${id}) above`,
+  acrossEmpty: 'No completed sequences to compare yet.',
+  filterEmpty: 'No completed sequence in this session uses that strategy.',
+  effectTitle: 'Strategy effectiveness',
+  effectReadout:
+    'How often each kind of story got the probe through (Complied or Collapsed), and the average threshold where whittling found one.',
+  effectEmpty: 'No completed sequences yet, so no strategy has a record.',
+  excluded: (parts: string) => `Only completed sequences count here. Left out: ${parts}.`,
+  excludedPart: (n: number, status: string) => `${n} ${status}`,
 } as const;
 
 /** StrategyDialog (brief 9.9): the fields `POST /api/strategies` takes. */

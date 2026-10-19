@@ -5,14 +5,13 @@
   "Show results" on a card switches to Results with that sequence picked.
 -->
 <script lang="ts">
-  import EmptyState from '$lib/components/EmptyState.svelte';
   import TabbedPanel from '$lib/components/TabbedPanel.svelte';
   import NoSession from '$lib/components/shell/NoSession.svelte';
+  import SequenceResults from '$lib/components/studies/SequenceResults.svelte';
   import SequenceRun from '$lib/components/studies/SequenceRun.svelte';
   import { sequences } from '$lib/components/studies/sequences.svelte';
   import { SCREENS } from '$lib/copy/screens';
   import { SEQUENCES as S } from '$lib/copy/studies';
-  import { probes } from '$lib/stores/probe.svelte';
   import { session } from '$lib/stores/session.svelte';
 
   const sessionId = $derived(session.current?.id ?? null);
@@ -22,16 +21,6 @@
     { id: 'run', label: S.tabRun, title: S.tabRunWhy },
     { id: 'results', label: S.tabResults, title: S.tabResultsWhy },
   ];
-
-  const picked = $derived(
-    sequences.resultsFor === null ? null : sequences.sequenceById(sequences.resultsFor),
-  );
-  const pickedName = $derived(
-    picked
-      ? (probes.list.find((p) => p.id === picked.probe_id)?.name ??
-          S.probeFallback(picked.probe_id))
-      : '',
-  );
 </script>
 
 <section class="flex max-w-[1120px] flex-col gap-4 pb-6" data-testid="sequences-screen">
@@ -50,18 +39,7 @@
         {#snippet children(current)}
           <div class="pt-4">
             {#if current === 'results'}
-              <div
-                class="rounded-xl border border-dashed border-border"
-                data-testid="sequence-results"
-                data-sequence-id={picked?.id ?? ''}
-              >
-                <EmptyState title={S.resultsSoonTitle} body={S.resultsSoonBody} />
-                {#if picked}
-                  <p class="-mt-6 pb-6 text-center font-mono text-[11px] text-text4">
-                    {S.resultsPicked(pickedName)}
-                  </p>
-                {/if}
-              </div>
+              <SequenceResults {sessionId} />
             {:else}
               <SequenceRun {sessionId} />
             {/if}

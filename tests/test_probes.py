@@ -29,6 +29,19 @@ def test_custom_prompt_joins_scoped_session(app_client, fake_target, keyword_cla
     assert _rail(app_client, session_id) == [base_id, new_id]
 
 
+def test_back_to_back_custom_prompts_get_distinct_probes(
+    app_client, fake_target, keyword_classifier
+) -> None:
+    session_id, base_id = _scoped_session(app_client)
+    ids = []
+    for text in ("first custom ask", "second custom ask"):
+        resp = app_client.post(f"/api/sessions/{session_id}/run", json={"custom_text": text})
+        assert resp.status_code == 200
+        ids.append(resp.json()["probe_id"])
+    assert ids[0] != ids[1]
+    assert _rail(app_client, session_id) == [base_id, *ids]
+
+
 def test_created_probe_with_session_id_joins_rail(app_client) -> None:
     session_id, base_id = _scoped_session(app_client)
     other = _create_probe(app_client, "unrelated").json()["id"]

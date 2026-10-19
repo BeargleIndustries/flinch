@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -461,7 +462,7 @@ async def send_probe_run(session_id: int, req: SendProbeRequest):
         probe_id = req.probe_id
         if not probe_id and req.custom_text:
             probe_id = db.create_probe(
-                _conn, f"custom-{int(__import__('time').time())}",
+                _conn, f"custom-{session_id}-{uuid.uuid4().hex[:8]}",
                 "custom", req.custom_text, "Ad-hoc custom probe",
             )
             db.add_probe_to_session(_conn, session_id, probe_id)

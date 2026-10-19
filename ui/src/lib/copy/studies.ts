@@ -2,7 +2,8 @@
 // names live in screens.ts; everything else a Studies screen says lives here
 // (brief 5.7 rule 9) and is in COPY_FILES. T21 adds Framings (8.1), T22
 // Conditions (8.2), T23 the study's Results, Raters and Export tabs and T24
-// Repeat runs (8.3); later Studies tasks add their own objects.
+// Repeat runs (8.3), T27 Model compare (8.5); later Studies tasks add their
+// own objects.
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -908,4 +909,106 @@ export const STRATEGY_DIALOG = {
   cancel: 'Cancel',
   save: 'Save strategy',
   saving: 'Saving…',
+} as const;
+
+/** Model compare (brief 8.5, D16, D29): set up, the run, past comparisons and one comparison. */
+export const COMPARE = {
+  title: 'Model compare',
+
+  // Where the per-model sessions go (D29)
+  sessionsNote:
+    'Each comparison saves its answers as one session per model, named "Compare" with the date. Those sessions stay out of the session switcher and Browse, so they do not crowd your own work. Open them from the comparison: every answer links to its run.',
+
+  // Set up
+  setupEyebrow: 'Set up',
+  setupTitle: 'Models and probes',
+  setupReadout:
+    'Every model gets each probe once, in a fresh conversation, with the same system prompt. No pushback, no coach.',
+  models: 'Models',
+  modelsHint: 'Two to five. Providers without a key are greyed out; set one in Settings.',
+  modelN: (n: number) => `Model ${n}`,
+  removeModel: (model: string) => (model ? `Remove ${model}` : 'Remove this model'),
+  addModel: 'Add a model',
+  modelsLoading: 'Reading the model list…',
+  probes: 'Probes',
+  sourceLabel: 'Which probes to list',
+  sourceSession: "This session's probes",
+  sourceSessionWhy: 'The probes in the rail for the session you have open.',
+  sourceAll: 'Every probe',
+  sourceAllWhy: 'Every probe in the library, whichever session holds it.',
+  probesLoading: 'Reading the probes…',
+  noProbes: 'No probes to list. Add one from the rail, or write a custom prompt below.',
+  customSummary: 'Add a custom prompt',
+  customHint: 'Saved as a new probe in the "custom" domain and sent with the picked probes.',
+  customLabel: 'Custom prompt',
+  systemPrompt: 'System prompt',
+  systemPromptHint: 'Optional. Applied to every model.',
+  plan: (models: number, probes: number) =>
+    `${models} ${plural(models, 'model', 'models')} × ${probes} ${plural(probes, 'probe', 'probes')} = ${models * probes} ${plural(models * probes, 'call', 'calls')}`,
+  run: (models: number, probes: number) =>
+    `Run the comparison (${models} ${plural(models, 'model', 'models')} × ${probes} ${plural(probes, 'probe', 'probes')})`,
+  runWhy: 'Sends every picked probe to every picked model and saves the comparison.',
+  needPick: 'Pick 2 to 5 models and at least 1 probe.',
+  duplicateModels: 'Each model can appear once. Change or remove the repeat.',
+  busy: 'A comparison is already running.',
+
+  // The run (one request, R11)
+  working: (probes: number, models: number, minutes: number) =>
+    `Running ${probes} ${plural(probes, 'probe', 'probes')} against ${models} ${plural(models, 'model', 'models')}. This can take a few minutes (about ${minutes} ${plural(minutes, 'minute', 'minutes')} at most). You can leave this screen; the strip keeps track.`,
+  elapsed: (clock: string) => `${clock} elapsed`,
+  strip: (models: number, probes: number) =>
+    `Model compare: ${models} ${plural(models, 'model', 'models')} × ${probes} ${plural(probes, 'probe', 'probes')}`,
+  failed: 'The comparison did not finish',
+  finished: 'Comparison saved.',
+  openResult: 'Open the comparison',
+
+  // Past comparisons
+  pastEyebrow: 'History',
+  pastTitle: 'Past comparisons',
+  pastReadout: 'Agreement is the share of probes that got the same badge from every model.',
+  pastCount: (n: number) => `${n} ${plural(n, 'comparison', 'comparisons')}`,
+  emptyTitle: 'No comparisons yet.',
+  emptyBody: 'Pick two models and a probe above, then run the comparison.',
+  probeCount: (n: number) => `${n} ${plural(n, 'probe', 'probes')}`,
+  vs: 'vs',
+  agreementShort: (pct: string) => `${pct} agree`,
+  open: 'Open',
+  openComparison: (name: string) => `Open ${name}`,
+  remove: 'Delete this comparison',
+  removeConfirm: 'Yes, delete it',
+  deleted: 'Comparison deleted.',
+  loadAgain: 'Load again',
+
+  // One comparison (/studies/compare/[id])
+  back: 'Back to Model compare',
+  loading: 'Reading the comparison…',
+  notFound: 'That comparison is gone. It may have been deleted.',
+  agreementEyebrow: 'Agreement',
+  aligned: (aligned: number, total: number) =>
+    `${aligned} of ${total} ${plural(total, 'probe', 'probes')} got the same badge from every model`,
+  savedOn: (date: string) => `Saved ${date}`,
+  gridEyebrow: 'Answers',
+  gridTitle: 'Badges by probe and model',
+  gridReadout:
+    'One row per probe, one column per model. A marked row is a disagreement. Pick a badge to read that answer.',
+  gridLabel: 'Badges by probe and model',
+  probeColumn: 'Probe',
+  disagreement: 'Disagreement',
+  failedCell: 'Failed',
+  cellLabel: (model: string, probe: string, badge: string) => `${model} on ${probe}: ${badge}`,
+  tallyLabel: (model: string) => `Badges for ${model}`,
+  tallyCount: (n: number) => `×${n}`,
+  turnsEyebrow: (model: string) => `On ${model}`,
+  turnsLoading: 'Reading the conversation…',
+  turnsEmpty: 'This answer has no saved turns.',
+  failedAnswer: (error: string) => `Failed: ${error}`,
+  openRun: 'Open the run',
+  openRunWhy: 'The saved run in Probe, where you can push back or correct the badge.',
+  closeTurns: 'Close',
+  prompt: 'Prompt',
+  downloadsEyebrow: 'Download',
+  json: 'Download JSON',
+  jsonWhy: 'The comparison with every answer, as saved.',
+  csv: 'Download CSV',
+  csvWhy: 'One row per probe, a badge and an answer column per model.',
 } as const;

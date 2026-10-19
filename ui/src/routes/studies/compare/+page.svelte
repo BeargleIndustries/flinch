@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Model compare (brief 8.5): set up, run and past comparisons. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import ModelCompare from '$lib/components/studies/ModelCompare.svelte';
 </script>
 
-<ScreenPlaceholder title="Model compare" question={SCREENS.compare} />
+<ModelCompare />

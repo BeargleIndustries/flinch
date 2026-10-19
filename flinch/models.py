@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -148,7 +148,8 @@ class GenerateScorecardRequest(BaseModel):
 
 class PublicationExportRequest(BaseModel):
     name: str = Field(max_length=200)
-    format: str = "markdown"  # markdown, html, csv
+    # PDF is stored as HTML and converted on download (B24, I13); no JSON
+    format: Literal["markdown", "html", "csv", "pdf"] = "markdown"
     template: str = "full_report"  # comparison_table, consistency_matrix, pushback_summary, full_report
     filters: dict | None = None
     theme: str = "beargle-dark"

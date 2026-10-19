@@ -465,11 +465,8 @@ def generate_full_report(
             + "\n" + pushback
             + "\n</body></html>"
         )
-        if format == "html":
-            return html_doc
-        # PDF: convert HTML to bytes via WeasyPrint — returns bytes, not str
-        from flinch.themes import html_to_pdf  # noqa: PLC0415
-        return html_to_pdf(html_doc)
+        # PDF is stored as this HTML and converted on download (B24, I13).
+        return html_doc
 
     # Markdown
     refusal_rate = _pct(stats.get("refused") or 0, stats.get("total_runs") or 0)

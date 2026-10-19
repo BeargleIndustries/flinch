@@ -103,7 +103,8 @@ _STUDY_RELEASE_WAIT_S = 5.0
 
 STATIC_DIR = Path(__file__).parent / "static"
 PROBES_DIR = Path(__file__).parent / "probes"
-VARIANTS_DIR = Path(__file__).parent / "variants"
+# FLINCH_VARIANTS_DIR lets the e2e sidecar save groups into a temp folder (I32).
+VARIANTS_DIR = Path(os.environ.get("FLINCH_VARIANTS_DIR") or Path(__file__).parent / "variants")
 
 
 def _env_file() -> Path:
@@ -160,6 +161,8 @@ async def lifespan(app: FastAPI):
     seed_examples(_conn)
     seed_policies(_conn)
     seed_strategies(_conn)
+    # Shipped framing files become runnable probes, once per group (B13)
+    db.sync_all_variant_files(_conn, VARIANTS_DIR)
     # Load strategies from markdown files
     strategies_dir = Path(__file__).parent / "strategies"
     if strategies_dir.exists():
@@ -425,12 +428,10 @@ async def delete_probe(probe_id: int):
     probe = db.get_probe(_conn, probe_id)
     if not probe:
         raise HTTPException(404, "Probe not found")
-    # Check if any runs reference this probe
-    runs = _conn.execute("SELECT COUNT(*) as c FROM runs WHERE probe_id = ?", (probe_id,)).fetchone()
-    if runs["c"] > 0:
-        raise HTTPException(400, f"Probe has {runs['c']} run(s) — delete those first")
-    _conn.execute("DELETE FROM probes WHERE id = ?", (probe_id,))
-    _conn.commit()
+    blocker = db.probe_delete_blocker(_conn, probe_id)
+    if blocker:
+        raise HTTPException(409, blocker)
+    db.delete_probe(_conn, probe_id)
     return {"deleted": True}
 
 
@@ -441,10 +442,17 @@ async def api_bulk_delete_probes(request: Request):
     probe_ids = data.get("probe_ids", [])
     if not probe_ids:
         raise HTTPException(status_code=400, detail="No probe IDs provided")
-    placeholders = ",".join("?" for _ in probe_ids)
-    _conn.execute(f"DELETE FROM probes WHERE id IN ({placeholders})", probe_ids)
-    _conn.commit()
-    return {"deleted": len(probe_ids)}
+    deleted = 0
+    skipped = []
+    for probe_id in probe_ids:
+        if not db.get_probe(_conn, probe_id):
+            continue
+        if db.probe_delete_blocker(_conn, probe_id):
+            skipped.append(probe_id)
+            continue
+        db.delete_probe(_conn, probe_id)
+        deleted += 1
+    return {"deleted": deleted, "skipped": skipped}
 
 
 @app.post("/api/probes/load-defaults")
@@ -791,7 +799,7 @@ async def delete_probe_group(group_id: str):
 # Variant files (markdown-based variant groups)
 @app.get("/api/variants/files")
 async def list_variant_files_endpoint():
-    return db.list_variant_files(VARIANTS_DIR)
+    return db.list_variant_files(VARIANTS_DIR, _conn)
 
 @app.get("/api/variants/files/{group_id}")
 async def get_variant_file(group_id: str):
@@ -809,8 +817,6 @@ async def save_variant_file_endpoint(req: SaveVariantFileRequest):
         variant_type=req.variant_type,
     )
     result = db.sync_variant_file_to_db(_conn, VARIANTS_DIR, req.group_id)
-    # Reload probes so new variant probes appear in the probe list
-    db.import_all_probes(_conn, str(PROBES_DIR))
     return result or {"group_id": req.group_id, "synced": True}
 
 @app.delete("/api/variants/files/{group_id}")
@@ -1273,7 +1279,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
 
     # --- HTML / PDF format ---
     if format in ("html", "pdf"):
-        from flinch.themes import get_theme, html_to_pdf, render_theme_css
+        from flinch.themes import get_theme, render_theme_css
         enriched = db.export_session_enriched(_conn, session_id, include_turns=include_turns,
                                                include_annotations=True, include_policy=True,
                                                include_variants=True)
@@ -1309,7 +1315,7 @@ async def export_session(session_id: int, format: str = "json", include_turns: b
 </table>
 </body></html>"""
         if format == "pdf":
-            pdf_bytes = html_to_pdf(html_content)
+            pdf_bytes = _html_to_pdf_or_400(html_content)
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
@@ -2505,7 +2511,7 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
         )
 
     if format in ("html", "pdf"):
-        from flinch.themes import get_theme, html_to_pdf, render_theme_css
+        from flinch.themes import get_theme, render_theme_css
         theme_obj = get_theme(theme)
         css = render_theme_css(theme_obj)
         _esc = html_mod.escape
@@ -2531,7 +2537,7 @@ async def export_sequence(sequence_id: int, format: str = "json", theme: str = "
 </table>
 </body></html>"""
         if format == "pdf":
-            pdf_bytes = html_to_pdf(html_content)
+            pdf_bytes = _html_to_pdf_or_400(html_content)
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
@@ -2567,7 +2573,10 @@ async def clear_all_data_endpoint(req: ClearAllRequest):
     return {
         "status": "cleared",
         "deleted": deleted,
-        "preserved": ["probes", "strategy_templates", "policy_claims", "coach_profiles"],
+        "preserved": [
+            "probes", "probe_variants", "probe_claim_links",
+            "strategy_templates", "policy_claims", "coach_profiles",
+        ],
     }
 
 
@@ -2695,7 +2704,9 @@ async def create_publication_export(req: PublicationExportRequest):
         if not generator:
             raise HTTPException(400, f"Unknown template: {req.template}")
 
-        content = generator(_conn, req.filters, req.format, req.theme)
+        # PDF is stored as HTML and converted on download (B24, I13)
+        gen_format = "html" if req.format == "pdf" else req.format
+        content = generator(_conn, req.filters, gen_format, req.theme)
 
         export_id = db.save_publication_export(
             _conn, req.name, req.format, req.template, req.filters, content,
@@ -2744,8 +2755,7 @@ async def download_publication_export(export_id: int):
     filename = f"{exp['name'].replace(' ', '_')}.{ext}"
 
     if fmt == "pdf":
-        from flinch.themes import html_to_pdf
-        pdf_bytes = html_to_pdf(exp["content"])
+        pdf_bytes = _html_to_pdf_or_400(exp["content"])
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -3364,6 +3374,21 @@ async def health():
     }
 
 
+PDF_UNAVAILABLE = "PDF export needs weasyprint on the sidecar."
+
+
+def _html_to_pdf_or_400(html_content: str) -> bytes:
+    """Convert HTML to PDF bytes; 400 with a reason when weasyprint cannot run (B24)."""
+    from flinch.themes import html_to_pdf
+
+    try:
+        return html_to_pdf(html_content)
+    except (ImportError, OSError, AttributeError) as e:
+        # OSError / AttributeError: weasyprint is installed but its native
+        # (Pango/GTK) libraries are missing or too old.
+        raise HTTPException(400, PDF_UNAVAILABLE) from e
+
+
 def _has_module(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
@@ -3371,11 +3396,23 @@ def _has_module(name: str) -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=1)
+def _pdf_available() -> bool:
+    """weasyprint is importable and can render, so native libraries load too (B24)."""
+    if not _has_module("weasyprint"):
+        return False
+    try:
+        _html_to_pdf_or_400("<p>.</p>")
+    except HTTPException:
+        return False
+    return True
+
+
 @app.get("/api/settings/capabilities")
 async def get_capabilities():
     """Optional features the sidecar can serve, from the installed packages (B21)."""
     return {
-        "pdf": _has_module("weasyprint"),
+        "pdf": await asyncio.to_thread(_pdf_available),
         "experiment_extras": all(_has_module(m) for m in ("numpy", "scipy", "krippendorff")),
         "openai_sdk": _has_module("openai"),
         "google_sdk": _has_module("google.genai"),

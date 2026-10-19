@@ -34,7 +34,6 @@ from flinch.db import (
     create_condition,
     create_experiment,
     create_experiment_responses,
-    find_experiment_response,
     get_async_db,
     get_condition_comparison,
     get_experiment,
@@ -47,7 +46,6 @@ from flinch.db import (
     list_experiment_prompts,
     list_experiments,
     update_experiment,
-    update_experiment_response,
 )
 from flinch.hh_import import HHRLHFImporter
 from flinch.models import (
@@ -315,16 +313,6 @@ class UpdateClassificationRequest(BaseModel):
 class BatchRequest(BaseModel):
     probe_ids: list[int] | None = None
     delay_ms: int = 2000
-
-class ConditionItem(BaseModel):
-    label: str = Field(max_length=200)
-    system_prompt: str = Field(default="", max_length=10000)
-
-class BatchConditionsRequest(BaseModel):
-    probe_ids: list[int]
-    conditions: list[ConditionItem]
-    delay_ms: int = 2000
-    concurrency: int = 1  # parallel API calls per condition (1=sequential, 5=fast for API models)
 
 class AnnotationRequest(BaseModel):
     note_text: str | None = Field(default=None, max_length=2000)
@@ -719,134 +707,6 @@ async def run_batch(session_id: int, req: BatchRequest):
             yield _sse("error", {"error": str(e)})
 
     return _sse_response(event_stream())
-
-
-@app.post("/api/sessions/{session_id}/batch-conditions")
-async def run_batch_conditions(session_id: int, req: BatchConditionsRequest):
-    from datetime import datetime
-
-    session = db.get_session(_conn, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if not req.probe_ids:
-        raise HTTPException(400, "probe_ids required")
-    if not req.conditions:
-        raise HTTPException(400, "conditions required")
-
-    conditions = [c.model_dump() for c in req.conditions]
-
-    async def event_generator():
-        # --- Setup experiment tables before streaming ---
-        experiment_id = None
-        condition_label_to_id: dict[str, int] = {}
-        probe_id_to_prompt_id: dict[int, int] = {}
-        target_model = session.get("target_model", "unknown")
-
-        try:
-            async with get_async_db() as db_conn:
-                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-                experiment_id = await create_experiment(
-                    db_conn,
-                    name=f"Condition run: {session_id} @ {ts}",
-                    description=f"Auto-created from batch-conditions run for session {session_id}",
-                    model_ids=[target_model],
-                )
-
-                for i, cond in enumerate(conditions):
-                    cid = await create_condition(
-                        db_conn,
-                        experiment_id,
-                        label=cond["label"],
-                        system_prompt=cond.get("system_prompt", ""),
-                        sort_order=i,
-                    )
-                    condition_label_to_id[cond["label"]] = cid
-
-                prompt_entries = []
-                for i, pid in enumerate(req.probe_ids):
-                    probe = db.get_probe(_conn, pid)
-                    prompt_entries.append({
-                        "probe_id": pid,
-                        "sort_order": i,
-                        "custom_prompt_text": probe["prompt_text"] if probe else "",
-                        "domain": probe.get("domain", "") if probe else "",
-                    })
-                await add_experiment_prompts(db_conn, experiment_id, prompt_entries)
-
-                exp_prompts = await list_experiment_prompts(db_conn, experiment_id)
-                for ep in exp_prompts:
-                    if ep.get("probe_id") is not None:
-                        probe_id_to_prompt_id[ep["probe_id"]] = ep["id"]
-
-                await create_experiment_responses(db_conn, experiment_id)
-                await update_experiment(db_conn, experiment_id, status="running")
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': f'experiment setup failed: {e}'})}\n\n"
-            return
-
-        # --- Stream runner events, writing into experiment tables as we go ---
-        try:
-            async with get_async_db() as exp_db:
-                async for event in _runner.run_batch_conditions(
-                    session_id, req.probe_ids, conditions, req.delay_ms,
-                    concurrency=req.concurrency,
-                ):
-                    event_type = event["event"]
-                    event_data = event["data"]
-
-                    if event_type == "progress" and experiment_id is not None:
-                        try:
-                            cond_label = event_data.get("condition", "")
-                            probe_id = event_data.get("probe_id")
-                            resp_text = event_data.get("response_text", "")
-
-                            cond_id = condition_label_to_id.get(cond_label)
-                            prompt_id = probe_id_to_prompt_id.get(probe_id)
-
-                            if cond_id is not None and prompt_id is not None:
-                                row = await find_experiment_response(
-                                    exp_db, experiment_id, cond_id, prompt_id, target_model
-                                )
-                                if row:
-                                    await update_experiment_response(
-                                        exp_db,
-                                        row["id"],
-                                        response_text=resp_text,
-                                        status="completed",
-                                        completed_at=datetime.now(UTC).isoformat(),
-                                    )
-                        except Exception as write_err:
-                            logging.getLogger("flinch").warning(
-                                "Experiment write failed for probe %s condition %s: %s",
-                                event_data.get("probe_id"), event_data.get("condition"), write_err)
-
-                    elif event_type == "complete":
-                        if experiment_id is not None:
-                            try:
-                                await update_experiment(exp_db, experiment_id, status="completed")
-                            except Exception as complete_err:
-                                logging.getLogger("flinch").warning(
-                                    "Failed to mark experiment %s completed: %s", experiment_id, complete_err)
-                        event_data = dict(event_data, experiment_id=experiment_id)
-
-                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
-        except Exception as e:
-            if experiment_id is not None:
-                try:
-                    async with get_async_db() as fail_db:
-                        await update_experiment(fail_db, experiment_id, status="failed")
-                except Exception:
-                    pass
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            if exp_db:
-                await exp_db.close()
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @app.post("/api/batch/{batch_id}/cancel")
@@ -3347,116 +3207,6 @@ async def api_condition_export_csv(experiment_id: int):
         content=content,
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=\"experiment_{experiment_id}_conditions.csv\""},
-    )
-
-
-@app.post("/api/experiments/{experiment_id}/resume-conditions")
-async def api_resume_conditions(experiment_id: int):
-    """Resume an incomplete condition experiment — re-runs only pending responses."""
-    async with get_async_db() as db_conn:
-        # Get experiment info
-        exp = await get_experiment(db_conn, experiment_id)
-        if not exp:
-            raise HTTPException(404, "Experiment not found")
-
-        # Find pending responses with their condition and probe info
-        async with db_conn.execute(
-            """SELECT er.id, er.condition_id, er.prompt_id, er.model_id,
-                      ec.label AS condition_label, ec.system_prompt,
-                      COALESCE(ep.custom_prompt_text, p.prompt_text) AS probe_text,
-                      COALESCE(p.name, 'probe-' || ep.id) AS probe_name,
-                      ep.probe_id
-               FROM experiment_responses er
-               JOIN experiment_conditions ec ON er.condition_id = ec.id
-               JOIN experiment_prompts ep ON er.prompt_id = ep.id
-               LEFT JOIN probes p ON ep.probe_id = p.id
-               WHERE er.experiment_id = ? AND er.status = 'pending'
-               ORDER BY ec.sort_order, ep.sort_order""",
-            (experiment_id,),
-        ) as cur:
-            pending = [dict(r) for r in await cur.fetchall()]
-
-    if not pending:
-        return {"message": "No pending responses — experiment is complete", "pending": 0}
-
-    total = len(pending)
-    model_id = pending[0]["model_id"]
-
-    async def event_generator():
-        from datetime import datetime
-        completed = 0
-        failed = 0
-        current_target = None
-        current_sys_prompt = None
-
-        try:
-            yield f"event: info\ndata: {json.dumps({'message': f'Resuming {total} pending responses for model {model_id}'})}\n\n"
-            async with get_async_db() as resume_db:
-                for item in pending:
-                    cond_label = item["condition_label"]
-                    sys_prompt = item["system_prompt"] or ""
-                    probe_text = item["probe_text"] or ""
-                    probe_name = item["probe_name"] or ""
-
-                    # Create new target when condition changes
-                    if current_sys_prompt != sys_prompt or current_target is None:
-                        try:
-                            current_target = _runner._make_target(model_id, sys_prompt)
-                            current_sys_prompt = sys_prompt
-                        except Exception as target_err:
-                            yield f"event: error\ndata: {json.dumps({'error': f'Failed to create target: {target_err}'})}\n\n"
-                            return
-
-                    max_retries = 3
-                    last_error = None
-                    for attempt in range(max_retries):
-                        try:
-                            current_target.reset()
-                            response_text = (await current_target.send(probe_text)).text
-
-                            await update_experiment_response(
-                                resume_db,
-                                item["id"],
-                                response_text=response_text,
-                                status="completed",
-                                completed_at=datetime.now(UTC).isoformat(),
-                            )
-
-                            completed += 1
-                            last_error = None
-                            yield f"event: progress\ndata: {json.dumps({'probe_name': probe_name, 'condition': cond_label, 'completed': completed, 'total': total, 'response_text': response_text})}\n\n"
-                            break
-                        except Exception as e:
-                            last_error = e
-                            if attempt < max_retries - 1:
-                                await asyncio.sleep(2 ** attempt)
-
-                    if last_error:
-                        failed += 1
-                        completed += 1
-                        yield f"event: error\ndata: {json.dumps({'probe_name': probe_name, 'condition': cond_label, 'error': str(last_error), 'completed': completed, 'total': total})}\n\n"
-
-                    await asyncio.sleep(1)
-
-                # Mark experiment completed if no pending left
-                async with resume_db.execute(
-                    "SELECT COUNT(*) FROM experiment_responses WHERE experiment_id = ? AND status = 'pending'",
-                    (experiment_id,),
-                ) as cur:
-                    row = await cur.fetchone()
-                    still_pending = row[0] if row else 0
-
-                if still_pending == 0:
-                    await update_experiment(resume_db, experiment_id, status="completed")
-
-            yield f"event: complete\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': completed, 'failed': failed, 'still_pending': still_pending})}\n\n"
-        except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

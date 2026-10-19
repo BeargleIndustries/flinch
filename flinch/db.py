@@ -2994,121 +2994,6 @@ def get_cross_model_stat_comparison(conn, probe_id: int, models: list[str]) -> l
     return results
 
 
-# --- Corpus Imports CRUD ---
-
-def create_corpus_import(conn, filename: str, raw_content: str) -> int:
-    cur = conn.execute(
-        "INSERT INTO corpus_imports (filename, raw_content) VALUES (?, ?)",
-        (filename, raw_content),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-ALLOWED_CORPUS_IMPORT_FIELDS = {
-    "source_format", "extracted_count", "status", "llm_analysis",
-}
-
-
-def update_corpus_import(conn, import_id: int, **kwargs) -> None:
-    if not kwargs:
-        return
-    unknown = set(kwargs.keys()) - ALLOWED_CORPUS_IMPORT_FIELDS
-    if unknown:
-        raise ValueError(f"Unknown corpus_import fields: {unknown}")
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [import_id]
-    conn.execute(f"UPDATE corpus_imports SET {fields} WHERE id = ?", values)
-    conn.commit()
-
-
-def get_corpus_import(conn, import_id: int) -> dict | None:
-    row = conn.execute("SELECT * FROM corpus_imports WHERE id = ?", (import_id,)).fetchone()
-    return _row_to_dict(row)
-
-
-def list_corpus_imports(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM corpus_imports ORDER BY id DESC").fetchall()
-    return [_row_to_dict(r) for r in rows]
-
-
-# --- Corpus Extracted Probes CRUD ---
-
-def add_extracted_probe(conn, import_id: int, suggested_name: str | None, suggested_domain: str | None,
-                        prompt_text: str, context_text: str | None, refusal_type: str | None,
-                        confidence: float = 0.0) -> int:
-    cur = conn.execute(
-        "INSERT INTO corpus_extracted_probes "
-        "(import_id, suggested_name, suggested_domain, prompt_text, context_text, refusal_type, confidence) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (import_id, suggested_name, suggested_domain, prompt_text, context_text, refusal_type, confidence),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def get_extracted_probes(conn, import_id: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM corpus_extracted_probes WHERE import_id = ? ORDER BY id",
-        (import_id,),
-    ).fetchall()
-    return [_row_to_dict(r) for r in rows]
-
-
-ALLOWED_EXTRACTED_PROBE_FIELDS = {
-    "suggested_name", "suggested_domain", "prompt_text", "context_text",
-    "refusal_type", "confidence", "selected", "probe_id",
-}
-
-
-def update_extracted_probe(conn, probe_id: int, **kwargs) -> None:
-    if not kwargs:
-        return
-    unknown = set(kwargs.keys()) - ALLOWED_EXTRACTED_PROBE_FIELDS
-    if unknown:
-        raise ValueError(f"Unknown corpus_extracted_probe fields: {unknown}")
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [probe_id]
-    conn.execute(f"UPDATE corpus_extracted_probes SET {fields} WHERE id = ?", values)
-    conn.commit()
-
-
-def confirm_extracted_probes(conn, import_id: int, selected_ids: list[int]) -> list[int]:
-    """Create real probes from selected extracted probes. Returns list of created probe IDs."""
-    if not selected_ids:
-        return 0
-    rows = conn.execute(
-        "SELECT * FROM corpus_extracted_probes WHERE import_id = ? AND id IN ({})".format(
-            ",".join("?" * len(selected_ids))
-        ),
-        [import_id] + list(selected_ids),
-    ).fetchall()
-    created_ids = []
-    for row in rows:
-        ep = _row_to_dict(row)
-        name = ep.get("suggested_name") or f"extracted-{ep['id']}"
-        probe_id = create_probe(
-            conn,
-            name=name,
-            domain=ep.get("suggested_domain") or "",
-            prompt_text=ep["prompt_text"],
-            description=ep.get("context_text") or "",
-            tags=[ep["refusal_type"]] if ep.get("refusal_type") else [],
-        )
-        conn.execute(
-            "UPDATE corpus_extracted_probes SET selected = 1, probe_id = ? WHERE id = ?",
-            (probe_id, ep["id"]),
-        )
-        created_ids.append(probe_id)
-    # Update extracted_count on import
-    conn.execute(
-        "UPDATE corpus_imports SET extracted_count = extracted_count + ? WHERE id = ?",
-        (len(created_ids), import_id),
-    )
-    conn.commit()
-    return created_ids
-
-
 # --- Scorecard Snapshots CRUD ---
 
 def save_scorecard(conn, name: str, models: list, session_ids: list | None,
@@ -3494,17 +3379,6 @@ async def get_experiment_response(db, response_id):
     """Get single response."""
     async with db.execute(
         "SELECT * FROM experiment_responses WHERE id = ?", (response_id,)
-    ) as cur:
-        row = await cur.fetchone()
-    return dict(row) if row else None
-
-
-async def find_experiment_response(db, experiment_id, condition_id, prompt_id, model_id):
-    """Find a specific response cell by its unique key."""
-    async with db.execute(
-        """SELECT * FROM experiment_responses
-           WHERE experiment_id = ? AND condition_id = ? AND prompt_id = ? AND model_id = ?""",
-        (experiment_id, condition_id, prompt_id, model_id),
     ) as cur:
         row = await cur.fetchone()
     return dict(row) if row else None

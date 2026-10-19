@@ -109,3 +109,11 @@ def test_no_base_http_middleware() -> None:
     assert flinch.app.NoStoreMiddleware in classes
     offenders = [c for c in classes if isinstance(c, type) and issubclass(c, BaseHTTPMiddleware)]
     assert not offenders
+
+def test_removed_routes() -> None:
+    """B33: the two legacy conditions routes are gone; /api/experiments is the one runner."""
+    import flinch.app
+
+    paths = flinch.app.app.openapi()["paths"]
+    assert "/api/sessions/{session_id}/batch-conditions" not in paths
+    assert "/api/experiments/{experiment_id}/resume-conditions" not in paths

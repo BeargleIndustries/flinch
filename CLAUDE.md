@@ -12,7 +12,7 @@ Vault overview: `C:\Users\Brad\Documents\Dropbox\Claude\Vault\projects\flinch\fl
 - SQLite (data storage via stdlib sqlite3)
 - PyYAML (probe sets)
 - Pydantic v2 (data models)
-- Vanilla JS ES modules (frontend, no build step)
+- SvelteKit 2 + Svelte 5 + TypeScript + Tailwind 3 (frontend in `ui/`, static adapter, built with Vite; Vitest and Playwright tests)
 
 ## Conventions
 - Type hints everywhere, `from __future__ import annotations`

@@ -1,7 +1,8 @@
 <!--
   A study's Run tab (brief 8.2.3, B02, B03, B36, F6, F14): the estimate and
   the action row, this window's stream while it runs, the Progress panel
-  (overall, by condition, by model, and the cell grid), then Setup.
+  (overall, by condition, by model, and the cell grid), then Setup, where a
+  draft study takes another condition ("Add a condition…", brief 9.9).
 
   Actions by state come from `runActions`. Resume stays enabled whatever the
   server says (F14): a 409 shows ERROR_COPY.studyRunning by the row, and
@@ -15,7 +16,7 @@
   import StreamProgress from '$lib/components/StreamProgress.svelte';
   import { CONDITIONS, RATE_PROVIDER_LABELS } from '$lib/copy/studies';
   import { formatDate } from '$lib/format';
-  import { BTN, HINT } from '../probe/styles';
+  import { BTN, FIELD, HINT, LABEL } from '../probe/styles';
   import {
     RESPONSES_LIMIT,
     buildGrid,
@@ -40,10 +41,48 @@
     estimate: StudyEstimate | null;
     run: StudyRun;
     onAddPrompts: () => void;
+    /** Adds a condition to a draft study (brief 9.9); resolves to an error message or null. */
+    onAddCondition: (label: string, systemPrompt: string) => Promise<string | null>;
   }
 
-  let { experiment, conditions, prompts, progress, responses, estimate, run, onAddPrompts }: Props =
-    $props();
+  let {
+    experiment,
+    conditions,
+    prompts,
+    progress,
+    responses,
+    estimate,
+    run,
+    onAddPrompts,
+    onAddCondition,
+  }: Props = $props();
+
+  // "Add a condition…" (draft studies only): Label and System prompt.
+  let adding = $state(false);
+  let newLabel = $state('');
+  let newPrompt = $state('');
+  let addError = $state<string | null>(null);
+  let saving = $state(false);
+
+  function closeAdd() {
+    adding = false;
+    newLabel = '';
+    newPrompt = '';
+    addError = null;
+  }
+
+  async function saveCondition() {
+    const label = newLabel.trim();
+    if (!label) addError = CONDITIONS.needCondition;
+    else if (label.length > 100) addError = CONDITIONS.labelLong;
+    else if (conditions.some((c) => c.label.trim() === label)) addError = CONDITIONS.uniqueLabels;
+    else addError = null;
+    if (addError || saving) return;
+    saving = true;
+    addError = await onAddCondition(label, newPrompt);
+    saving = false;
+    if (!addError) closeAdd();
+  }
 
   const limits = $derived(savedRateLimits(experiment.config));
   const act = $derived(
@@ -346,6 +385,17 @@
         <button
           type="button"
           class={BTN.secondary}
+          title={CONDITIONS.addConditionWhy}
+          aria-expanded={adding}
+          disabled={adding}
+          onclick={() => (adding = true)}
+          data-testid="add-condition"
+        >
+          {CONDITIONS.addConditionOpen}
+        </button>
+        <button
+          type="button"
+          class={BTN.secondary}
           onclick={onAddPrompts}
           data-testid="add-prompts"
         >
@@ -353,6 +403,42 @@
         </button>
       {/if}
     {/snippet}
+    {#if adding && experiment.status === 'draft'}
+      <form
+        class="flex flex-col gap-2 rounded-md border border-border bg-bg/40 p-3"
+        data-testid="add-condition-form"
+        onsubmit={(e) => {
+          e.preventDefault();
+          void saveCondition();
+        }}
+      >
+        <label class={LABEL} for="new-cond-label">{CONDITIONS.label}</label>
+        <input
+          id="new-cond-label"
+          class={FIELD}
+          maxlength="100"
+          bind:value={newLabel}
+          data-testid="new-condition-label"
+        />
+        <label class={LABEL} for="new-cond-prompt">{CONDITIONS.systemPrompt}</label>
+        <textarea
+          id="new-cond-prompt"
+          rows="3"
+          spellcheck="false"
+          class="{FIELD} resize-y font-mono text-[12px] leading-relaxed"
+          placeholder={CONDITIONS.systemPromptPlaceholder}
+          bind:value={newPrompt}
+          data-testid="new-condition-prompt"
+        ></textarea>
+        {#if addError}<p class="text-xs text-danger" role="alert">{addError}</p>{/if}
+        <div class="flex gap-2">
+          <button type="submit" class={BTN.primary} disabled={saving}>
+            {saving ? CONDITIONS.addingCondition : CONDITIONS.addConditionSave}
+          </button>
+          <button type="button" class={BTN.ghost} onclick={closeAdd}>{CONDITIONS.cancel}</button>
+        </div>
+      </form>
+    {/if}
     <dl class="grid gap-x-6 gap-y-3 text-xs sm:grid-cols-[9rem_1fr]">
       <dt class="text-text4">{CONDITIONS.setupConditions}</dt>
       <dd>

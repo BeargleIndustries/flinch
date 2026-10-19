@@ -93,9 +93,11 @@ class FramingsStore {
     return d;
   }
 
-  /** The probe-group row behind a group (names for "View" on a DB-only group). */
-  rowsOf(groupId: string): ProbeGroup | null {
-    return this.groupRows.find((g) => g.group_id === groupId) ?? null;
+  /** GET /api/probe-groups/{group_id}: label and probe name for "View" on a DB-only group (brief 9.9). */
+  async groupDetail(groupId: string): Promise<ProbeGroup> {
+    return status.track(
+      request<ProbeGroup>(ROUTES.getProbeGroup, { params: { group_id: groupId } }),
+    );
   }
 
   /**

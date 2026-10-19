@@ -304,6 +304,11 @@ export const CONDITIONS = {
   setupCompleted: 'Completed',
   notYet: 'Not yet',
   addPrompts: 'Add prompts…',
+  addConditionOpen: 'Add a condition…',
+  addConditionWhy: 'Add one more system prompt before the study starts.',
+  addConditionSave: 'Add this condition',
+  addingCondition: 'Adding…',
+  conditionAdded: (label: string) => `Added the condition "${label}".`,
 
   estimateLine: (cells: number, cost: number) =>
     `About ${cells} model ${plural(cells, 'call', 'calls')}, roughly $${cost.toFixed(2)}.`,
@@ -415,6 +420,9 @@ export const CONDITIONS_RESULTS = {
   showAll: 'Show all',
   showLess: 'Show less',
   emptyText: 'The model sent no text.',
+  /** One response's text metrics (brief 9.9, GET /api/experiments/{id}/metrics). */
+  metricLine: (words: number | null, grade: number | null, hedging: number | null) =>
+    `Words ${words ?? 'n/a'} · Reading grade ${grade === null ? 'n/a' : grade.toFixed(1)} · Hedging ${hedging === null ? 'n/a' : hedging.toFixed(2)}`,
   limitLine: 'Showing the first 1,000 responses for this prompt. Download the CSV for all of them.',
 
   // Raters: AI (8.2.3, B14)

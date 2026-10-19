@@ -11,7 +11,7 @@
   import ConfirmButton from '$lib/components/ConfirmButton.svelte';
   import { FRAMINGS } from '$lib/copy/studies';
   import { BTN, HINT } from '../probe/styles';
-  import type { FramingGroup } from './framings';
+  import type { FramingGroup, ProbeGroup } from './framings';
   import { framings } from './framings.svelte';
 
   interface Props {
@@ -26,22 +26,22 @@
   const uid = $props.id();
   let open = $state(false);
   let detail = $state<VariantFileDetail | null>(null);
+  let dbDetail = $state<ProbeGroup | null>(null);
   let loading = $state(false);
   let failed = $state<string | null>(null);
 
   const count = $derived(group.probeIds.length);
-  const rows = $derived(
-    group.kind === 'db' ? (framings.rowsOf(group.groupId)?.variants ?? []) : [],
-  );
+  const rows = $derived(dbDetail?.variants ?? []);
   const busy = $derived(framings.deleting === group.groupId);
 
   async function toggle() {
     open = !open;
-    if (!open || group.kind !== 'file' || detail) return;
+    if (!open || detail || dbDetail) return;
     loading = true;
     failed = null;
     try {
-      detail = await framings.detail(group.groupId);
+      if (group.kind === 'file') detail = await framings.detail(group.groupId);
+      else dbDetail = await framings.groupDetail(group.groupId);
     } catch (e) {
       failed = e instanceof Error ? e.message : String(e);
     } finally {

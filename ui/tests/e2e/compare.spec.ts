@@ -7,7 +7,9 @@
 // models agree on both probes: 100%. The run is one synchronous request,
 // POST /api/compare/run; its two auto-created sessions (one per model) are
 // listed by GET /api/sessions but hidden from the header's session switcher
-// by their notes prefix (isCompareSession).
+// by their notes prefix (isCompareSession). The view's two downloads read
+// GET /api/comparisons/{id}/export as JSON and as CSV.
+import fs from 'node:fs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { COMPARE_SESSION_PREFIX } from '../../src/lib/session';
 import { SCREENS } from '../../src/lib/copy/screens';
@@ -151,6 +153,35 @@ test('a two-model comparison shows two columns, is listed, hides its sessions an
 
   await expect(view.getByTestId('comparison-agreement')).toHaveText('100%');
   await expect(view.getByTestId('comparison-aligned')).toHaveText(COMPARE.aligned(2, 2));
+
+  // The downloads: JSON as saved, CSV with a badge and answer column per model.
+  for (const [label, format] of [
+    [COMPARE.json, 'json'],
+    [COMPARE.csv, 'csv'],
+  ] as const) {
+    const exported = page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === `/api/comparisons/${id}/export` &&
+        new URL(r.url()).searchParams.get('format') === format,
+    );
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      view.getByRole('button', { name: `Download ${label}`, exact: true }).click(),
+    ]);
+    expect((await exported).status()).toBe(200);
+    expect(download.suggestedFilename()).toMatch(
+      new RegExp(`^flinch-comparison-${id}-.+\\.${format}$`),
+    );
+    const text = fs.readFileSync(await download.path(), 'utf8');
+    if (format === 'json') {
+      const json = JSON.parse(text) as { comparison: { id: number; models: string[] } };
+      expect(json.comparison).toMatchObject({ id, models: [claude, gpt] });
+    } else {
+      expect(text.split(/\r?\n/)[0]).toBe(
+        `probe_name,probe_domain,prompt_text,disagreement,${claude}_classification,${claude}_response,${gpt}_classification,${gpt}_response`,
+      );
+    }
+  }
 
   // A cell opens that model's conversation (roles user/assistant).
   const detail = await api<Detail>('GET', `/api/comparisons/${id}`);

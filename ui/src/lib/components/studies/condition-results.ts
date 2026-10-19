@@ -79,6 +79,14 @@ export interface StudyResponseText {
   response_text: string | null;
 }
 
+/** One row of GET /api/experiments/{id}/metrics (`flinch/db.py` get_response_metrics); the fields the metric line reads. */
+export interface ResponseMetric {
+  response_id: number;
+  word_count: number | null;
+  flesch_kincaid_grade: number | null;
+  hedging_ratio: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Stream ids and limits
 // ---------------------------------------------------------------------------

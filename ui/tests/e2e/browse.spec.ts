@@ -10,7 +10,9 @@
 // - The session detail lists its runs with badges, opens one, shows the
 //   written finding (9.9), opens the run in Probe, and deletes the session.
 // - Sequences: a completed (whittled) sequence shows its warmup setting and
-//   status, and its detail shows the header, runs and thread.
+//   status, and its detail shows the header, runs and thread; back in the
+//   list, "Delete this sequence" removes it (DELETE /api/sequences/{id}).
+// - "Export everything (JSON)" downloads GET /api/dashboard/export-all.
 // Delete all recorded data destroys shared state, so it lives in
 // zz-browse-clear-all.spec.ts, which sorts after every other spec.
 import fs from 'node:fs';
@@ -20,7 +22,7 @@ import { SCREENS } from '../../src/lib/copy/screens';
 import { SHELL } from '../../src/lib/copy/shell';
 import { COMPARE_SESSION_PREFIX, isCompareSession } from '../../src/lib/session';
 import { tipsRegistry } from '../../src/lib/tips/tips-registry';
-import { api, createSession, readSeed, sendProbe, type Session } from './helpers';
+import { api, createSession, readSeed, sendProbe, sidecarUrl, type Session } from './helpers';
 
 type SessionRow = Session & { run_count: number; notes: string | null };
 type Stats = { total_sessions: number; total_sequences: number };
@@ -261,4 +263,51 @@ test('Sequences lists a completed sequence with its warmup setting; its detail s
   await expect(page.getByTestId('sequence-warmup')).toHaveText(SEQUENCE_DETAIL.warmupValue(2));
   await expect(page.getByTestId('sequence-run')).toHaveCount(summary.runs.length);
   await expect(page.getByTestId('thread-turn').first()).toBeVisible();
+
+  // Back in the list, "Delete this sequence": the first click arms, the second deletes.
+  await openBrowse(page);
+  await showTab(page, BROWSE.tabSequences, 'sequences');
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: BROWSE.deleteSequence, exact: true }).click();
+  const removed = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'DELETE' &&
+      new URL(r.url()).pathname === `/api/sequences/${made.id}`,
+  );
+  await row.getByRole('button', { name: BROWSE.deleteSequenceConfirm, exact: true }).click();
+  expect((await removed).ok()).toBe(true);
+  await expect(row).toHaveCount(0);
+  const gone = await fetch(`${sidecarUrl()}/api/sequences/${made.id}`);
+  expect(gone.status).toBe(404);
+});
+
+test('"Export everything (JSON)" downloads every session, sequence and comparison', async ({
+  page,
+}) => {
+  const seed = readSeed();
+  const s = await createSession(`E2E browse export ${stamp()}`, [seed.probes.refuseMe]);
+  await sendProbe(s.id, seed.probes.refuseMe);
+  await openBrowse(page);
+
+  const exported = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === '/api/dashboard/export-all',
+  );
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('browse-export-all').click(),
+  ]);
+  expect((await exported).status()).toBe(200);
+  expect(download.suggestedFilename()).toMatch(/^flinch-export-all-.+\.json$/);
+  const json = JSON.parse(fs.readFileSync(await download.path(), 'utf8')) as {
+    export_type: string;
+    sessions: { id: number; runs: unknown[] }[];
+    sequences: unknown[];
+    comparisons: unknown[];
+    counts: { sessions: number };
+  };
+  expect(json.export_type).toBe('full_export');
+  expect(json.counts.sessions).toBe(json.sessions.length);
+  expect(json.sessions.find((x) => x.id === s.id)?.runs).toHaveLength(1);
+  expect(Array.isArray(json.sequences)).toBe(true);
+  expect(Array.isArray(json.comparisons)).toBe(true);
 });

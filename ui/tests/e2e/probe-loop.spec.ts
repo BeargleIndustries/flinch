@@ -4,8 +4,9 @@
 // (B10), teach the coach; the Skip path and Next probe; a custom prompt that
 // becomes a probe in the rail; notes that save on blur and survive a reload;
 // a history row that opens the saved run, where a follow-up pushback grows
-// the same thread; a saved refused run opening in the pushback phase and a
-// missing run saying so.
+// the same thread; the response badge corrected by hand (PATCH
+// /api/runs/{id}/classification, brief 7.5); a saved refused run opening in
+// the pushback phase and a missing run saying so.
 //
 // The fake target (tests/fake_models.py) refuses "[REFUSE]" prompts on the
 // first turn and complies after that; its coach drafts
@@ -281,6 +282,36 @@ test('the newest history row opens the saved run, and a follow-up pushback grows
   ]);
   expect(turns[4].content).toBe('Please continue the scene.');
   expect(await runsOf(sess)).toHaveLength(1);
+});
+
+test('the response badge corrects the classifier: Negotiated is saved as the first classification', async ({
+  page,
+}) => {
+  const seed = readSeed();
+  const sess = await newSession('Badge');
+  const run = await sendProbe(sess.id, seed.probes.refuseMe);
+  expect(run.initial_classification).toBe('refused');
+
+  await openIn(page, sess, `/probe/runs/${run.id}`);
+  const response = cards(page).first();
+  await expect(cards(page)).toHaveCount(1);
+  await expect(response).toHaveAttribute('data-cls', 'refused');
+  await response.getByRole('button', { name: /Change the classification/ }).click();
+
+  const patched = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/runs/${run.id}/classification`) && r.request().method() === 'PATCH',
+  );
+  await response.getByRole('menuitemradio', { name: 'Negotiated' }).click();
+  const res = await patched;
+  expect(res.status()).toBe(200);
+  expect(res.request().postDataJSON()).toEqual({
+    field: 'initial_classification',
+    value: 'negotiated',
+  });
+  await expect(response).toHaveAttribute('data-cls', 'negotiated');
+  const [saved] = await runsOf(sess);
+  expect(saved.initial_classification).toBe('negotiated');
 });
 
 test('a saved refused run opens in the pushback phase; a missing run says so', async ({ page }) => {

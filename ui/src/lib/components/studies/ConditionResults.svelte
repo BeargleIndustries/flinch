@@ -11,7 +11,9 @@
                           download (I22)
     Responses             every prompt with one badge per response grouped by
                           condition (repeat in the title); the picked prompt's
-                          answers side by side (GET /responses?prompt_id=)
+                          answers side by side (GET /responses?prompt_id=),
+                          each with its metric line once metrics exist
+                          (GET /metrics, brief 9.9)
 
   The comparison, prompts and cells come from ConditionStudy, which reloads
   them when a run, the metrics job or this tab asks (`onChanged`).
@@ -54,6 +56,7 @@
     visibleMetricRows,
     type AnalysisLine,
     type ClassifyResult,
+    type ResponseMetric,
     type StudyResponseText,
   } from './condition-results';
   import type { StudyJob } from './condition-jobs.svelte';
@@ -148,6 +151,28 @@
       computedAt = res.results[0]?.created_at ?? null;
     } catch {
       computedAt = null;
+    }
+  }
+
+  // Each response's own metrics, keyed by response id (9.9).
+  let responseMetrics = $state<Map<number, ResponseMetric>>(new Map());
+
+  $effect(() => {
+    const has = comparison?.has_metrics;
+    untrack(() => {
+      if (has) void loadResponseMetrics();
+      else responseMetrics = new Map();
+    });
+  });
+
+  async function loadResponseMetrics() {
+    try {
+      const res = await status.track(
+        request<{ metrics: ResponseMetric[] }>(ROUTES.getExperimentMetrics, { params }),
+      );
+      responseMetrics = new Map(res.metrics.map((m) => [m.response_id, m]));
+    } catch {
+      responseMetrics = new Map();
     }
   }
 
@@ -664,6 +689,8 @@
                       {#each detailBy.get(c.id) ?? [] as r (r.id)}
                         {@const text = r.response_text ?? ''}
                         {@const long = text.length > COLLAPSE_AT}
+                        {@const m =
+                          r.status === 'completed' ? responseMetrics.get(r.id) : undefined}
                         <article
                           class="flex flex-col gap-1.5 rounded-md border border-border bg-bg/50 p-2.5"
                           data-testid="response-card"
@@ -697,6 +724,14 @@
                                 >{open.has(r.id) ? R.showLess : R.showAll}</button
                               >
                             {/if}
+                          {/if}
+                          {#if m}
+                            <p
+                              class="font-mono text-[10px] tabular-nums text-text4"
+                              data-testid="response-metrics"
+                            >
+                              {R.metricLine(m.word_count, m.flesch_kincaid_grade, m.hedging_ratio)}
+                            </p>
                           {/if}
                         </article>
                       {/each}

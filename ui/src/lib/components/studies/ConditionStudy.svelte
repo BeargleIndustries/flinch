@@ -16,7 +16,12 @@
   import { ArrowLeft } from 'lucide-svelte';
   import { request } from '$lib/api/client';
   import { ROUTES } from '$lib/api/endpoints';
-  import type { ConditionComparison, ExperimentDetail, StudyProgress } from '$lib/api/types';
+  import type {
+    Condition,
+    ConditionComparison,
+    ExperimentDetail,
+    StudyProgress,
+  } from '$lib/api/types';
   import ConfirmButton from '$lib/components/ConfirmButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import StatusChip from '$lib/components/StatusChip.svelte';
@@ -148,6 +153,37 @@
     untrack(() => void loadComparison());
   });
 
+  /**
+   * POST /api/experiments/{id}/conditions, then GET .../conditions for the
+   * list and a fresh estimate (brief 9.9). Resolves to an error message or null.
+   */
+  async function addCondition(label: string, systemPrompt: string): Promise<string | null> {
+    const params = { experiment_id: id };
+    try {
+      await status.track(
+        request(ROUTES.addCondition, {
+          params,
+          body: {
+            label,
+            system_prompt: systemPrompt,
+            sort_order: detail?.conditions.length ?? 0,
+          },
+        }),
+      );
+      const res = await status.track(
+        request<{ conditions: Condition[] }>(ROUTES.listConditions, { params }),
+      );
+      if (detail) detail = { ...detail, conditions: res.conditions };
+      status.note(CONDITIONS.conditionAdded(label));
+      void loadEstimate();
+      return null;
+    } catch (e) {
+      const f = friendlyError(e);
+      status.error(f.message, f.details);
+      return f.message;
+    }
+  }
+
   async function remove() {
     if (!detail) return;
     deleting = true;
@@ -215,6 +251,7 @@
               {estimate}
               {run}
               onAddPrompts={() => (sourcesOpen = true)}
+              onAddCondition={addCondition}
             />
           {:else if current === 'results'}
             <ConditionResults

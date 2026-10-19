@@ -9,7 +9,10 @@
 // framing strategies"), so the draft path runs end to end here rather than in
 // a unit test. "Run in this session" on the fixture group runs its probes in a
 // fresh session (the run count grows by the group's size), and Results shows
-// one badge per framing and the consistency summary.
+// one badge per framing and the consistency summary. A group without a file
+// (made through POST /api/probe-groups, which has no button, brief 9.9) is
+// listed, "View" reads it from GET /api/probe-groups/{group_id}, and "Delete
+// this group" removes it with DELETE /api/probe-groups/{group_id}.
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { CLS_SPEC } from '../../src/lib/cls';
 import { SCREENS } from '../../src/lib/copy/screens';
@@ -270,4 +273,46 @@ test('"Run in this session" runs the fixture group; Results shows a badge per fr
   }
   await expect(results.getByTestId('consistency-score')).toHaveText(FRAMINGS.resultsScore(100));
   await expect(results).toContainText(FRAMINGS.resultsReadout(1, 1));
+});
+
+test('a group without a file: View reads its rows, Delete this group removes it', async ({
+  page,
+}) => {
+  const groupId = `e2e-db-${stamp()}`;
+  const seed = readSeed();
+  await api('POST', '/api/probe-groups', {
+    group_id: groupId,
+    probe_ids: [seed.probes.refuseMe, seed.probes.answerMe],
+    labels: ['Direct request', 'Fiction framing'],
+  });
+
+  try {
+    await openFramings(page, seed.sessionId);
+    const made = card(page, groupId);
+    await expect(made).toHaveAttribute('data-kind', 'db');
+    await expect(made.getByTestId('framing-group-count')).toHaveText(FRAMINGS.probeCount(2));
+
+    const read = page.waitForResponse(
+      (r) => r.url().endsWith(`/api/probe-groups/${groupId}`) && r.request().method() === 'GET',
+    );
+    await made.getByRole('button', { name: FRAMINGS.view, exact: true }).click();
+    expect((await read).status()).toBe(200);
+    const view = made.getByTestId('framing-group-view');
+    await expect(view).toContainText('Direct request');
+    await expect(view).toContainText('refuse-me');
+    await expect(view).toContainText('Fiction framing');
+    await expect(view).toContainText('answer-me');
+
+    const removed = page.waitForResponse(
+      (r) => r.url().endsWith(`/api/probe-groups/${groupId}`) && r.request().method() === 'DELETE',
+    );
+    await made.getByRole('button', { name: FRAMINGS.deleteGroup }).click();
+    await made.getByRole('button', { name: FRAMINGS.deleteConfirm }).click();
+    expect((await removed).status()).toBe(200);
+    await expect(made).toHaveCount(0);
+    const groups = await api<{ group_id: string }[]>('GET', '/api/probe-groups');
+    expect(groups.some((g) => g.group_id === groupId)).toBe(false);
+  } finally {
+    await api('DELETE', `/api/probe-groups/${groupId}`).catch(() => {});
+  }
 });

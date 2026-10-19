@@ -22,7 +22,8 @@
 // /rows (target 20, a stratification mix other than the default) runs to
 // 40 of 40 cells. Results shows one badge per response and none of them
 // unclassified, Classify reports what the route returned, the comparison
-// cards render, text metrics compute and Run statistics is offered. The
+// cards render, text metrics compute (the table, and each open response's
+// metric line from GET /metrics, brief 9.9) and Run statistics is offered. The
 // Export tab has exactly the five D20 rows: the four that need no
 // statistics download under their names (the CSV header has model_id and
 // repetition, B11; every JSONL line parses, B06), and the report row says
@@ -30,6 +31,10 @@
 //
 // "statistics and the report" (fixme, see its comment): Run statistics, the
 // statistics table download (I22) and the report download.
+//
+// "a draft takes another condition, then Delete this study": Setup's "Add a
+// condition…" (brief 9.9: POST, then GET /conditions) and the header's
+// Delete this study (DELETE /api/experiments/{id}, back to the list).
 import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { SCREENS } from '../../src/lib/copy/screens';
@@ -325,12 +330,25 @@ test('sources and results', async ({ page }) => {
   await results.getByTestId('response-prompt').first().click();
   await expect(results.getByTestId('response-card')).toHaveCount(2);
 
-  // Text metrics (stream metrics:{id}).
+  // Text metrics (stream metrics:{id}); then each response's own line (9.9).
+  const metricsRead = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname === `/api/experiments/${id}/metrics`,
+    { timeout: 30_000 },
+  );
   await results.getByTestId('compute-metrics').click();
   await expect(results.getByTestId('metrics-table')).toBeVisible({ timeout: 30_000 });
   await expect(
     results.locator('[data-testid="metrics-table"] tr[data-metric="word_count"]'),
   ).toHaveCount(1);
+  const perResponse = (await (await metricsRead).json()) as { metrics: unknown[] };
+  expect(perResponse.metrics).toHaveLength(40);
+  const metricLines = results.getByTestId('response-metrics');
+  await expect(metricLines).toHaveCount(2);
+  await expect(metricLines.first()).toHaveText(
+    /Words \d+ · Reading grade (-?\d+\.\d|n\/a) · Hedging (\d+\.\d\d|n\/a)/,
+  );
 
   // Statistics are offered once metrics exist (run in "statistics and the report").
   await expect(results.getByTestId('run-stats')).toHaveText(R.runStats);
@@ -438,4 +456,72 @@ test('statistics and the report', async ({ page }) => {
   const report = await grab(page, R.rows.report.label);
   expect(report.name).toBe(`study-${id}-report.md`);
   expect(report.text).toContain(name);
+});
+
+test('a draft takes another condition, then Delete this study removes it', async ({ page }) => {
+  const name = `E2E draft ${stamp()}`;
+  const made = await api<{ experiment: { id: number } }>('POST', '/api/experiments', {
+    name,
+    model_ids: ['claude-haiku-4-5-20251001'],
+    conditions: [{ label: 'Control', system_prompt: '', sort_order: 0 }],
+  });
+  const id = made.experiment.id;
+
+  await page.goto(`/studies/conditions/${id}`);
+  await expect(page.getByTestId('sidecar-chip')).toHaveText(SHELL.sidecarReady);
+  await expect(page.getByTestId('study-status').locator('[data-status]')).toHaveAttribute(
+    'data-status',
+    'draft',
+  );
+
+  // Setup, "Add a condition…": a label that already exists is refused before anything is sent.
+  await page.getByTestId('add-condition').click();
+  const form = page.getByTestId('add-condition-form');
+  await form.getByTestId('new-condition-label').fill('Control');
+  await form.getByRole('button', { name: CONDITIONS.addConditionSave }).click();
+  await expect(form.getByRole('alert')).toHaveText(CONDITIONS.uniqueLabels);
+
+  await form.getByTestId('new-condition-label').fill('Formal');
+  await form.getByTestId('new-condition-prompt').fill('Answer formally.');
+  const posted = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'POST' &&
+      new URL(r.url()).pathname === `/api/experiments/${id}/conditions`,
+  );
+  const listed = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname === `/api/experiments/${id}/conditions`,
+  );
+  await form.getByRole('button', { name: CONDITIONS.addConditionSave }).click();
+  const post = await posted;
+  expect(post.status()).toBe(200);
+  expect(post.request().postDataJSON()).toEqual({
+    label: 'Formal',
+    system_prompt: 'Answer formally.',
+    sort_order: 1,
+  });
+  expect((await listed).status()).toBe(200);
+  await expect(form).toHaveCount(0);
+  const setup = page.getByTestId('condition-run');
+  await expect(setup).toContainText('Formal');
+  await expect(setup).toContainText('Answer formally.');
+  const after = await api<StudyDetail>('GET', `/api/experiments/${id}`);
+  expect(after.conditions.map((c) => [c.label, c.system_prompt])).toEqual([
+    ['Control', ''],
+    ['Formal', 'Answer formally.'],
+  ]);
+
+  // Delete this study: the first click arms, the second deletes and returns to the list.
+  await page.getByRole('button', { name: CONDITIONS.deleteStudy, exact: true }).click();
+  const removed = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'DELETE' && new URL(r.url()).pathname === `/api/experiments/${id}`,
+  );
+  await page.getByRole('button', { name: CONDITIONS.deleteConfirm, exact: true }).click();
+  expect((await removed).ok()).toBe(true);
+  await expect(page).toHaveURL(/\/studies\/conditions$/);
+  await expect(page.locator(`[data-testid="study-row"][data-study-id="${id}"]`)).toHaveCount(0);
+  const gone = await fetch(`${sidecarUrl()}/api/experiments/${id}`);
+  expect(gone.status).toBe(404);
 });

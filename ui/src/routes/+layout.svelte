@@ -2,7 +2,7 @@
   The application shell (brief 6, D8 to D12, D15, D22). Header, then a row of
   [probe rail | workspace], then the fixed 36px status strip; the settings
   drawer, the shortcuts overlay, first-time tips and the crash banner mount
-  here. The welcome routes (T33) render bare, without the shell.
+  here. The welcome routes render bare, without the shell.
 
   Keys handled here, on every route: `?` toggles the shortcuts overlay
   (outside text fields) and Escape closes it first when it is open (it is the
@@ -11,7 +11,8 @@
 
   ProbeRail renders the rail inside RailFrame; NewSessionDialog opens on
   `shell.newSessionOpen` (T16), ExportDialog on `shell.exportOpen` (T20);
-  T19 fills components/settings/SettingsSections.svelte.
+  T19 fills components/settings/SettingsSections.svelte; T33 mounts the tour
+  (tour/Tour.svelte), which sets `shell.onTour`.
 -->
 <script lang="ts">
   import '../app.css';
@@ -30,6 +31,7 @@
   import { shell } from '$lib/components/shell/shell.svelte';
   import { capabilities } from '$lib/stores/capabilities.svelte';
   import { status } from '$lib/stores/status.svelte';
+  import Tour from '$lib/tour/Tour.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -103,4 +105,5 @@
   <NewSessionDialog open={shell.newSessionOpen} onClose={() => (shell.newSessionOpen = false)} />
   <ExportDialog open={shell.exportOpen} onClose={() => (shell.exportOpen = false)} />
   <FirstTimeTip />
+  <Tour />
 {/if}

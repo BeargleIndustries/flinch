@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -103,6 +104,20 @@ def _load_dotenv():
                 os.environ.setdefault(key, value)
 
 
+def _rebuild_runner() -> None:
+    """Build the runner from the keys in os.environ (B29).
+
+    Called at startup and after every key or Ollama change, so a new key
+    reaches the target, the classifier and the coach. Running streams keep
+    the runner they started with.
+    """
+    global _runner
+    from flinch.llm import get_best_available_backend
+
+    client = anthropic.AsyncAnthropic() if os.environ.get("ANTHROPIC_API_KEY") else None
+    _runner = Runner(_conn, client=client, backend=get_best_available_backend())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _conn, _runner
@@ -126,17 +141,12 @@ async def lifespan(app: FastAPI):
     if strategies_dir.exists():
         db.import_all_strategies(_conn, str(strategies_dir))
     # Probes are loaded on-demand via /api/probes/load-defaults
-    # Create runner
-    from flinch.llm import get_best_available_backend
-
+    # Create runner (target client plus the classification/coach backend)
+    await asyncio.to_thread(_rebuild_runner)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    client = None
     if api_key:
-        client = anthropic.AsyncAnthropic()
         print(f"[flinch] Anthropic API key loaded ({len(api_key)} chars)")
-
-    # Get the best available backend for classification/coach
-    backend = get_best_available_backend()
+    backend = _runner.backend
     if backend:
         print(f"[flinch] Classification backend: {type(backend).__name__}")
     else:
@@ -146,7 +156,6 @@ async def lifespan(app: FastAPI):
             "Set any API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or run Ollama."
         )
 
-    _runner = Runner(_conn, client=client, backend=backend)
     yield
     # Cleanup
     if _conn:
@@ -210,6 +219,7 @@ class CreateProbeRequest(BaseModel):
     tags: list[str] = []
     narrative_opening: str | None = None
     narrative_target: str | None = None
+    session_id: int | None = None
 
 class CreateSessionRequest(BaseModel):
     name: str = Field(max_length=200)
@@ -406,10 +416,15 @@ async def import_probe_file(request: Request):
 
 @app.post("/api/probes")
 async def create_probe(req: CreateProbeRequest):
-    probe_id = db.create_probe(
-        _conn, req.name, req.domain, req.prompt_text, req.description, req.tags,
-        narrative_opening=req.narrative_opening, narrative_target=req.narrative_target,
-    )
+    try:
+        probe_id = db.create_probe(
+            _conn, req.name, req.domain, req.prompt_text, req.description, req.tags,
+            narrative_opening=req.narrative_opening, narrative_target=req.narrative_target,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "A probe with that name exists.")
+    if req.session_id is not None:
+        db.add_probe_to_session(_conn, req.session_id, probe_id)
     return db.get_probe(_conn, probe_id)
 
 
@@ -449,10 +464,11 @@ async def send_probe_run(session_id: int, req: SendProbeRequest):
                 _conn, f"custom-{int(__import__('time').time())}",
                 "custom", req.custom_text, "Ad-hoc custom probe",
             )
+            db.add_probe_to_session(_conn, session_id, probe_id)
         run = await _runner.send_probe(session_id, probe_id)
         return run
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Error sending probe: {e}")
 
@@ -466,7 +482,7 @@ async def send_pushback(run_id: int, req: SendPushbackRequest):
         run = await _runner.send_pushback(run_id, req.text, source)
         return run
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Error sending pushback: {e}")
 
@@ -489,7 +505,7 @@ async def continue_pushback_endpoint(run_id: int, req: SendPushbackRequest):
         run = await _runner.continue_pushback(run_id, req.text, source)
         return run
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Error continuing pushback: {e}")
 
@@ -562,8 +578,8 @@ async def promote_to_example(run_id: int):
 
 # Coach examples
 @app.get("/api/coach-examples")
-async def list_coach_examples(profile: str = "standard"):
-    return db.list_coach_examples(_conn, profile)
+async def list_coach_examples(profile: str = "standard", limit: int = 500):
+    return db.list_coach_examples(_conn, profile, limit=limit)
 
 
 class UpdateCoachExampleRequest(BaseModel):
@@ -865,11 +881,10 @@ async def generate_variants(req: GenerateVariantsRequest):
     if not api_key:
         raise HTTPException(400, "ANTHROPIC_API_KEY required for variant generation")
 
-    import anthropic as _anthropic
-    client = _anthropic.Anthropic()
+    client = anthropic.AsyncAnthropic()
     strategies_text = "\n".join(f"- {s}" for s in req.strategies)
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=4000,
         messages=[{
@@ -1650,7 +1665,7 @@ async def list_available_models():
             {"id": "gemini-2.0-flash-001", "name": "Gemini 2.0 Flash"},
         ],
         "available": google_key and google_sdk,
-        "hint": "" if (google_key and google_sdk) else ("Set GOOGLE_API_KEY" if google_sdk else "pip install google-generativeai"),
+        "hint": "" if (google_key and google_sdk) else ("Set GOOGLE_API_KEY" if google_sdk else "Install google-genai on the sidecar"),
     })
 
     # xAI / Grok
@@ -2368,12 +2383,7 @@ async def update_api_keys(body: dict):
             del os.environ[env_var]
 
     _write_env_file(current_env)
-
-    # Recreate the Anthropic client + runner if Anthropic key changed
-    if "ANTHROPIC_API_KEY" in body:
-        global _runner
-        client = anthropic.AsyncAnthropic()
-        _runner = Runner(_conn, client)
+    await asyncio.to_thread(_rebuild_runner)
 
     return {"ok": True, "keys": await get_api_keys()}
 
@@ -2471,6 +2481,7 @@ async def update_ollama_settings(req: OllamaSettingsRequest):
     """Update Ollama base URL; persisted across restarts (I9)."""
     os.environ["OLLAMA_BASE_URL"] = req.base_url
     db.set_setting(_conn, "ollama_base_url", req.base_url)
+    await asyncio.to_thread(_rebuild_runner)
     # Test connection with new URL
     available = await _check_ollama(req.base_url)
     models = await _list_ollama_models(req.base_url) if available else []
@@ -3450,6 +3461,7 @@ async def set_key_runtime(req: SetKeyRequest):
     if not key:
         return {"ok": False, "error": "Empty key"}
     os.environ[_PROVIDER_ENV_VARS[provider]] = key
+    await asyncio.to_thread(_rebuild_runner)
     return {"ok": True}
 
 
@@ -3459,6 +3471,7 @@ async def clear_key_runtime(provider: str):
     if provider not in _PROVIDER_ENV_VARS:
         return {"ok": False, "error": f"Unknown provider: {provider}"}
     os.environ.pop(_PROVIDER_ENV_VARS[provider], None)
+    await asyncio.to_thread(_rebuild_runner)
     return {"ok": True}
 
 
@@ -3468,23 +3481,26 @@ async def validate_key(req: ValidateKeyRequest):
     key = req.key.strip()
     if provider not in _PROVIDER_ENV_VARS:
         return {"valid": False, "error": f"Unknown provider: {provider}"}
-    try:
+
+    def check() -> None:
+        # The SDK clients here are synchronous; this runs in a worker thread (B30).
         if provider == "anthropic":
-            import anthropic as _anthropic
-            _anthropic.Anthropic(api_key=key).models.list()
+            anthropic.Anthropic(api_key=key).models.list()
         elif provider == "openai":
             import openai as _openai
             _openai.OpenAI(api_key=key).models.list()
         elif provider == "google":
-            import google.generativeai as genai
-            genai.configure(api_key=key)
-            list(genai.list_models())
+            from google import genai
+            list(genai.Client(api_key=key).models.list())
         elif provider == "xai":
             import openai as _openai
             _openai.OpenAI(api_key=key, base_url="https://api.x.ai/v1").models.list()
         elif provider in ("meta", "together"):
             import openai as _openai
             _openai.OpenAI(api_key=key, base_url="https://api.together.xyz/v1").models.list()
+
+    try:
+        await asyncio.to_thread(check)
         return {"valid": True, "error": None}
     except Exception as e:
         return {"valid": False, "error": str(e)}

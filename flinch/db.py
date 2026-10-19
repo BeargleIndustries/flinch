@@ -731,8 +731,29 @@ def get_session(conn, session_id: int) -> dict | None:
 
 
 def list_sessions(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM sessions ORDER BY id").fetchall()
+    rows = conn.execute(
+        "SELECT s.*, COUNT(r.id) AS run_count FROM sessions s "
+        "LEFT JOIN runs r ON r.session_id = s.id GROUP BY s.id ORDER BY s.id"
+    ).fetchall()
     return [_parse_session(r) for r in rows]
+
+
+def add_probe_to_session(conn, session_id: int, probe_id: int) -> None:
+    """Add a probe to a scoped session's rail (B18).
+
+    A session without `probe_ids` already covers every probe, so it is left alone.
+    """
+    session = get_session(conn, session_id)
+    if not session:
+        return
+    probe_ids = session.get("probe_ids")
+    if not isinstance(probe_ids, list) or not probe_ids or probe_id in probe_ids:
+        return
+    conn.execute(
+        "UPDATE sessions SET probe_ids = ? WHERE id = ?",
+        (json.dumps([*probe_ids, probe_id]), session_id),
+    )
+    conn.commit()
 
 
 def complete_session(conn, session_id: int):
@@ -838,7 +859,7 @@ def create_coach_example(conn, run_id, coach_profile, refusal_text, pushback_tex
     return cur.lastrowid
 
 
-def list_coach_examples(conn, profile: str, limit: int = 10) -> list[dict]:
+def list_coach_examples(conn, profile: str, limit: int = 500) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM coach_examples WHERE coach_profile = ? ORDER BY effectiveness DESC, promoted_at DESC LIMIT ?",
         (profile, limit),
@@ -2638,10 +2659,23 @@ def export_all_data(conn):
     return result
 
 
+# Sessions the Model compare page creates are hidden from Browse and the
+# dashboard counts; this is the one place that filter is written (B19).
+EXCLUDE_MODEL_COMPARE_SESSIONS = (
+    "COALESCE(s.notes, '') NOT LIKE '%Auto-created by multi-model comparison%'"
+)
+
+
 def get_dashboard_stats(conn):
     """Aggregate stats across all data for the dashboard."""
     stats = {}
-    for table, key in [("sessions", "total_sessions"), ("runs", "total_runs"),
+    try:
+        stats["total_sessions"] = conn.execute(
+            f"SELECT COUNT(*) FROM sessions s WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS}"
+        ).fetchone()[0]
+    except Exception:
+        stats["total_sessions"] = 0
+    for table, key in [("runs", "total_runs"),
                        ("comparisons", "total_comparisons"), ("snapshots", "total_snapshots")]:
         try:
             stats[key] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -2681,7 +2715,7 @@ def get_dashboard_stats(conn):
 
 def list_all_sessions_summary(conn):
     """List all sessions with run counts for dashboard."""
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT s.*,
                COUNT(r.id) as run_count,
                SUM(CASE WHEN r.initial_classification = 'refused' THEN 1 ELSE 0 END) as refused_count,
@@ -2690,7 +2724,7 @@ def list_all_sessions_summary(conn):
                SUM(CASE WHEN r.initial_classification = 'negotiated' THEN 1 ELSE 0 END) as negotiated_count
         FROM sessions s
         LEFT JOIN runs r ON r.session_id = s.id
-        WHERE s.notes NOT LIKE '%Auto-created by multi-model comparison%'
+        WHERE {EXCLUDE_MODEL_COMPARE_SESSIONS}
         GROUP BY s.id
         ORDER BY s.created_at DESC
     """).fetchall()

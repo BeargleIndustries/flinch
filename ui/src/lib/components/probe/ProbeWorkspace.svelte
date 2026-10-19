@@ -2,7 +2,8 @@
   The Probe workspace (brief 7): one state at a time, driven by
   `probes.machine` ($lib/probe-machine). Every state opens with the research
   question it answers (principle 1), then:
-    idle      system prompt, Run every probe, Save a baseline (7.1)
+    idle      system prompt, Run every probe, Save a baseline (7.1); while a
+              batch runs (and until Back) the batch panel instead (7.8)
     selected  probe card, Send probe (S), policy links (7.2)
     custom    custom prompt box, Send custom prompt (S) (7.3)
     sending   the card, "Waiting for {model}…" (7.4)
@@ -25,6 +26,8 @@
   import { session } from '$lib/stores/session.svelte';
   import { quickTour } from '$lib/tour/state.svelte';
   import ActionButton from './ActionButton.svelte';
+  import BatchRun from './BatchRun.svelte';
+  import { batch } from './batch.svelte';
   import CustomPrompt from './CustomPrompt.svelte';
   import DoneActions from './DoneActions.svelte';
   import IdleView from './IdleView.svelte';
@@ -64,6 +67,13 @@
   );
   const linkProbeId = $derived(probes.active?.id ?? null);
   const model = $derived(workspace.model);
+
+  /** Run every probe (brief 7.8): the batch panel replaces the idle view until Back. */
+  function runAll(delayMs: number): void {
+    const id = session.current?.id;
+    if (id == null) return;
+    void batch.start(id, delayMs, probes.list);
+  }
 
   onMount(() =>
     attachShortcuts(
@@ -111,10 +121,13 @@
 
   {#if noSession}
     <div class="rounded-xl border border-dashed border-border"><NoSession /></div>
+  {:else if phase === 'idle' && batch.shownFor(session.current?.id)}
+    <BatchRun />
   {:else if phase === 'idle'}
     <IdleView
       systemPrompt={session.current?.system_prompt ?? null}
       probeCount={probes.list.length}
+      onRunAll={runAll}
     />
   {:else}
     {#if customCard}

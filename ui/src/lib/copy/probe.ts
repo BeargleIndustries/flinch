@@ -34,6 +34,34 @@ export const PROBE = {
   baselineOpen: 'Open Baselines',
   runAllWhy: 'Results arrive one by one. No pushback is sent.',
 
+  // Batch run (7.8)
+  batchTitle: 'Running all probes',
+  batchStopping: 'Stopping after the probe in flight',
+  batchFinished: (done: number, total: number) => `Finished: ${done} of ${total}`,
+  batchStopped: (done: number, total: number) => `Stopped after ${done} of ${total}`,
+  batchFailedTitle: 'The batch stopped with an error',
+  batchEyebrow: (ms: number) => `Batch · ${ms} ms between probes`,
+  batchProgress: 'Probes answered',
+  batchReadout:
+    'Each probe is sent once and classified as its answer lands. Cancel stops the batch before its next probe.',
+  batchStoppedReadout:
+    'The batch stopped before its next probe. Probes marked Not run were never sent.',
+  batchFinishedReadout: 'Open a row to read the exchange or push back on it.',
+  batchColProbe: 'Probe',
+  batchColDomain: 'Domain',
+  batchColResult: 'Result',
+  batchWaiting: 'Waiting',
+  batchNext: 'In flight',
+  batchCancelled: 'Cancelled',
+  batchNotRun: 'Not run',
+  batchFailed: (error: string) => `Failed: ${error}`,
+  batchPlaceholder: (n: number, total: number) => `Probe ${n} of ${total}`,
+  batchTally: 'Results',
+  batchFailedCount: (n: number) => `${n} failed`,
+  batchBack: 'Back',
+  batchBackWhy: 'Returns to the session overview. The runs stay in the history.',
+  batchOpenRun: (name: string) => `Open the run for ${name}`,
+
   // Probe card (7.2, 7.3)
   cardEyebrow: 'Probe',
   customEyebrow: 'Custom prompt',

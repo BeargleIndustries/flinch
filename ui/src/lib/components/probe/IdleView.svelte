@@ -2,7 +2,7 @@
   Idle (brief 7.1): the session's system prompt when it has one (first 400
   characters, "Show all"), then "Run every probe" and "Save a baseline".
 
-  The batch run itself is T18's BatchRun.svelte: the "Run every probe" panel
+  The batch run itself is BatchRun.svelte (T18): the "Run every probe" panel
   renders only when `onRunAll` is passed. The baseline dialog is T28's; until
   then the panel links to Baselines.
 -->

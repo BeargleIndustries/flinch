@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- Publish (brief 9.3): tables and reports from every session that matches the filters. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import Publish from '$lib/components/data/Publish.svelte';
 </script>
 
-<ScreenPlaceholder title="Publish" question={SCREENS.publish} />
+<Publish />

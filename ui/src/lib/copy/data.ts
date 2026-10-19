@@ -370,3 +370,95 @@ export const SCORECARD = {
     xai: 'xAI',
   } as Record<string, string>,
 } as const;
+
+// Publish (brief 9.3, 9.9; D16, I10, I13, B24). The readout is
+// SCREENS.publish. Template and format labels are the brief's.
+export const PUBLISH = {
+  title: 'Publish',
+
+  // Make a document
+  makeEyebrow: 'New document',
+  makeTitle: 'Make a document',
+  template: 'Template',
+  templates: {
+    comparison_table: 'Comparison table',
+    consistency_matrix: 'Consistency matrix',
+    pushback_summary: 'Pushback effectiveness',
+    full_report: 'Full report',
+  },
+  templateWhy: {
+    comparison_table: 'One row per model: probes run, each badge, and the refusal rate.',
+    consistency_matrix: 'Probes against models, the refusal rate of each pair from repeat runs.',
+    pushback_summary:
+      'How often each pushback move got the model to give way, from coach examples.',
+    full_report: 'A summary, then all three tables.',
+  },
+  format: 'Format',
+  formats: {
+    markdown: 'Markdown',
+    html: 'HTML',
+    csv: 'CSV',
+    pdf: 'PDF',
+  },
+  pdfUnavailable: 'PDF needs weasyprint on the sidecar.',
+  models: 'Models',
+  modelsHint: 'None picked means every model.',
+  modelsNone: 'No session has run a model yet.',
+  domains: 'Domains',
+  domainsHint: 'None picked means every domain.',
+  domainsNone: 'No probe has a domain yet.',
+  dateRange: 'Date range',
+  dateFrom: 'From',
+  dateTo: 'To',
+  dateHint: 'Optional. Runs on both days are included.',
+  datesBackwards: 'The start date is after the end date.',
+  clearPicks: 'Clear',
+  clearPicksOf: (what: string) => `Clear the picked ${what}`,
+  theme: 'Theme',
+  themeHint: 'Used by HTML and PDF.',
+  themePreviewTitle: (name: string) => `Sample table in the ${name} theme`,
+  themeSwatches: 'Theme colours',
+  loadingSources: 'Reading models, domains and themes…',
+  make: 'Make the document',
+  making: 'Making…',
+  made: 'Document saved under Past documents.',
+
+  // A fixed sample table for the theme preview (9.9)
+  sample: {
+    heading: 'Model Comparison',
+    headers: ['Model', 'Probes', 'Refused', 'Complied', 'Refusal Rate'],
+    rows: [
+      ['model-a', '12', '7', '5', '58.3%'],
+      ['model-b', '12', '3', '9', '25.0%'],
+    ],
+  },
+
+  // Preview
+  previewEyebrow: 'Result',
+  previewTitle: 'Preview',
+  previewEmpty: 'Make a document, or open one from Past documents, to see it here.',
+  previewLoading: 'Opening the document…',
+  pdfNote: 'The PDF is made from this page when you download it.',
+  frameTitle: (name: string) => `Preview of ${name}`,
+  download: 'Download',
+  downloadWhy: {
+    markdown: 'A Markdown file, ready to paste into a paper.',
+    html: 'A web page you can open in any browser.',
+    csv: 'A CSV file for spreadsheets.',
+    pdf: 'A PDF made from the page above.',
+  },
+  copy: 'Copy',
+  docMeta: (template: string, format: string) => `${template} · ${format}`,
+
+  // Past documents
+  pastEyebrow: 'Saved',
+  pastTitle: 'Past documents',
+  pastLoading: 'Reading saved documents…',
+  pastEmpty: 'No documents yet.',
+  pastRow: (template: string, format: string, date: string) =>
+    date ? `${template} · ${format} · ${date}` : `${template} · ${format}`,
+  preview: 'Preview',
+  previewOf: (name: string) => `Preview ${name}`,
+  showing: 'Showing',
+  loadAgain: 'Read again',
+} as const;

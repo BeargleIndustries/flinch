@@ -97,6 +97,8 @@ test('opens with its research question, the two tabs and an empty list', async (
 
   // The probe select lists the session's probes plus "Custom prompt…".
   const probe = page.getByTestId('sequence-probe');
+  // A session probe is picked by default, not the custom fallback.
+  await expect(probe).not.toHaveValue('custom');
   const options = probe.locator('option');
   await expect(options).toHaveCount(3);
   await expect(options.filter({ hasText: /^refuse-me$/ })).toHaveCount(1);
@@ -337,8 +339,15 @@ test('the Strategies panel creates, edits and deletes a strategy', async ({ page
   await select.selectOption({ label: `${title} (fiction)` });
   await expect(select).toHaveValue(String(id));
 
-  // Edit: the dialog reads the stored fields, and the change is saved with PUT.
+  // Edit: the dialog reads the stored fields (GET, fields disabled until it
+  // lands, so a fill cannot be overwritten), and the change is saved with PUT.
+  const fresh = page.waitForResponse(
+    (r) => r.url().endsWith(`/api/strategies/${id}`) && r.request().method() === 'GET',
+  );
   await row.getByTestId('strategy-edit').click();
+  expect((await fresh).status()).toBe(200);
+  await expect(dialog).toHaveAttribute('aria-busy', 'false');
+  await expect(dialog.getByTestId('strategy-field-description')).toBeEnabled();
   await expect(dialog.getByTestId('strategy-field-goal')).toHaveValue('A detective story.');
   await dialog.getByTestId('strategy-field-description').fill('Rain and a second case.');
   const updated = page.waitForResponse(

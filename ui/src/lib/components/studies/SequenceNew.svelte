@@ -52,14 +52,22 @@
     untrack(() => (strategyId = pickStrategy(listed, strategyId)));
   });
 
-  // Keep the picked probe while it is listed; else the rail's active probe, else the first.
+  /** "Custom prompt…" picked by hand (not the fallback for an empty list). */
+  let customByHand = $state(false);
+  const listLoaded = $derived(probes.sessionId === sessionId && probes.loaded);
+
+  // Keep the picked probe while it is listed; else the rail's active probe,
+  // else the first. "Custom prompt…" is the fallback only once the session's
+  // list has loaded empty, so a list that arrives late still gets picked.
   $effect(() => {
     const ids = list.map((p) => String(p.id));
     const active = probes.activeId;
+    const loaded = listLoaded;
     untrack(() => {
-      if (probeChoice === CUSTOM || ids.includes(probeChoice)) return;
-      probeChoice =
-        active !== null && ids.includes(String(active)) ? String(active) : (ids[0] ?? CUSTOM);
+      if ((probeChoice === CUSTOM && customByHand) || ids.includes(probeChoice)) return;
+      if (ids.length)
+        probeChoice = active !== null && ids.includes(String(active)) ? String(active) : ids[0];
+      else probeChoice = loaded ? CUSTOM : '';
     });
   });
 
@@ -95,6 +103,7 @@
       if (custom) {
         customText = '';
         probeChoice = String(seq.probe_id);
+        customByHand = false;
       }
       status.note(S.created(name));
       if (andWhittle) void sequences.whittle(seq, name);
@@ -134,6 +143,7 @@
         id="seq-probe-{uid}"
         class="{FIELD} font-mono text-[13px]"
         bind:value={probeChoice}
+        onchange={() => (customByHand = probeChoice === CUSTOM)}
         data-testid="sequence-probe"
       >
         {#each list as p (p.id)}

@@ -54,7 +54,8 @@
     const s = strategy;
     untrack(() => {
       const mine = ++seq;
-      form = strategyForm(s);
+      const opened = strategyForm(s);
+      form = { ...opened };
       tried = false;
       busy = false;
       error = null;
@@ -64,7 +65,9 @@
       sequences
         .getStrategy(s.id)
         .then((fresh) => {
-          if (mine === seq) form = strategyForm(fresh);
+          // The fields are disabled while this read is in flight; still, never
+          // overwrite anything typed since the dialog opened.
+          if (mine === seq && sameForm(form, opened)) form = strategyForm(fresh);
         })
         .catch((e) => {
           if (mine === seq) error = friendlyError(e).message;
@@ -74,6 +77,9 @@
         });
     });
   });
+
+  const sameForm = (a: StrategyForm, b: StrategyForm) =>
+    (Object.keys(b) as (keyof StrategyForm)[]).every((k) => a[k] === b[k]);
 
   async function submit() {
     if (busy || loading) return;
@@ -114,70 +120,74 @@
   onSubmit={submit}
 >
   <div class="flex flex-col gap-4" data-testid="strategy-dialog" aria-busy={loading}>
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
-      <div>
-        <label for="sd-name-{uid}" class={label}>{D.name}</label>
-        <input
-          id="sd-name-{uid}"
-          type="text"
-          bind:value={form.name}
-          maxlength="120"
-          spellcheck="false"
-          autocomplete="off"
-          aria-invalid={req('name') || (tried && duplicate)}
-          aria-describedby="sd-name-hint-{uid}"
-          class="{field} font-mono text-[13px]"
-          data-testid="strategy-field-name"
-        />
-        <p id="sd-name-hint-{uid}" class={hint}>{D.nameHint}</p>
+    <!-- Edit reads the stored strategy first; the fields wait for it so the
+         fresh copy never lands on top of what you type. -->
+    <fieldset class="m-0 flex min-w-0 flex-col gap-4 border-0 p-0" disabled={loading}>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+        <div>
+          <label for="sd-name-{uid}" class={label}>{D.name}</label>
+          <input
+            id="sd-name-{uid}"
+            type="text"
+            bind:value={form.name}
+            maxlength="120"
+            spellcheck="false"
+            autocomplete="off"
+            aria-invalid={req('name') || (tried && duplicate)}
+            aria-describedby="sd-name-hint-{uid}"
+            class="{field} font-mono text-[13px]"
+            data-testid="strategy-field-name"
+          />
+          <p id="sd-name-hint-{uid}" class={hint}>{D.nameHint}</p>
+        </div>
+        <div>
+          <label for="sd-category-{uid}" class={label}>{D.category}</label>
+          <input
+            id="sd-category-{uid}"
+            type="text"
+            bind:value={form.category}
+            maxlength="60"
+            autocomplete="off"
+            aria-describedby="sd-category-hint-{uid}"
+            class={field}
+            data-testid="strategy-field-category"
+          />
+          <p id="sd-category-hint-{uid}" class={hint}>{D.categoryHint}</p>
+        </div>
       </div>
+
       <div>
-        <label for="sd-category-{uid}" class={label}>{D.category}</label>
+        <label for="sd-description-{uid}" class={label}>{D.description}</label>
         <input
-          id="sd-category-{uid}"
+          id="sd-description-{uid}"
           type="text"
-          bind:value={form.category}
-          maxlength="60"
+          bind:value={form.description}
+          maxlength="300"
           autocomplete="off"
-          aria-describedby="sd-category-hint-{uid}"
+          aria-describedby="sd-description-hint-{uid}"
           class={field}
-          data-testid="strategy-field-category"
+          data-testid="strategy-field-description"
         />
-        <p id="sd-category-hint-{uid}" class={hint}>{D.categoryHint}</p>
+        <p id="sd-description-hint-{uid}" class={hint}>{D.descriptionHint}</p>
       </div>
-    </div>
 
-    <div>
-      <label for="sd-description-{uid}" class={label}>{D.description}</label>
-      <input
-        id="sd-description-{uid}"
-        type="text"
-        bind:value={form.description}
-        maxlength="300"
-        autocomplete="off"
-        aria-describedby="sd-description-hint-{uid}"
-        class={field}
-        data-testid="strategy-field-description"
-      />
-      <p id="sd-description-hint-{uid}" class={hint}>{D.descriptionHint}</p>
-    </div>
-
-    {#each AREAS as [key, text, help, rows] (key)}
-      <div>
-        <label for="sd-{key}-{uid}" class={label}>{text}</label>
-        <textarea
-          id="sd-{key}-{uid}"
-          bind:value={form[key]}
-          {rows}
-          maxlength="4000"
-          aria-invalid={req(key)}
-          aria-describedby="sd-{key}-hint-{uid}"
-          class="{field} resize-y text-[13px] {req(key) ? 'border-danger/70' : ''}"
-          data-testid="strategy-field-{key}"
-        ></textarea>
-        <p id="sd-{key}-hint-{uid}" class={hint}>{help}</p>
-      </div>
-    {/each}
+      {#each AREAS as [key, text, help, rows] (key)}
+        <div>
+          <label for="sd-{key}-{uid}" class={label}>{text}</label>
+          <textarea
+            id="sd-{key}-{uid}"
+            bind:value={form[key]}
+            {rows}
+            maxlength="4000"
+            aria-invalid={req(key)}
+            aria-describedby="sd-{key}-hint-{uid}"
+            class="{field} resize-y text-[13px] {req(key) ? 'border-danger/70' : ''}"
+            data-testid="strategy-field-{key}"
+          ></textarea>
+          <p id="sd-{key}-hint-{uid}" class={hint}>{help}</p>
+        </div>
+      {/each}
+    </fieldset>
 
     {#if loading}
       <p class="text-xs text-text4" role="status">{D.loading}</p>

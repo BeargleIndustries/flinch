@@ -19,7 +19,6 @@
   import { probes } from '$lib/stores/probe.svelte';
   import { BTN, FIELD, HINT, LABEL } from '../probe/styles';
   import {
-    completedEffectiveness,
     defaultPick,
     excludedCounts,
     resultChoices,
@@ -97,13 +96,7 @@
       ? sequenceResults.thresholds
       : (sequenceResults.filtered ?? []),
   );
-  const effectRows = $derived(
-    completedEffectiveness(
-      sequenceResults.effectiveness,
-      sequenceResults.leftOut,
-      sequenceResults.thresholds,
-    ),
-  );
+  const effectRows = $derived(sequenceResults.effectiveness);
   const leftOutParts = $derived(
     excludedCounts(sequenceResults.excluded)
       .map((c) => R.excludedPart(c.count, statusWord(c.status).toLowerCase()))

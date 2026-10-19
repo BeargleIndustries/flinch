@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   MIN_BAR,
-  completedEffectiveness,
   defaultPick,
   excludedCounts,
   excludedSequences,
   filterThresholds,
-  gotThrough,
   isFound,
   orderedRuns,
   parseEffectiveness,
@@ -237,46 +235,6 @@ describe('completed sequences only (I20)', () => {
       { status: 'pending', count: 1 },
       { status: 'failed', count: 1 },
     ]);
-  });
-
-  it('counts Complied and Collapsed as getting through', () => {
-    expect(gotThrough([{ probe_classification: 'refused' }, { probe_classification: null }])).toBe(
-      false,
-    );
-    expect(gotThrough([{ probe_classification: 'collapsed' }])).toBe(true);
-    expect(gotThrough([{ probe_classification: 'negotiated' }])).toBe(false);
-  });
-
-  it('keeps the sidecar row when nothing is left out', () => {
-    const rows = [er(1, 2, 1, 2.5)];
-    expect(completedEffectiveness(rows, [], [])).toEqual(rows);
-  });
-
-  it('takes left-out sequences off the counts and averages completed thresholds', () => {
-    const rows = [er(1, 3, 2, 3), er(2, 1, 0, null)];
-    const out = completedEffectiveness(
-      rows,
-      [{ strategy_id: 1, gotThrough: true }],
-      [tr(10, 1, 2), tr(11, 1, null), tr(12, 2, null)],
-    );
-    expect(out).toEqual([er(1, 2, 1, 2), er(2, 1, 0, null)]);
-  });
-
-  it('drops a strategy whose every sequence is left out', () => {
-    const out = completedEffectiveness(
-      [er(1, 1, 0, null), er(2, 2, 1, null)],
-      [
-        { strategy_id: 1, gotThrough: false },
-        { strategy_id: 2, gotThrough: false },
-      ],
-      [],
-    );
-    expect(out).toEqual([er(2, 1, 1, null)]);
-  });
-
-  it('orders by successes, most first', () => {
-    const out = completedEffectiveness([er(1, 3, 0, null), er(2, 3, 2, null)], [], []);
-    expect(out.map((r) => r.id)).toEqual([2, 1]);
   });
 
   it('reads a share and parses the reply', () => {

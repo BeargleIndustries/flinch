@@ -1,8 +1,8 @@
 // Sequences Results logic (brief 8.4 Results tab, D21, D30, I20, plan T26).
 // Pure functions the Results tab and its store share: which sequences the
 // picker offers, the threshold readout by case, the threshold bars, the
-// turn-by-turn strip, the strategy filter, and strategy effectiveness counted
-// over completed sequences only.
+// turn-by-turn strip, the strategy filter, and the effectiveness reply (the
+// sidecar already counts completed sequences only, I20).
 //
 // The shapes below are the fields the Results tab reads from the sidecar
 // (`flinch/db.py` get_whittling_results, get_turn_classifications,
@@ -50,7 +50,7 @@ export interface ThresholdRow {
   probe_classification: string | null;
 }
 
-/** One row of GET /api/sessions/{id}/strategy-effectiveness. */
+/** One row of GET /api/sessions/{id}/strategy-effectiveness (completed sequences only). */
 export interface EffectivenessRow {
   id: number;
   name: string;
@@ -59,9 +59,6 @@ export interface EffectivenessRow {
   success_count: number;
   avg_threshold: number | null;
 }
-
-/** The two classes the sidecar counts as getting through (db.get_strategy_effectiveness). */
-export const GOT_THROUGH = new Set(['complied', 'collapsed']);
 
 export const isFound = (v: number | boolean | null | undefined) => v === true || v === 1;
 
@@ -249,57 +246,6 @@ export function excludedCounts(list: readonly Sequence[]): { status: string; cou
   return [...map.entries()]
     .map(([status, count]) => ({ status, count }))
     .sort((a, b) => rank(a.status) - rank(b.status) || a.status.localeCompare(b.status));
-}
-
-/** Whether any run's probe got through (complied or collapsed). */
-export function gotThrough(runs: readonly Pick<SequenceRun, 'probe_classification'>[]): boolean {
-  return runs.some((r) => GOT_THROUGH.has(toCls(r.probe_classification)));
-}
-
-export interface LeftOut {
-  strategy_id: number;
-  gotThrough: boolean;
-}
-
-const mean = (xs: readonly number[]) =>
-  xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
-
-/**
- * Strategy effectiveness over completed sequences only (I20). The sidecar's
- * rows count every sequence in the session whatever its status
- * (`db.get_strategy_effectiveness` has no status filter), so each strategy
- * with a left-out sequence is corrected: the left-out sequences come off the
- * count, those that got through come off the successes, and the average
- * threshold is taken over the completed threshold rows (the thresholds route
- * already keeps completed sequences only). Strategies left with no completed
- * sequence drop out. Strategies with nothing left out keep the sidecar's row.
- */
-export function completedEffectiveness(
-  rows: readonly EffectivenessRow[],
-  leftOut: readonly LeftOut[],
-  thresholds: readonly ThresholdRow[],
-): EffectivenessRow[] {
-  const out: EffectivenessRow[] = [];
-  for (const row of rows) {
-    const mine = leftOut.filter((l) => l.strategy_id === row.id);
-    if (mine.length === 0) {
-      out.push({ ...row });
-      continue;
-    }
-    const count = row.sequence_count - mine.length;
-    if (count <= 0) continue;
-    const success = Math.max(0, row.success_count - mine.filter((l) => l.gotThrough).length);
-    const turns = thresholds
-      .filter((t) => t.strategy_id === row.id && t.threshold_turns !== null)
-      .map((t) => t.threshold_turns as number);
-    out.push({
-      ...row,
-      sequence_count: count,
-      success_count: Math.min(success, count),
-      avg_threshold: mean(turns),
-    });
-  }
-  return out.sort((a, b) => b.success_count - a.success_count);
 }
 
 /** Successes as a percentage of sequences (0 with none). */

@@ -2768,14 +2768,19 @@ def get_cross_probe_thresholds(conn, session_id, strategy_id=None):
     return [dict(r) for r in rows]
 
 def get_strategy_effectiveness(conn, session_id):
-    """Get per-strategy effectiveness stats for a session."""
+    """Get per-strategy effectiveness stats for a session.
+
+    Counts completed sequences only (plan I20), the same filter as
+    get_cross_probe_thresholds. A strategy with no completed sequence in the
+    session is omitted, not returned with zero counts.
+    """
     rows = conn.execute("""
         SELECT st.id, st.name, st.category,
                COUNT(DISTINCT s.id) as sequence_count,
                COUNT(DISTINCT CASE WHEN sr.probe_classification IN ('complied', 'collapsed') THEN s.id END) as success_count,
                AVG(CASE WHEN sr.threshold_found = 1 THEN sr.warmup_count END) as avg_threshold
         FROM strategy_templates st
-        JOIN sequences s ON s.strategy_id = st.id AND s.session_id = ?
+        JOIN sequences s ON s.strategy_id = st.id AND s.session_id = ? AND s.status = 'completed'
         LEFT JOIN sequence_runs sr ON sr.sequence_id = s.id
         GROUP BY st.id
         ORDER BY success_count DESC

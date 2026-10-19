@@ -3,10 +3,9 @@
 // Session level: GET /api/sessions/{id}/thresholds (every completed sequence,
 // kept for the strategy choices and the effectiveness average), the same
 // route with `?strategy_id=` when the filter is set, and GET
-// /api/sessions/{id}/strategy-effectiveness. The sidecar's effectiveness rows
-// count every sequence whatever its status, so the summaries of the session's
-// left-out sequences (GET /api/sequences/{id}) are read too and the screen
-// corrects the rows to completed sequences only (`completedEffectiveness`).
+// /api/sessions/{id}/strategy-effectiveness. The sidecar counts completed
+// sequences only (I20), so the rows are shown as sent; the sequences left out
+// are listed from the sequences store for the note.
 //
 // The picked sequence: GET /api/sequences/{id} (summary and runs, cached in
 // the sequences store), GET /api/sequences/{id}/whittling and GET
@@ -21,13 +20,11 @@ import { friendlyError } from '$lib/errors';
 import { status } from '$lib/stores/status.svelte';
 import {
   excludedSequences,
-  gotThrough,
   parseEffectiveness,
   parseThresholds,
   stripRuns,
   type ClassifiedRun,
   type EffectivenessRow,
-  type LeftOut,
   type ThresholdRow,
   type WhittlingRow,
 } from './sequence-results';
@@ -59,10 +56,9 @@ class SequenceResultsStore {
   /** Every completed sequence's threshold row. */
   thresholds = $state<ThresholdRow[]>([]);
   effectiveness = $state<EffectivenessRow[]>([]);
-  /** Sequences not `completed` when the counts were read (I20), and their strategies. */
+  /** Sequences not `completed` when the counts were read (I20). */
   excluded = $state<Sequence[]>([]);
-  leftOut = $state<LeftOut[]>([]);
-  /** The session reads (list, thresholds, effectiveness, left-out summaries) have landed. */
+  /** The session reads (list, thresholds, effectiveness) have landed. */
   sessionLoaded = $state(false);
   sessionLoading = $state(false);
   sessionError = $state<string | null>(null);
@@ -86,7 +82,6 @@ class SequenceResultsStore {
       this.thresholds = [];
       this.effectiveness = [];
       this.excluded = [];
-      this.leftOut = [];
       this.sessionLoaded = false;
       this.filterId = null;
       this.filtered = null;
@@ -107,17 +102,11 @@ class SequenceResultsStore {
           }),
         ),
       ]);
-      // Left-out sequences: their runs decide what comes off the counts.
       const excluded = excludedSequences(sequences.list);
-      const summaries = await Promise.all(excluded.map((s) => sequences.loadSummary(s.id)));
       if (token !== this.#sessionToken || sessionId !== this.sessionId) return;
       this.thresholds = parseThresholds(thresholds);
       this.effectiveness = parseEffectiveness(effectiveness);
       this.excluded = excluded;
-      this.leftOut = excluded.map((s, i) => ({
-        strategy_id: s.strategy_id,
-        gotThrough: gotThrough(summaries[i]?.runs ?? []),
-      }));
       this.sessionError = null;
       this.sessionLoaded = true;
       for (const r of this.thresholds) sequences.ensureSummary(r.sequence_id);

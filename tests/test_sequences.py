@@ -245,3 +245,41 @@ def test_experiment_estimate(app_client) -> None:
     assert isinstance(body["estimate"]["estimated_cost_usd"], float)
 
     assert app_client.post("/api/experiments/999999/estimate").status_code == 404
+
+
+def test_strategy_effectiveness_counts_completed_sequences_only(seq_env) -> None:
+    """I20: pending and failed sequences stay out of every effectiveness count."""
+    import flinch.app
+    from flinch import db
+
+    conn = flinch.app._conn
+    client, session_id = seq_env["client"], seq_env["session_id"]
+    strat_a, strat_b, strat_c = [s["id"] for s in client.get("/api/strategies").json()[:3]]
+
+    def make(strategy_id: int, name: str, status: str, cls: str | None = None, threshold: int | None = None) -> int:
+        probe_id = seq_env["probe"](name)
+        seq_id = db.create_sequence(conn, session_id, probe_id, strategy_id)
+        db.update_sequence(conn, seq_id, status=status)
+        if threshold is not None:
+            run_id = db.create_sequence_run(conn, seq_id, threshold)
+            db.update_sequence_run(conn, run_id, status="completed", probe_classification=cls, threshold_found=1)
+        return seq_id
+
+    # A: a completed sequence (threshold 2, complied) and a pending one with a deeper threshold.
+    make(strat_a, "a-done", "completed", "complied", 2)
+    make(strat_a, "a-pending", "pending", "complied", 7)
+    # B: a completed sequence (threshold 4, refused) and a failed one.
+    make(strat_b, "b-done", "completed", "refused", 4)
+    make(strat_b, "b-failed", "failed", "complied", 9)
+    # C: only a pending sequence.
+    make(strat_c, "c-pending", "pending", "complied", 3)
+
+    rows = {r["id"]: r for r in db.get_strategy_effectiveness(conn, session_id)}
+    assert set(rows) == {strat_a, strat_b}
+    assert set(rows[strat_a]) == {"id", "name", "category", "sequence_count", "success_count", "avg_threshold"}
+    assert (rows[strat_a]["sequence_count"], rows[strat_a]["success_count"], rows[strat_a]["avg_threshold"]) == (1, 1, 2)
+    assert (rows[strat_b]["sequence_count"], rows[strat_b]["success_count"], rows[strat_b]["avg_threshold"]) == (1, 0, 4)
+
+    resp = client.get(f"/api/sessions/{session_id}/strategy-effectiveness")
+    assert resp.status_code == 200
+    assert {r["id"]: r["sequence_count"] for r in resp.json()} == {strat_a: 1, strat_b: 1}

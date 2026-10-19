@@ -11,9 +11,8 @@
 //   is 2 turns.
 // The session-level panels count completed sequences only (I20): a sequence
 // that is not completed (here one still taking turns) is not in "Thresholds
-// across probes", is not counted in "Strategy effectiveness" (the sidecar's
-// effectiveness rows count every status, so the screen corrects them), and a
-// note says it was left out.
+// across probes", is not counted in "Strategy effectiveness" (the sidecar
+// counts completed sequences only), and a note says it was left out.
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { SCREENS } from '../../src/lib/copy/screens';
 import { SHELL } from '../../src/lib/copy/shell';

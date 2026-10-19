@@ -34,7 +34,7 @@
       case 'stopping':
         return PROBE.batchStopping;
       default:
-        return PROBE.batchTitle;
+        return batch.label ?? PROBE.batchTitle;
     }
   });
 

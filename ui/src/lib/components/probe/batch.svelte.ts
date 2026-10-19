@@ -32,6 +32,18 @@ const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
 export const batchStreamId = (sessionId: number) => `batch:${sessionId}`;
 
+/**
+ * A batch over a chosen set of probes (Framings' "Run in this session", brief
+ * 8.1): the probe ids sent, the screen the strip's "Show" returns to, and the
+ * title the panel and the strip use. Without it the batch runs every probe of
+ * the session from /probe.
+ */
+export interface BatchScope {
+  probeIds: number[];
+  route: string;
+  label: string;
+}
+
 class BatchRun {
   /** The session the batch belongs to; the panel shows only in that session. */
   sessionId = $state<number | null>(null);
@@ -44,6 +56,8 @@ class BatchRun {
   completed = $state(0);
   failed = $state(0);
   rows = $state<BatchRow[]>([]);
+  /** The panel's running title; null is "Running all probes". */
+  label = $state<string | null>(null);
   /** The batch-level failure (not a single probe's), as a friendly line. */
   error = $state<string | null>(null);
 
@@ -60,8 +74,16 @@ class BatchRun {
     return this.phase !== null && sessionId != null && this.sessionId === sessionId;
   }
 
-  /** Starts the batch over the session's probe set. Resolves when the stream has ended. */
-  async start(sessionId: number, delayMs: number, plan: readonly PlannedProbe[]): Promise<void> {
+  /**
+   * Starts the batch over the session's probe set, or over `scope.probeIds`.
+   * Resolves when the stream has ended.
+   */
+  async start(
+    sessionId: number,
+    delayMs: number,
+    plan: readonly PlannedProbe[],
+    scope?: BatchScope,
+  ): Promise<void> {
     if (this.live && this.sessionId === sessionId) return;
     const token = ++this.#token;
     const id = batchStreamId(sessionId);
@@ -75,13 +97,14 @@ class BatchRun {
     this.failed = 0;
     this.rows = planRows(this.#plan, plan.length);
     this.error = null;
+    this.label = scope?.label ?? null;
 
-    const body: BatchBody = { probe_ids: null, delay_ms: delayMs };
+    const body: BatchBody = { probe_ids: scope?.probeIds ?? null, delay_ms: delayMs };
     await streams.open(
       {
         id,
-        route: '/probe',
-        label: PROBE.batchTitle,
+        route: scope?.route ?? '/probe',
+        label: scope?.label ?? PROBE.batchTitle,
         total: plan.length || undefined,
         cancel: () => this.#cancelOnServer(token),
       },

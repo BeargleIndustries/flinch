@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import deque
 from datetime import UTC, datetime
+
+import anyio
 
 from flinch import db
 from flinch import target as flinch_target
@@ -1035,10 +1038,13 @@ class ExperimentRunner:
     BACKOFF_BASE = 1.0  # seconds
     BACKOFF_MAX = 60.0
 
-    def __init__(self, async_db, rate_pool: RateLimiterPool, backend=None):
+    # Cells read from the database per page (B03: page until none remain).
+    PENDING_PAGE_SIZE = 500
+
+    def __init__(self, async_db, rate_pool: RateLimiterPool, backend: LLMBackend | None = None):
         self.db = async_db
         self.rate_pool = rate_pool
-        self.backend = backend or "anthropic"
+        self.backend = backend
         self._paused = False
 
     def _get_provider(self, model_id: str) -> str:
@@ -1057,89 +1063,157 @@ class ExperimentRunner:
         else:
             return "together"
 
+    async def _write_final_status(self, experiment_id: int) -> str:
+        """Settle the study's status from its cells in the database, not this run's counters (B03).
+
+        `paused` while cells are pending, `completed` when some completed or none
+        failed, `failed` when every cell failed, `draft` when it has no cells.
+        """
+        from flinch.db import get_experiment_progress, update_experiment
+
+        progress = await get_experiment_progress(self.db, experiment_id)
+        if progress["total"] == 0:
+            status = "draft"
+        elif progress["pending"] > 0:
+            status = "paused"
+        elif progress["completed"] > 0 or progress["failed"] == 0:
+            status = "completed"
+        else:
+            status = "failed"
+        if status in ("completed", "failed"):
+            await update_experiment(self.db, experiment_id, status=status, completed_at=datetime.now(UTC).isoformat())
+        else:
+            await update_experiment(self.db, experiment_id, status=status)
+        return status
+
     async def run_experiment(self, experiment_id: int):
-        """Execute full matrix, yielding SSE progress events."""
+        """Execute full matrix, yielding SSE progress events.
+
+        Each provider runs `max_concurrent` workers over its own queue; every
+        worker reads the study status before each cell and stops on `paused`.
+        The `finally` is shielded (I27): a client disconnect cancels the
+        workers, and the final status is still written.
+        """
         from flinch.db import (
             get_pending_responses,
             update_experiment,
             update_experiment_response,
         )
 
-        # Mark experiment as running
-        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(UTC).isoformat())
+        pending: list[dict] = []
+        while True:
+            page = await get_pending_responses(
+                self.db, experiment_id, limit=self.PENDING_PAGE_SIZE,
+                after_id=pending[-1]["id"] if pending else 0,
+            )
+            if not page:
+                break
+            pending.extend(page)
 
-        # Group pending cells by provider for parallel execution
-        pending = await get_pending_responses(self.db, experiment_id, limit=50000)
         if not pending:
-            yield {"type": "complete", "message": "No pending responses"}
+            await self._write_final_status(experiment_id)
+            yield {"type": "complete", "completed": 0, "failed": 0, "total": 0}
             return
 
-        by_provider = {}
+        await update_experiment(self.db, experiment_id, status="running", started_at=datetime.now(UTC).isoformat())
+
+        by_provider: dict[str, list[dict]] = {}
         for cell in pending:
-            provider = self._get_provider(cell["model_id"])
-            by_provider.setdefault(provider, []).append(cell)
+            by_provider.setdefault(self._get_provider(cell["model_id"]), []).append(cell)
 
         total = len(pending)
         completed = 0
         failed = 0
-
-        yield {"type": "started", "total": total}
-
         results_queue: asyncio.Queue = asyncio.Queue()
+        worker_done = object()
+        tasks: list[asyncio.Task] = []
+        final_written = False
 
-        cell_count = 0
+        async def mark_failed(cell: dict, error: str) -> None:
+            nonlocal failed
+            failed += 1
+            await update_experiment_response(self.db, cell["id"], status="failed", error_message=error)
+            results_queue.put_nowait({"type": "progress", "completed": completed, "failed": failed,
+                                      "total": total, "model": cell["model_id"], "error": error})
 
-        async def provider_worker(provider, cells):
-            nonlocal completed, failed, cell_count
-            limiter = self.rate_pool.get(provider)
-            for cell in cells:
-                if self._paused:
-                    break
-                # Check DB for pause signal every 10 cells
-                cell_count += 1
-                if cell_count % 10 == 0:
-                    cursor = await self.db.execute(
-                        "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
-                    )
-                    row = await cursor.fetchone()
-                    if row and row[0] == "paused":
-                        break
-                try:
-                    await self._run_single_cell(cell, limiter)
-                    completed += 1
-                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"]})
-                except Exception as e:
-                    failed += 1
-                    await update_experiment_response(self.db, cell["id"], status="failed", error_message=str(e))
-                    await results_queue.put({"type": "progress", "completed": completed, "failed": failed, "total": total, "model": cell["model_id"], "error": str(e)})
+        async def is_paused() -> bool:
+            async with self.db.execute("SELECT status FROM experiments WHERE id = ?", (experiment_id,)) as cur:
+                row = await cur.fetchone()
+            return bool(row) and row[0] == "paused"
 
-        tasks = [asyncio.create_task(provider_worker(p, cells)) for p, cells in by_provider.items()]
-
-        while True:
+        async def worker(queue: deque, limiter: ProviderRateLimiter) -> None:
+            nonlocal completed
             try:
-                event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
-                yield event
-            except TimeoutError:
-                if all(t.done() for t in tasks):
-                    break
-                yield {"type": "heartbeat"}
+                while queue and not self._paused:
+                    if await is_paused():
+                        return
+                    if not queue:
+                        return
+                    cell = queue.popleft()
+                    try:
+                        await self._run_single_cell(cell, limiter)
+                    except Exception as e:
+                        await mark_failed(cell, str(e))
+                        continue
+                    completed += 1
+                    results_queue.put_nowait({"type": "progress", "completed": completed, "failed": failed,
+                                              "total": total, "model": cell["model_id"]})
+            finally:
+                results_queue.put_nowait(worker_done)
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            yield {"type": "started", "total": total}
 
-        # Final status
-        final_status = "completed"
-        await update_experiment(self.db, experiment_id, status=final_status, completed_at=datetime.now(UTC).isoformat())
+            for provider, cells in by_provider.items():
+                try:
+                    limiter = self.rate_pool.get(provider)
+                except Exception as e:
+                    for cell in cells:
+                        await mark_failed(cell, str(e))
+                    continue
+                queue = deque(cells)
+                for _ in range(min(limiter.max_concurrent, len(cells))):
+                    tasks.append(asyncio.create_task(worker(queue, limiter)))
 
-        yield {"type": "complete", "completed": completed, "failed": failed, "total": total}
+            running = len(tasks)
+            while running or not results_queue.empty():
+                try:
+                    event = await asyncio.wait_for(results_queue.get(), timeout=1.0)
+                except TimeoutError:
+                    yield {"type": "heartbeat"}
+                    continue
+                if event is worker_done:
+                    running -= 1
+                else:
+                    yield event
+
+            for result in await asyncio.gather(*tasks, return_exceptions=True):
+                if isinstance(result, Exception):
+                    yield {"type": "error", "error": str(result)}
+
+            status = await self._write_final_status(experiment_id)
+            final_written = True
+            name = "paused" if status == "paused" else "complete"
+            yield {"type": name, "completed": completed, "failed": failed, "total": total}
+        finally:
+            with anyio.CancelScope(shield=True):
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                if not final_written:
+                    await self._write_final_status(experiment_id)
 
     async def _run_single_cell(self, cell, limiter: ProviderRateLimiter):
-        """Execute one matrix cell with retry logic."""
+        """Execute one matrix cell with retry logic, then classify the response (B04)."""
         from flinch.db import update_experiment_response
 
         model_id = cell["model_id"]
         system_prompt = cell.get("condition_system_prompt", "")
-        prompt_text = cell.get("prompt_text") or cell.get("probe_text", "")
+        prompt_text = cell.get("prompt_text") or cell.get("probe_text") or ""
         response_id = cell["id"]
+        if not prompt_text:
+            raise ValueError("Prompt has no text")
 
         target = self._create_target(model_id, system_prompt)
         released = False
@@ -1159,6 +1233,11 @@ class ExperimentRunner:
                     output_tokens=resp.output_tokens or 0,
                 )
 
+                try:
+                    cls = await classify(resp.text, prompt_text, self.backend)
+                except Exception:
+                    cls = await classify(resp.text, prompt_text, None)
+
                 await update_experiment_response(
                     self.db, response_id,
                     response_text=resp.text,
@@ -1169,6 +1248,7 @@ class ExperimentRunner:
                     status="completed",
                     attempt_count=attempt + 1,
                     completed_at=datetime.now(UTC).isoformat(),
+                    classification=cls.value,
                 )
                 return
 

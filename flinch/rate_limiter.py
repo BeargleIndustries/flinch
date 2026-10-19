@@ -76,13 +76,15 @@ class RateLimiterPool:
         self._config = config or {}
 
     def get(self, provider: str) -> ProviderRateLimiter:
+        """The provider's limiter. Its config is an int (concurrency), `{rpm, concurrent}`, or absent (I25)."""
         if provider not in self._limiters:
-            provider_config = self._config.get(provider, {})
-            self._limiters[provider] = ProviderRateLimiter(
-                provider,
-                rpm=provider_config.get("rpm"),
-                concurrent=provider_config.get("concurrent"),
-            )
+            cfg = self._config.get(provider)
+            rpm = concurrent = None
+            if isinstance(cfg, int) and not isinstance(cfg, bool):
+                concurrent = cfg
+            elif isinstance(cfg, dict):
+                rpm, concurrent = cfg.get("rpm"), cfg.get("concurrent")
+            self._limiters[provider] = ProviderRateLimiter(provider, rpm=rpm, concurrent=concurrent)
         return self._limiters[provider]
 
     def get_all_stats(self) -> dict:

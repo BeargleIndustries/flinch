@@ -3454,8 +3454,12 @@ async def get_experiment_progress(db, experiment_id):
     }
 
 
-async def get_pending_responses(db, experiment_id, limit=100):
-    """Get pending response cells for execution. Returns list of dicts with all needed context."""
+async def get_pending_responses(db, experiment_id, limit=100, after_id=0):
+    """Get pending response cells for execution. Returns list of dicts with all needed context.
+
+    `prompt_text` is the custom prompt text, else the probe's text (B04). Page
+    with `after_id` set to the last id of the previous page.
+    """
     async with db.execute(
         """SELECT
                er.id,
@@ -3470,15 +3474,42 @@ async def get_pending_responses(db, experiment_id, limit=100):
                ep.custom_prompt_text,
                ep.domain,
                p.prompt_text as probe_text,
-               p.name as probe_name
+               p.name as probe_name,
+               COALESCE(ep.custom_prompt_text, p.prompt_text) as prompt_text
            FROM experiment_responses er
            JOIN experiment_conditions ec ON ec.id = er.condition_id
            JOIN experiment_prompts ep ON ep.id = er.prompt_id
            LEFT JOIN probes p ON p.id = ep.probe_id
-           WHERE er.experiment_id = ? AND er.status = 'pending'
+           WHERE er.experiment_id = ? AND er.status = 'pending' AND er.id > ?
            ORDER BY er.id
            LIMIT ?""",
-        (experiment_id, limit),
+        (experiment_id, after_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def reset_failed_responses(db, experiment_id):
+    """Set the study's failed cells back to pending so a run retries them (B03)."""
+    await db.execute(
+        "UPDATE experiment_responses SET status = 'pending', error_message = NULL "
+        "WHERE experiment_id = ? AND status = 'failed'",
+        (experiment_id,),
+    )
+    await db.commit()
+
+
+async def get_unclassified_responses(db, experiment_id):
+    """Completed cells with no classification, each with its prompt text or None (B04)."""
+    async with db.execute(
+        """SELECT er.id, er.response_text,
+                  COALESCE(ep.custom_prompt_text, p.prompt_text) as prompt_text
+           FROM experiment_responses er
+           JOIN experiment_prompts ep ON ep.id = er.prompt_id
+           LEFT JOIN probes p ON p.id = ep.probe_id
+           WHERE er.experiment_id = ? AND er.status = 'completed' AND er.classification IS NULL
+           ORDER BY er.id""",
+        (experiment_id,),
     ) as cur:
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
@@ -3696,7 +3727,7 @@ async def save_analysis_result(db, experiment_id, analysis_type, results, scope=
 async def list_analysis_results(db, experiment_id):
     """List analysis results for experiment."""
     async with db.execute(
-        "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC",
+        "SELECT * FROM analysis_results WHERE experiment_id = ? ORDER BY created_at DESC, id DESC",
         (experiment_id,),
     ) as cur:
         rows = await cur.fetchall()
@@ -3794,6 +3825,9 @@ async def get_condition_comparison(db, experiment_id):
     analysis_results = {}
     for ar in analysis_list:
         atype = ar.get("analysis_type", "unknown")
+        # The list is newest first; keep the newest row of each type (B31).
+        if atype in analysis_results:
+            continue
         results_raw = ar.get("results")
         if isinstance(results_raw, str):
             import json as _json

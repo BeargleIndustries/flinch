@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Annotated
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -388,11 +389,22 @@ class AnalysisResult(BaseModel):
 
 # --- Request Models ---
 
+class ProviderLimit(BaseModel):
+    """One provider's rate limit; a missing field takes the pool default (I25)."""
+    rpm: int | None = Field(None, ge=1, le=10000)
+    concurrent: int | None = Field(None, ge=1, le=50)
+
+
 class StartExperimentRequest(BaseModel):
-    """Request to start experiment execution."""
-    concurrency_per_provider: dict[str, int] = Field(
-        default_factory=lambda: {"anthropic": 5, "openai": 5, "google": 3, "together": 3, "ollama": 3}
+    """Request to start experiment execution.
+
+    `concurrency_per_provider` maps a provider to its concurrency (an int) or a
+    `ProviderLimit`; an empty map means the pool defaults (B36).
+    """
+    concurrency_per_provider: dict[str, Annotated[int, Field(ge=1, le=50)] | ProviderLimit] = Field(
+        default_factory=dict
     )
+    retry_failed: bool = False
 
 
 class RunAIRatersRequest(BaseModel):

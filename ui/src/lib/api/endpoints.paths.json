@@ -104,6 +104,10 @@
     "path": "/api/experiments/{experiment_id}/analyze"
   },
   {
+    "method": "POST",
+    "path": "/api/experiments/{experiment_id}/classify"
+  },
+  {
     "method": "GET",
     "path": "/api/experiments/{experiment_id}/condition-comparison"
   },

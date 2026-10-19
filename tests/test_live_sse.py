@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 
 import httpx
-import pytest
 
 
 def _sends(factory) -> int:
@@ -116,12 +115,6 @@ def test_batch_disconnect_cancels(live_server, env, fake_target, keyword_classif
         conn.close()
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Needs T07: B36 (RateLimiterPool.get calls .get on the integer limits, so no cell "
-    "runs) and B03 (run_experiment has no shielded finally, so its workers outlive the stream "
-    "and nothing writes paused).",
-)
 def test_experiment_disconnect_pauses(live_server, fake_target, run) -> None:
     """Closing a study stream after the first `progress` leaves it `paused`; no cell is sent after."""
     fake_target.delay_s = 0.3

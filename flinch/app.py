@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import csv
+import dataclasses
+import functools
 import html as html_mod
 import importlib.util
 import io
@@ -57,6 +59,7 @@ from flinch.models import (
     GenerateReportRequest,
     GenerateScorecardRequest,
     HHImportRequest,
+    ProviderLimit,
     PublicationExportRequest,
     PushbackSource,
     RunAIRatersRequest,
@@ -80,6 +83,22 @@ class UpdateExperimentRequest(BaseModel):
 # App state
 _conn = None
 _runner = None
+
+
+@dataclasses.dataclass
+class _StudyEntry:
+    """The owner of a running study stream (I33): its token and the event set on release."""
+
+    token: object
+    released: asyncio.Event
+
+
+# Study id -> the stream that owns it. Released by the response's shielded
+# `finally` (ClosingStreamingResponse), never by a clock.
+_active_studies: dict[int, _StudyEntry] = {}
+
+# How long /start and /resume wait for the previous owner to release (K6).
+_STUDY_RELEASE_WAIT_S = 5.0
 
 STATIC_DIR = Path(__file__).parent / "static"
 PROBES_DIR = Path(__file__).parent / "probes"
@@ -123,6 +142,8 @@ def _rebuild_runner() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _conn, _runner
+    # A restarted server (live_server in one pytest session) starts with no owners (I33).
+    _active_studies.clear()
     # Load .env before anything else
     _load_dotenv()
     # Init DB
@@ -2912,25 +2933,71 @@ async def api_estimate_experiment(experiment_id: int):
     return {"estimate": estimate, "cells": total_cells, "prompts": len(prompts), "conditions": len(conditions), "models": total_models}
 
 
+def _release(experiment_id: int, token: object) -> None:
+    """Drop the study's owner entry, only if `token` still owns it, and wake waiters (I33)."""
+    entry = _active_studies.get(experiment_id)
+    if entry is not None and entry.token is token:
+        del _active_studies[experiment_id]
+        entry.released.set()
+
+
+async def _claim_study(experiment_id: int) -> object:
+    """Make the caller the study's owner and return its token, else raise 409 (I33, K6).
+
+    A present owner gets up to `_STUDY_RELEASE_WAIT_S` to release (Resume right
+    after Pause). There is no await between the final check and the insert.
+    """
+    entry = _active_studies.get(experiment_id)
+    if entry is not None:
+        try:
+            await asyncio.wait_for(entry.released.wait(), _STUDY_RELEASE_WAIT_S)
+        except TimeoutError:
+            raise HTTPException(409, "This study is already running.") from None
+        if experiment_id in _active_studies:
+            raise HTTPException(409, "This study is already running.")
+    token = object()
+    _active_studies[experiment_id] = _StudyEntry(token=token, released=asyncio.Event())
+    return token
+
+
+def _owns_study(experiment_id: int, token: object) -> bool:
+    entry = _active_studies.get(experiment_id)
+    return entry is not None and entry.token is token
+
+
+def _rate_config(req: StartExperimentRequest) -> dict:
+    """The request's per-provider limits as plain ints and dicts for RateLimiterPool (B36)."""
+    return {
+        k: (v.model_dump() if isinstance(v, ProviderLimit) else v)
+        for k, v in req.concurrency_per_provider.items()
+    }
+
+
 @app.post("/api/experiments/{experiment_id}/start")
 async def api_start_experiment(experiment_id: int, req: StartExperimentRequest):
     """Start experiment execution with SSE progress stream."""
     from flinch.rate_limiter import RateLimiterPool
     from flinch.runner import ExperimentRunner
 
-    async def event_stream():
+    backend = _runner.backend if _runner else None
+    token = await _claim_study(experiment_id)
+
+    async def event_stream(token: object):
+        if not _owns_study(experiment_id, token):
+            yield _sse("error", {"error": "This study is already running."})
+            return
         async with get_async_db() as db_conn:
             await create_experiment_responses(db_conn, experiment_id)
             await db_conn.commit()
-            pool = RateLimiterPool(req.concurrency_per_provider)
-            runner = ExperimentRunner(db_conn, pool)
+            pool = RateLimiterPool(_rate_config(req))
+            runner = ExperimentRunner(db_conn, pool, backend=backend)
             async with contextlib.aclosing(
                 _sse_stream(runner.run_experiment(experiment_id), name_of=_dict_event)
             ) as s:
                 async for chunk in s:
                     yield chunk
 
-    return _sse_response(event_stream())
+    return _sse_response(event_stream(token), release=functools.partial(_release, experiment_id, token))
 
 
 @app.post("/api/experiments/{experiment_id}/pause")
@@ -2943,27 +3010,59 @@ async def api_pause_experiment(experiment_id: int):
 
 @app.post("/api/experiments/{experiment_id}/resume")
 async def api_resume_experiment(experiment_id: int, req: StartExperimentRequest = StartExperimentRequest()):
-    """Resume experiment execution."""
+    """Resume experiment execution; `retry_failed` sets failed cells back to pending first."""
     from flinch.rate_limiter import RateLimiterPool
     from flinch.runner import ExperimentRunner
 
-    async def event_stream():
+    backend = _runner.backend if _runner else None
+    token = await _claim_study(experiment_id)
+
+    async def event_stream(token: object):
+        if not _owns_study(experiment_id, token):
+            yield _sse("error", {"error": "This study is already running."})
+            return
         async with get_async_db() as db_conn:
-            pool = RateLimiterPool(req.concurrency_per_provider)
-            runner = ExperimentRunner(db_conn, pool)
+            if req.retry_failed:
+                await db.reset_failed_responses(db_conn, experiment_id)
+            pool = RateLimiterPool(_rate_config(req))
+            runner = ExperimentRunner(db_conn, pool, backend=backend)
             async with contextlib.aclosing(
                 _sse_stream(runner.run_experiment(experiment_id), name_of=_dict_event)
             ) as s:
                 async for chunk in s:
                     yield chunk
 
-    return _sse_response(event_stream())
+    return _sse_response(event_stream(token), release=functools.partial(_release, experiment_id, token))
+
+
+@app.post("/api/experiments/{experiment_id}/classify")
+async def api_classify_experiment(experiment_id: int):
+    """Classify completed cells that have none; cells whose prompt lost its text are skipped (B04)."""
+    backend = _runner.backend if _runner else None
+    classified = skipped = 0
+    async with get_async_db() as db_conn:
+        if not await get_experiment(db_conn, experiment_id):
+            raise HTTPException(404, "Experiment not found")
+        for row in await db.get_unclassified_responses(db_conn, experiment_id):
+            prompt_text = row["prompt_text"]
+            if not prompt_text:
+                skipped += 1
+                continue
+            response_text = row["response_text"] or ""
+            try:
+                cls = await classify(response_text, prompt_text, backend)
+            except Exception:
+                cls = await classify(response_text, prompt_text, None)
+            await db.update_experiment_response(db_conn, row["id"], classification=cls.value)
+            classified += 1
+    return {"classified": classified, "skipped": skipped}
 
 
 @app.get("/api/experiments/{experiment_id}/progress")
 async def api_experiment_progress(experiment_id: int):
     async with get_async_db() as db_conn:
-        return await get_experiment_progress(db_conn, experiment_id)
+        progress = await get_experiment_progress(db_conn, experiment_id)
+    return {**progress, "active": experiment_id in _active_studies}
 
 
 @app.post("/api/experiments/{experiment_id}/metrics")

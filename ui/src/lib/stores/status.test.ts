@@ -55,3 +55,21 @@ describe('status store', () => {
     expect(status.errors.map((e) => e.message)).toEqual(['e3', 'e4', 'e5', 'e6', 'e7']);
   });
 });
+
+describe('status busy', () => {
+  it('is busy while a tracked request is pending', async () => {
+    let resolve!: () => void;
+    let reject!: (e: Error) => void;
+    const a = status.track(new Promise<void>((r) => (resolve = r)));
+    const b = status.track(new Promise<void>((_, r) => (reject = r)));
+    expect(status.busy).toBe(true);
+    resolve();
+    await a;
+    expect(status.busy).toBe(true);
+    reject(new Error('x'));
+    await expect(b).rejects.toThrow('x');
+    await Promise.resolve();
+    expect(status.busy).toBe(false);
+    expect(status.pending).toBe(0);
+  });
+});

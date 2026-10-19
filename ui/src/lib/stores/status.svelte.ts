@@ -1,7 +1,10 @@
 // The status strip's store (brief 6.4). Long jobs report progress here by id,
 // so leaving a screen never hides a running job; failures post one error.
-// StatusStrip.svelte reads it. T15 mounts the strip and connects the streams
-// registry (brief 10.4) to `progress` and `clearProgress`.
+// StatusStrip.svelte reads it; the root layout mounts the strip, and the
+// streams registry (brief 10.4, stores/streams-registry.svelte.ts) reports
+// through `progress` and `clearProgress`. `track` counts a screen's pending
+// requests; while any is pending the root element carries data-busy="true"
+// (brief 6), which first-time tips wait for.
 
 export interface ProgressInput {
   label: string;
@@ -30,6 +33,8 @@ export interface StatusError {
 class StatusStore {
   jobs = $state<Record<string, ProgressEntry>>({});
   errors = $state<StatusError[]>([]);
+  /** Requests in flight that a screen marked with `track`. */
+  pending = $state(0);
   #nextError = 1;
   #clock = 0;
 
@@ -76,6 +81,21 @@ class StatusStore {
 
   dismissError(id: number): void {
     this.errors = this.errors.filter((e) => e.id !== id);
+  }
+
+  /** Whether a tracked request is pending (the root's data-busy). */
+  get busy(): boolean {
+    return this.pending > 0;
+  }
+
+  /** Marks the app busy until `work` settles; returns `work` unchanged. */
+  track<T>(work: Promise<T>): Promise<T> {
+    this.pending++;
+    const done = () => {
+      this.pending = Math.max(0, this.pending - 1);
+    };
+    work.then(done, done);
+    return work;
   }
 }
 

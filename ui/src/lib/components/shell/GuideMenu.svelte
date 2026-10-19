@@ -5,14 +5,10 @@
   is kept for tour step 9.
 -->
 <script module lang="ts">
-  export const guideMenuUi = {
-    menuButton: 'Open the guide',
-    takeTour: 'Take the tour',
-    glossary: 'Glossary',
-    methodology: 'Methodology',
-    policies: 'Policies',
-    shortcuts: 'Keyboard shortcuts',
-  };
+  import { GUIDE_MENU } from '$lib/copy/shell';
+
+  /** The menu's strings (copy/shell.ts, shared with shell.spec.ts). */
+  export const guideMenuUi = GUIDE_MENU;
 </script>
 
 <script lang="ts">

@@ -49,4 +49,5 @@ export const COPY_FILES = [
   'lib/guide/methodology.ts',
   'lib/copy/shell.ts',
   'lib/copy/rail.ts',
+  'lib/copy/probe.ts',
 ];

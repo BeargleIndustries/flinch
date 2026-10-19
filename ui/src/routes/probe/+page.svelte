@@ -1,7 +1,6 @@
-<!-- Placeholder until this screen's task lands (T15): its research question and an empty state. -->
+<!-- The Probe section (brief 7): probe, badge, pushback, note. -->
 <script lang="ts">
-  import ScreenPlaceholder from '$lib/components/shell/ScreenPlaceholder.svelte';
-  import { SCREENS } from '$lib/copy/screens';
+  import ProbeWorkspace from '$lib/components/probe/ProbeWorkspace.svelte';
 </script>
 
-<ScreenPlaceholder title="Probe" question={SCREENS['probe.idle']} needsSession />
+<ProbeWorkspace />
